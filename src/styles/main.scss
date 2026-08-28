@@ -1,44 +1,66 @@
 @use '@/styles/mixins' as *;
 
 // ---------------------------------------------------------------------------
-// Design tokens (CSS custom properties — runtime-themeable)
+// Design tokens (CSS custom properties, runtime-themeable)
 // ---------------------------------------------------------------------------
+//
+// Every token here is semantic: it says what a colour is FOR, not what it
+// looks like. Re-theming means editing this block and nothing else.
+//
+// Two families, because the UI has two zones:
+//   --chrome-*  the dark navy toolbar at the top of the window
+//   everything else, the light working area beneath it
 
 :root {
-  // Palette
-  --vanilla-cream: #f0ead2;
-  --muted-olive:   #adc178;
-  --palm-leaf:     #7b8f4b;
-  --faded-copper:  #a98467;
-  --ash-brown:     #6c584c;
-  --ash-brown-2:   #79675c;
+  // -- Chrome: the dark surfaces, i.e. the action bar and the track panel ---
+  --chrome:            #212936;
+  --chrome-raised:     #2b3546;
+  --chrome-border:     #121824;
+  --chrome-text:       #f2f6fc; // primary text on chrome: white
+  --chrome-text-muted: #9aa8bd; // labels and secondary text on chrome
+  --chrome-divider:    rgba(255, 255, 255, 0.1);
+  --chrome-selected:   rgba(47, 111, 208, 0.32); // selected row on chrome
 
-  // Roles
-  --bg:            var(--vanilla-cream);
-  --bg-elevated:   #faf6e3;
-  --bg-surface:    #fffdf3;             // score viewer background
-  --panel:         rgba(108, 88, 76, 0.06);
-  --panel-strong:  rgba(108, 88, 76, 0.10);
-  --panel-border:  rgba(108, 88, 76, 0.22);
+  // -- Document strip: the mid-tone bar naming the open score --------------
+  --docstrip:          #67778c;
+  --docstrip-text:     #ffffff;
+  --docstrip-border:   #4f5d70;
 
-  --text:          var(--ash-brown);
-  --text-h:        #3f342c;
-  --text-muted:    var(--ash-brown-2);
-  --text-inverse:  var(--vanilla-cream);
+  // -- Working area --------------------------------------------------------
+  --bg:                #e9edf4; // behind everything, shows as block gutters
+  --bg-surface:        #ffffff; // the score paper
+  --panel-strong:      #dfe6f1; // inputs, quiet button faces
+  --panel-border:      #c3cfe0; // the 1px lines that delimit light blocks
 
-  --accent:        var(--palm-leaf);
-  --accent-soft:   var(--muted-olive);
-  --accent-bg:     rgba(123, 143, 75, 0.14);
-  --accent-border: rgba(123, 143, 75, 0.45);
-  --warn-bg:       rgba(169, 132, 103, 0.14);
-  --warn-border:   rgba(169, 132, 103, 0.45);
+  --text:              #2c3644;
+  --text-h:            #131a24;
+  --text-muted:        #667689;
+  --text-inverse:      #ffffff;
 
-  --sans:    system-ui, 'Segoe UI', Roboto, sans-serif;
-  --heading: system-ui, 'Segoe UI', Roboto, sans-serif;
-  --mono:    ui-monospace, Consolas, monospace;
+  // -- Accent: blue --------------------------------------------------------
+  --accent:            #2f6fd0;
+  --accent-strong:     #1d57ad;
+  --accent-soft:       #8fb2e8;
+  --accent-bg:         rgba(47, 111, 208, 0.11);
+  --accent-border:     rgba(47, 111, 208, 0.42);
 
-  font: 16px/1.45 var(--sans);
-  letter-spacing: 0.18px;
+  // -- Warning / error -----------------------------------------------------
+  --warn-bg:           rgba(190, 74, 52, 0.1);
+  --warn-border:       rgba(190, 74, 52, 0.4);
+  --warn-text:         #9c3a26;
+
+  // -- Score rendering -----------------------------------------------------
+  // alphaTab draws the notation in the host element's `color`.
+  --score-ink:         #1b2432;
+  --score-cursor-bar:  rgba(47, 111, 208, 0.12);
+  --score-cursor-beat: var(--accent);
+  --score-highlight:   var(--accent-strong);
+
+  --sans: system-ui, 'Segoe UI', Roboto, sans-serif;
+  --mono: ui-monospace, Consolas, monospace;
+
+  font: 15px/1.45 var(--sans);
+  letter-spacing: 0.1px;
   color-scheme: light;
   color: var(--text);
   background: var(--bg);
@@ -56,11 +78,11 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
-  min-height: 100vh;
+  // The shell manages its own scrolling; the window itself never scrolls.
+  overflow: hidden;
 }
 
 h1, h2, h3, h4 {
-  font-family: var(--heading);
   color: var(--text-h);
   margin: 0;
 }
@@ -72,5 +94,5 @@ button {
 }
 
 input[type='range'] {
-  accent-color: var(--palm-leaf);
+  accent-color: var(--accent);
 }

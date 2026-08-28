@@ -1,71 +1,93 @@
 @use '@/styles/mixins' as *;
 
+// The track panel sits on the dark chrome supplied by .sidebar, so nothing here
+// paints its own light surface. Every colour comes from the --chrome-* family.
 .track-panel {
   display: flex;
   flex-direction: column;
-  gap: $gap-sm;
   min-width: 0;
 }
+
+// Sticky section header, so the label survives scrolling a long track list.
 header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
   gap: $gap-sm;
+  padding: 0.5rem $gap-sm;
+  background: var(--chrome-raised);
+  border-bottom: 1px solid var(--chrome-border);
 
   h2 {
     @include section-label;
-    font-size: 0.8rem;
+    color: var(--chrome-text-muted);
   }
   .count {
     @include tabular;
-    margin-left: 0.2rem;
-    opacity: 0.6;
+    margin-left: 0.3rem;
+    font-size: 0.68rem;
+    color: var(--chrome-text-muted);
   }
 }
+
 .bulk {
   display: flex;
   gap: $gap-xs;
 
   button {
-    padding: 0.2rem 0.5rem;
-    font-size: 0.72rem;
+    @include button-chrome;
+    padding: 0.16rem 0.42rem;
+    font-size: 0.68rem;
   }
 }
+
 .legend {
   @include hint-text;
-  font-size: 0.75rem;
+  padding: $gap-sm;
+  font-size: 0.72rem;
+  color: var(--chrome-text-muted);
+  border-bottom: 1px solid var(--chrome-divider);
 
-  strong { font-style: normal; }
+  strong {
+    color: var(--chrome-text);
+    font-weight: 700;
+  }
 }
+
+// Track rows: square, stacked, sharing a single divider so the list reads as
+// one delimited block rather than a stack of cards.
 .tracks {
   list-style: none;
   margin: 0;
   padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: $gap-sm;
-  overflow-y: auto;
 
   > li {
-    @include nested-card;
     display: flex;
     flex-direction: column;
-    gap: 0.35rem;
-    padding: 0.55rem 0.65rem;
-    border-color: var(--panel-border);
+    gap: 0.3rem;
+    padding: 0.5rem $gap-sm;
+    border-bottom: 1px solid var(--chrome-divider);
+    transition: background-color $transition-fast;
 
     &.rendered {
-      border-color: var(--accent-border);
-      background: var(--accent-bg);
+      background: var(--chrome-selected);
+      // A solid left edge is the clearest "this one is on screen" marker that
+      // does not fight the square geometry.
+      box-shadow: inset 3px 0 0 0 var(--accent-soft);
     }
   }
 }
+
 .row-main {
   display: flex;
   align-items: center;
   gap: $gap-sm;
   min-width: 0;
 }
+
 .name {
   display: flex;
   align-items: center;
@@ -73,45 +95,51 @@ header {
   flex: 1;
   min-width: 0;
   cursor: pointer;
-  font-size: 0.9rem;
+  font-size: 0.85rem;
   font-weight: 600;
-  color: var(--text-h);
+  color: var(--chrome-text);
 }
 .name-text {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+// Track colour comes from the score file, so this stays a plain swatch. Square,
+// like everything structural.
 .dot {
-  width: 0.55rem;
-  height: 0.55rem;
+  width: 0.5rem;
+  height: 0.8rem;
   flex: none;
-  border-radius: 50%;
   background: var(--accent-soft);
-  border: 1px solid rgba(0, 0, 0, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.3);
 }
+
 .only {
-  padding: 0.15rem 0.4rem;
-  font-size: 0.68rem;
-  letter-spacing: 0.04em;
+  @include button-chrome;
+  padding: 0.12rem 0.36rem;
+  font-size: 0.64rem;
+  letter-spacing: 0.05em;
   text-transform: uppercase;
 }
+
 .row-sound {
   min-width: 0;
 }
+
 .program {
   font: inherit;
-  font-size: 0.8rem;
+  font-size: 0.76rem;
   width: 100%;
-  padding: 0.25rem 0.35rem;
-  color: var(--text);
-  background: var(--bg-surface);
-  border: 1px solid var(--panel-border);
-  border-radius: $radius-sm;
+  padding: 0.22rem 0.3rem;
+  color: var(--chrome-text);
+  background: var(--chrome-raised);
+  border: 1px solid var(--chrome-border);
+  border-radius: $radius-control;
   cursor: pointer;
 
   &:hover {
-    border-color: var(--accent-border);
+    border-color: var(--accent);
   }
 
   // Highlight the current instrument in the open dropdown, so it is obvious
@@ -124,8 +152,8 @@ header {
   // way to style a native <select>'s list - a custom listbox is the only
   // guaranteed route.
   option {
-    background: var(--bg-surface);
-    color: var(--text);
+    background: var(--chrome-raised);
+    color: var(--chrome-text);
   }
 
   // `background-color` alone is dropped by some Chromium builds. Declaring the
@@ -137,52 +165,53 @@ header {
   }
 
   optgroup {
-    background: var(--bg-elevated);
-    color: var(--text-muted);
+    background: var(--chrome);
+    color: var(--chrome-text-muted);
     font-style: normal;
-    font-weight: 600;
+    font-weight: 700;
   }
 
   // Tint the family that holds the selection too, so it stands out while
   // scrolling the 16 groups. Ignored where :has() is unsupported.
   optgroup:has(option:checked) {
-    color: var(--accent);
+    color: var(--accent-soft);
   }
 }
+
 .percussion {
   display: inline-block;
-  font-size: 0.78rem;
-  color: var(--text-muted);
-  font-style: italic;
+  font-size: 0.74rem;
+  color: var(--chrome-text-muted);
 }
+
 .row-mix {
   display: flex;
   align-items: center;
-  gap: 0.35rem;
+  gap: 0.3rem;
 
   input[type='range'] {
     flex: 1;
     min-width: 0;
   }
 }
+
 .flag {
-  width: 1.6rem;
-  padding: 0.15rem 0;
-  font-size: 0.7rem;
+  @include button-chrome;
+  width: 1.5rem;
+  padding: 0.12rem 0;
+  font-size: 0.66rem;
   font-weight: 700;
   text-align: center;
 
   &.on {
-    background: var(--accent);
-    border-color: var(--accent);
-    color: var(--text-inverse);
+    @include control-active;
   }
 }
+
 .vol {
   @include tabular;
-  width: 2.6rem;
-  font-family: var(--mono);
-  font-size: 0.68rem;
+  width: 2.5rem;
+  font-size: 0.64rem;
   text-align: right;
-  color: var(--text-muted);
+  color: var(--chrome-text-muted);
 }

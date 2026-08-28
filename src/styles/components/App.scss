@@ -1,75 +1,121 @@
 @use '@/styles/mixins' as *;
 
+// Full-height shell. The window never scrolls; each region manages its own
+// overflow, which is what keeps the action bar and document strip fixed while
+// the score scrolls under them.
 .app {
   display: flex;
   flex-direction: column;
-  gap: $gap-md;
-  padding: 0.9rem 1.1rem 1.2rem;
-  max-width: 1600px;
-  margin: 0 auto;
+  height: 100vh;
+  overflow: hidden;
 }
-.app-header {
-  display: flex;
-  align-items: baseline;
-  gap: $gap-md;
-  flex-wrap: wrap;
 
-  h1 {
-    font-size: 1.3rem;
-    letter-spacing: 0.02em;
-  }
-}
-.tagline {
-  font-size: 0.82rem;
-  color: var(--text-muted);
-}
-.error {
-  padding: 0.6rem 0.85rem;
-  background: var(--warn-bg);
-  border: 1px solid var(--warn-border);
-  border-radius: $radius-sm;
-  font-size: 0.88rem;
-}
-.grid {
+// ---------------------------------------------------------------------------
+// Action bar
+// ---------------------------------------------------------------------------
+
+.action-bar {
+  flex: none;
+  height: $action-bar-h;
   display: grid;
-  grid-template-columns: 300px minmax(0, 1fr);
-  gap: $gap-lg;
-  align-items: start;
-
-  &.empty {
-    grid-template-columns: minmax(0, 1fr);
-  }
+  // Transport stays optically centred regardless of how wide the sides get.
+  grid-template-columns: minmax(120px, 1fr) auto minmax(120px, 1fr);
+  align-items: center;
+  gap: $gap-md;
+  padding: 0 $gap-md;
+  background: var(--chrome);
+  border-bottom: 1px solid var(--chrome-border);
+  color: var(--chrome-text);
 }
-.sidebar {
-  min-width: 0;
-  max-height: calc(100vh - 160px);
-  overflow-y: auto;
-}
-.stage {
-  position: relative;
+.bar-side {
   display: flex;
-  flex-direction: column;
+  align-items: center;
   gap: $gap-sm;
   min-width: 0;
 }
+.bar-side-end {
+  justify-content: flex-end;
+}
+.bar-placeholder {
+  font-size: 0.82rem;
+  color: var(--chrome-text);
+  opacity: 0.65;
+  white-space: nowrap;
+}
+.bar-hint {
+  @include tabular;
+  font-size: 0.66rem;
+  padding: 0.15rem 0.4rem;
+  border: 1px solid var(--chrome-divider);
+  border-radius: $radius-control;
+  color: var(--chrome-text);
+  opacity: 0.7;
+}
+
+// ---------------------------------------------------------------------------
+// Workspace
+// ---------------------------------------------------------------------------
+
+.error {
+  flex: none;
+  padding: 0.5rem 0.9rem;
+  background: var(--warn-bg);
+  border-bottom: 1px solid var(--warn-border);
+  border-radius: $radius-block;
+  color: var(--warn-text);
+  font-size: 0.85rem;
+}
+
+.workspace {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: stretch;
+}
+
+// Same chrome as the action bar: the panel and the bar read as one continuous
+// frame around the score.
+.sidebar {
+  flex: none;
+  width: 290px;
+  min-width: 0;
+  overflow-y: auto;
+  background: var(--chrome);
+  color: var(--chrome-text);
+  // The single vertical line separating sidebar from score.
+  border-right: 1px solid var(--chrome-border);
+}
+
+.stage {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
 .empty-overlay {
   position: absolute;
   inset: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 1.5rem;
+  padding: 2rem;
   background: var(--bg);
 
   > * {
     width: min(520px, 100%);
   }
 }
-@media (max-width: 980px) {
-  .grid {
-    grid-template-columns: 1fr;
+
+@media (max-width: 900px) {
+  .workspace {
+    flex-direction: column;
   }
   .sidebar {
-    max-height: none;
+    width: auto;
+    max-height: 40vh;
+    border-right: none;
+    border-bottom: 1px solid var(--chrome-border);
   }
 }

@@ -1,40 +1,63 @@
 @use '@/styles/mixins' as *;
 
+// Document strip, directly under the action bar. A mid-tone band between the
+// dark chrome above and the light score below. A block: hard edges, one
+// delimiting line at the bottom.
 .score-header {
+  flex: none;
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: $gap-lg;
-  flex-wrap: wrap;
+  align-items: baseline;
+  gap: $gap-md;
+  padding: 0.45rem $gap-md;
+  background: var(--docstrip);
+  border-bottom: 1px solid var(--docstrip-border);
+  border-radius: $radius-block;
+  color: var(--docstrip-text);
 }
-.titles {
-  min-width: 0;
-}
-h2 {
-  font-size: 1.25rem;
+
+.title {
+  flex: none;
+  max-width: 40%;
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--docstrip-text);
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
+
+// Secondary text, but NOT dimmed. #67778c gives only 4.57:1 against pure
+// white, so any opacity below 100% drops small text under the AA threshold
+// (0.95 alpha already measures 4.30:1). Hierarchy comes from weight and size
+// instead.
 .meta {
   display: flex;
   gap: $gap-sm;
   flex-wrap: wrap;
-  margin-top: 0.15rem;
-  font-size: 0.8rem;
-  color: var(--text-muted);
+  flex: 1;
+  min-width: 0;
+  font-size: 0.78rem;
+  font-weight: 400;
+  color: var(--docstrip-text);
 
   span + span::before {
     content: '·';
     margin-right: $gap-sm;
-    opacity: 0.5;
+    opacity: 0.6;
   }
 }
-.actions {
-  display: flex;
-  align-items: center;
-  gap: $gap-sm;
 
-  button {
-    font-size: 0.85rem;
+// Ghost button: the strip is already a strong colour, so the control reads as
+// an outline on it rather than another filled shape.
+.close {
+  flex: none;
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.35);
+  color: var(--docstrip-text);
+
+  &:hover:not(:disabled) {
+    background: var(--accent);
+    border-color: var(--accent-strong);
+    color: var(--text-inverse);
   }
 }

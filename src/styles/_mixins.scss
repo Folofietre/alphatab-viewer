@@ -6,37 +6,18 @@
 // Conventions:
 //  - Colors always come from the CSS custom properties in styles/main.scss, so
 //    the palette stays themeable at runtime without a rebuild.
+//  - Structure is square ($radius-block), interaction is round
+//    ($radius-control). See the note in _tokens.scss.
+//  - Typography mixins set no color. The UI has light and dark zones and the
+//    same label appears in both, so color belongs at the usage site.
 //  - Mixins stay small and composable. Don't bundle several concerns into one.
 //  - This file must never emit CSS. Each SFC style block is its own Sass
 //    compilation unit, so a rule placed here is duplicated into all of them.
 
 // Re-export tokens so consumers only need to `@use '@/styles/mixins' as *`
-// — they get both the mixins and the underlying $variables.
+// and get both the mixins and the underlying $variables.
 @forward './tokens';
 @use './tokens' as *;
-
-// ---------------------------------------------------------------------------
-// Surfaces
-// ---------------------------------------------------------------------------
-
-// A subtle elevated surface. Used by the transport bar.
-@mixin panel-card {
-  background: var(--panel);
-  border: 1px solid var(--panel-border);
-  border-radius: $radius-md;
-}
-
-// A slightly more pronounced surface nested inside a panel. Used by the track
-// rows in the sidebar.
-@mixin nested-card {
-  background: var(--bg-elevated);
-  border: 1px solid transparent;
-  border-radius: $radius-sm;
-  transition:
-    border-color $transition-fast,
-    background-color $transition-fast,
-    color $transition-fast;
-}
 
 // ---------------------------------------------------------------------------
 // Typography helpers
@@ -44,39 +25,38 @@
 
 // Small, quiet uppercase label for a section heading ("TRACKS").
 @mixin section-label {
-  font-size: 0.75rem;
+  font-size: 0.68rem;
   text-transform: uppercase;
-  letter-spacing: 0.06em;
-  opacity: 0.8;
+  letter-spacing: 0.09em;
+  font-weight: 700;
 }
 
-// Italic, low-opacity text for hints under labels.
+// Low-emphasis explanatory text under a label.
 @mixin hint-text {
-  font-size: 0.8rem;
-  opacity: 0.65;
-  font-style: italic;
-  line-height: 1.4;
+  font-size: 0.78rem;
+  line-height: 1.45;
 }
 
-// Tabular numeric values (stat displays, percentages, etc.)
+// Tabular numeric values, so digits don't jitter as they change.
 @mixin tabular {
   font-variant-numeric: tabular-nums;
+  font-family: var(--mono);
 }
 
 // ---------------------------------------------------------------------------
-// Buttons
+// Controls
 // ---------------------------------------------------------------------------
 
-// Reset + base style for inline buttons inside our UI. Inherits typography
-// from the host. Hover / disabled handled here so individual variants stay
-// minimal.
+// Base style for a button in the light working area. Rounded, because it is
+// interactive.
 @mixin button-base {
   font: inherit;
+  font-size: 0.82rem;
   color: var(--text-h);
   background: var(--panel-strong);
   border: 1px solid var(--panel-border);
-  padding: 0.4rem 0.85rem;
-  border-radius: $radius-sm;
+  padding: 0.3rem 0.7rem;
+  border-radius: $radius-control;
   cursor: pointer;
   transition:
     background-color $transition-fast,
@@ -85,25 +65,45 @@
 
   &:disabled {
     cursor: not-allowed;
-    opacity: 0.5;
+    opacity: 0.45;
   }
   &:hover:not(:disabled) {
     background: var(--accent-bg);
     border-color: var(--accent-border);
-    color: var(--accent);
+    color: var(--accent-strong);
   }
 }
 
-// Primary action button — accent palette.
-@mixin button-accent {
-  @include button-base;
-  background: var(--accent-bg);
-  border-color: var(--accent-border);
-  color: var(--accent);
+// A button sitting on a dark chrome surface: the action bar, or the track
+// panel. Same rounded geometry, inverted palette.
+@mixin button-chrome {
+  font: inherit;
+  font-size: 0.82rem;
+  color: var(--chrome-text);
+  background: var(--chrome-raised);
+  border: 1px solid var(--chrome-border);
+  padding: 0.28rem 0.6rem;
+  border-radius: $radius-control;
+  cursor: pointer;
+  transition:
+    background-color $transition-fast,
+    border-color $transition-fast,
+    color $transition-fast;
 
+  &:disabled {
+    cursor: not-allowed;
+    opacity: 0.4;
+  }
   &:hover:not(:disabled) {
     background: var(--accent);
-    border-color: var(--accent);
-    color: var(--vanilla-cream);
+    border-color: var(--accent-strong);
+    color: var(--text-inverse);
   }
+}
+
+// An on/off control that is currently ON.
+@mixin control-active {
+  background: var(--accent);
+  border-color: var(--accent-strong);
+  color: var(--text-inverse);
 }

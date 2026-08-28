@@ -12,9 +12,7 @@
       <span class="sub">or click to browse</span>
       <small>{{ ACCEPT.split(',').join('  ') }}</small>
     </template>
-    <span v-else class="compact-label">
-      <slot>Open another file</slot>
-    </span>
+    <slot v-else>Open</slot>
   </label>
 </template>
 

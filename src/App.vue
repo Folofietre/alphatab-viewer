@@ -1,21 +1,34 @@
 <template>
-  <main class="app">
-    <header class="app-header">
-      <h1>AlphaTab Viewer</h1>
-      <span class="tagline">Drop a score, pick the tracks, choose their sound.</span>
+  <div class="app">
+    <!-- The action bar owns every global control. It is always present so the
+         window chrome does not shift when a score is opened. -->
+    <header class="action-bar">
+      <div class="bar-side">
+        <FileDropzone
+          v-if="isScoreLoaded"
+          variant="compact"
+          @file="loadFile"
+        >Open</FileDropzone>
+      </div>
+
+      <TransportBar v-if="isScoreLoaded" />
+      <p v-else class="bar-placeholder">Drop a score to begin</p>
+
+      <div class="bar-side bar-side-end">
+        <kbd v-if="isScoreLoaded" class="bar-hint" title="Space toggles playback">Space</kbd>
+      </div>
     </header>
 
     <ScoreHeader
       v-if="isScoreLoaded && scoreInfo"
       :info="scoreInfo"
       :file-name="fileName"
-      @file="loadFile"
       @close="clearScore"
     />
 
     <p v-if="loadError" class="error" role="alert">{{ loadError }}</p>
 
-    <div class="grid" :class="{ empty: !isScoreLoaded }">
+    <div class="workspace">
       <aside v-if="isScoreLoaded" class="sidebar">
         <TrackList />
       </aside>
@@ -28,10 +41,9 @@
         <div v-if="!isScoreLoaded" class="empty-overlay">
           <FileDropzone @file="loadFile" />
         </div>
-        <TransportBar v-if="isScoreLoaded" />
       </div>
     </div>
-  </main>
+  </div>
 </template>
 
 <script setup>

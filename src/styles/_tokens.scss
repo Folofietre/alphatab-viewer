@@ -3,9 +3,8 @@
 // CSS custom properties live in styles/main.scss and drive everything at runtime
 // (they're easier for the in-browser inspector and they work transparently in
 // scoped styles). This file exposes a small SCSS subset for cases where we
-// need a real Sass variable — e.g. when doing arithmetic, when generating
-// computed values at compile time, or when authoring shared mixins that need
-// type-safe color references.
+// need a real Sass variable, e.g. when doing arithmetic, when generating
+// computed values at compile time, or when authoring shared mixins.
 //
 // Anything referenced via `var(--token)` in CSS does NOT need a SCSS twin;
 // only add aliases here when a mixin or function genuinely needs the value at
@@ -17,10 +16,20 @@ $gap-sm:  0.5rem;
 $gap-md:  0.75rem;
 $gap-lg:  1rem;
 
-$radius-sm: 0.4rem;
-$radius-md: 0.5rem;
-$radius-lg: 0.75rem;
+// Corner radii.
+//
+// The visual rule of this UI, encoded as tokens so it cannot drift: structure
+// is square, interaction is round. Blocks (panels, bars, the score surface,
+// list rows) get hard corners so their edges read as delimiters; anything the
+// user clicks or drags gets a soft corner. There is deliberately no
+// general-purpose "medium radius" to reach for.
+$radius-block:   0;
+$radius-control: 0.3rem;
+$radius-pill:    999px;
 
 // Transition presets
 $transition-fast: 0.15s ease;
 $transition-med:  0.25s ease;
+
+// Chrome heights, needed by more than one component.
+$action-bar-h: 46px;

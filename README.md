@@ -54,7 +54,8 @@ channel 10 and is not addressed by a program number.
 every track is audible whether it is on screen or not.
 
 **Transport** - play/pause, stop, scrub bar, playback speed (0.25x-2x), master
-volume, loop, metronome. Clicking a beat in the score seeks to it
+volume, loop, metronome, all in the top action bar. Space is play/pause from
+anywhere on the page. Clicking a beat in the score seeks to it
 (`enableUserInteraction`).
 
 ---
@@ -70,9 +71,9 @@ src/
     useShortcuts.js          page-wide keys (Space = play/pause)
   components/
     ScoreViewer.vue          owns the alphaTab host + scroll wrapper, calls init()
-    ScoreHeader.vue          title / artist / tempo / bars + open + close
+    ScoreHeader.vue          document strip: title / artist / tempo / bars + close
     TrackList.vue            display checkboxes, GM program select, mixer
-    TransportBar.vue         play, stop, scrub, speed, volume, loop, click
+    TransportBar.vue         play, stop, scrub, speed, volume, loop, click (in the action bar)
     FileDropzone.vue         window-wide drag & drop + file picker
   styles/
     main.scss                :root custom properties + element resets (global)
@@ -96,6 +97,22 @@ nothing more:
 
 Scoping is preserved, so `:deep()` still works for reaching alphaTab's own
 `.at-*` classes.
+
+### Visual language
+
+Two rules, both encoded as tokens so they cannot drift:
+
+**Structure is square, interaction is round.** `$radius-block` is `0` and
+`$radius-control` is `0.3rem`; there is deliberately no general-purpose "medium
+radius". Panels, bars, the score surface and list rows have hard corners so
+their 1px borders read as delimiters. Anything clickable or draggable is
+rounded. The shipped CSS currently has 5 rules at radius `0` and 7 at
+`0.3rem` - all of the latter on buttons, selects or the compact dropzone.
+
+**Two colour zones.** `--chrome-*` is the dark navy action bar; everything else
+is the light working area. Every token is named for what it is *for*, never for
+what it looks like, so re-theming means editing the `:root` block in
+`styles/main.scss` and nothing else.
 
 **`_tokens.scss` and `_mixins.scss` must never emit CSS** - only variables,
 mixins and `@forward`. Every SFC style block is its own Sass compilation unit,

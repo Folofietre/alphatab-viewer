@@ -2,36 +2,47 @@
 
 .viewer {
   position: relative;
+  flex: 1;
   min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
+
+// The score surface. Sized by flex rather than a magic viewport calculation,
+// so it stays correct whatever the chrome above it ends up measuring.
+//
+// This element is also the alphaTab scroll container, and it must stay a
+// distinct ANCESTOR of .alphatab-host. See the comment in usePlayer.init().
 .alphatab-scroll {
-  height: calc(100vh - 210px);
-  min-height: 320px;
+  flex: 1;
+  min-height: 0;
   overflow: auto;
   background: var(--bg-surface);
-  border: 1px solid var(--panel-border);
-  border-radius: $radius-md;
+  border-radius: $radius-block;
 }
+
 .alphatab-host {
-  color: var(--ash-brown);
+  // alphaTab draws the notation in this element's `color`.
+  color: var(--score-ink);
 
   // alphaTab renders its own DOM inside the host; these are its documented
-  // hook classes for the playback cursor and the hovered/played elements.
-  :deep(.at-surface)       { color: var(--ash-brown); }
-  :deep(.at-cursor-bar)    { background: rgba(173, 193, 120, 0.32); }
-  :deep(.at-cursor-beat)   { background: var(--faded-copper); width: 3px; }
-  :deep(.at-selection div) { background: rgba(123, 143, 75, 0.18); }
-  :deep(.at-highlight) *   { fill: var(--palm-leaf); stroke: var(--palm-leaf); }
+  // hook classes for the playback cursor and the played elements.
+  :deep(.at-surface)       { color: var(--score-ink); }
+  :deep(.at-cursor-bar)    { background: var(--score-cursor-bar); }
+  :deep(.at-cursor-beat)   { background: var(--score-cursor-beat); width: 2px; }
+  :deep(.at-selection div) { background: var(--accent-bg); }
+  :deep(.at-highlight) *   { fill: var(--score-highlight); stroke: var(--score-highlight); }
 }
+
 .rendering {
   position: absolute;
   top: $gap-sm;
   right: $gap-sm;
-  padding: 0.25rem 0.6rem;
-  border-radius: 999px;
-  background: var(--panel-strong);
-  border: 1px solid var(--panel-border);
-  font-size: 0.75rem;
-  color: var(--text-muted);
+  padding: 0.2rem 0.55rem;
+  border-radius: $radius-pill;
+  background: var(--chrome);
+  color: var(--chrome-text);
+  font-size: 0.7rem;
   pointer-events: none;
 }

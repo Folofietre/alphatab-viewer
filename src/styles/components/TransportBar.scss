@@ -1,80 +1,111 @@
 @use '@/styles/mixins' as *;
 
+// The transport lives inside the dark action bar, so it draws no surface of
+// its own: no background, no border. The bar is the block.
 .transport {
-  @include panel-card;
   display: flex;
   align-items: center;
-  gap: $gap-lg;
-  padding: 0.55rem 0.8rem;
-  flex-wrap: wrap;
+  gap: $gap-md;
+  color: var(--chrome-text);
 }
+
 .buttons {
   display: flex;
   gap: $gap-xs;
 
   button {
-    width: 2.4rem;
-    padding: 0.35rem 0;
+    @include button-chrome;
+    width: 2.1rem;
+    padding: 0.24rem 0;
     text-align: center;
-    line-height: 1.2;
+    line-height: 1.25;
   }
   .primary {
-    @include button-accent;
-    width: 2.8rem;
+    @include button-chrome;
+    width: 2.5rem;
+    background: var(--accent);
+    border-color: var(--accent-strong);
+    color: var(--text-inverse);
+
+    &:hover:not(:disabled) {
+      background: var(--accent-strong);
+    }
   }
 }
+
 .seek {
   display: flex;
   align-items: center;
   gap: $gap-sm;
-  flex: 1 1 260px;
-  min-width: 200px;
+  width: clamp(180px, 26vw, 380px);
 
   input {
     flex: 1;
     min-width: 0;
   }
 }
+
 .time {
   @include tabular;
-  font-family: var(--mono);
-  font-size: 0.8rem;
-  color: var(--text-muted);
+  font-size: 0.74rem;
+  color: var(--chrome-text);
+  opacity: 0.85;
 }
+
 .knob {
   display: flex;
   align-items: center;
-  gap: $gap-sm;
-  font-size: 0.8rem;
-  color: var(--text-muted);
+  gap: $gap-xs;
+  font-size: 0.72rem;
+  color: var(--chrome-text);
+  opacity: 0.85;
+  white-space: nowrap;
 
   input {
-    width: 100px;
+    width: 76px;
   }
   output {
     @include tabular;
-    width: 3.4rem;
-    font-family: var(--mono);
-    font-size: 0.75rem;
+    width: 3rem;
+    font-size: 0.7rem;
     text-align: right;
   }
 }
+
 .toggles {
   display: flex;
   gap: $gap-xs;
 
   button {
-    font-size: 0.78rem;
-    padding: 0.35rem 0.6rem;
+    @include button-chrome;
+    font-size: 0.72rem;
+    padding: 0.24rem 0.5rem;
 
     &.on {
-      background: var(--accent);
-      border-color: var(--accent);
-      color: var(--text-inverse);
+      @include control-active;
     }
   }
 }
+
 .loading {
-  @include hint-text;
-  font-size: 0.75rem;
+  font-size: 0.72rem;
+  color: var(--chrome-text);
+  opacity: 0.6;
+  white-space: nowrap;
+}
+
+// The transport is the widest thing in the bar; drop the least essential
+// controls before it forces the bar to wrap.
+@media (max-width: 1200px) {
+  .knob {
+    display: none;
+  }
+}
+@media (max-width: 820px) {
+  .seek {
+    width: 150px;
+  }
+  .toggles {
+    display: none;
+  }
 }

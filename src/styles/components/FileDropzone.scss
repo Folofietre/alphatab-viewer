@@ -6,60 +6,63 @@
   justify-content: center;
   cursor: pointer;
   text-align: center;
-  color: var(--text);
   transition:
     border-color $transition-med,
     background-color $transition-med,
     color $transition-med;
-
-  &:hover {
-    border-color: var(--accent-border);
-    color: var(--accent);
-  }
-  &.active {
-    border-color: var(--accent);
-    background-color: var(--accent-bg);
-    color: var(--accent);
-  }
 }
 
+// Empty state: a large drop target. A block, so square, with a dashed border
+// to read as a target rather than a panel.
 .dropzone.full {
   flex-direction: column;
   gap: $gap-sm;
-  padding: 4rem 2rem;
+  padding: 3.5rem 2rem;
   border: 2px dashed var(--panel-border);
-  border-radius: $radius-lg;
-  background: var(--panel);
+  border-radius: $radius-block;
+  background: var(--bg-surface);
+  color: var(--text);
+
+  &:hover,
+  &.active {
+    border-color: var(--accent);
+    background: var(--accent-bg);
+    color: var(--accent-strong);
+  }
 
   .icon {
-    font-size: 2.5rem;
+    font-size: 2.2rem;
     line-height: 1;
-    opacity: 0.5;
+    color: var(--accent-soft);
   }
   .headline {
-    font-size: 1.15rem;
-    font-weight: 600;
+    font-size: 1.05rem;
+    font-weight: 700;
     color: var(--text-h);
   }
   .sub {
-    font-size: 0.9rem;
-    opacity: 0.7;
+    font-size: 0.85rem;
+    color: var(--text-muted);
   }
   small {
     @include tabular;
     margin-top: $gap-sm;
-    font-family: var(--mono);
-    font-size: 0.7rem;
-    opacity: 0.5;
+    font-size: 0.68rem;
+    color: var(--text-muted);
   }
 }
 
+// Loaded state: the "Open" control in the dark action bar. An action, so
+// rounded.
 .dropzone.compact {
-  @include button-base;
-  padding: 0.4rem 0.8rem;
-  font-size: 0.85rem;
+  @include button-chrome;
   border-style: dashed;
   white-space: nowrap;
+
+  &.active {
+    @include control-active;
+    border-style: dashed;
+  }
 }
 
 .file-input {
