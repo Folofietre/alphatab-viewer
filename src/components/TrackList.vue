@@ -230,6 +230,41 @@ header {
   &:hover {
     border-color: var(--accent-border);
   }
+
+  // Highlight the current instrument in the open dropdown, so it is obvious
+  // which of the 128 programs is active.
+  //
+  // Caveat worth keeping in mind: the dropdown list is drawn by the platform,
+  // not by the page, so how much of this lands depends on browser and OS.
+  // Chromium and Firefox on Linux and Windows honour it; macOS draws a fully
+  // native popup and ignores option styling altogether. There is no portable
+  // way to style a native <select>'s list - a custom listbox is the only
+  // guaranteed route.
+  option {
+    background: var(--bg-surface);
+    color: var(--text);
+  }
+
+  // `background-color` alone is dropped by some Chromium builds. Declaring the
+  // same colour as a gradient makes it a background-image, which is honoured.
+  option:checked {
+    background: var(--accent) linear-gradient(0deg, var(--accent), var(--accent));
+    color: var(--text-inverse);
+    font-weight: 700;
+  }
+
+  optgroup {
+    background: var(--bg-elevated);
+    color: var(--text-muted);
+    font-style: normal;
+    font-weight: 600;
+  }
+
+  // Tint the family that holds the selection too, so it stands out while
+  // scrolling the 16 groups. Ignored where :has() is unsupported.
+  optgroup:has(option:checked) {
+    color: var(--accent);
+  }
 }
 .percussion {
   display: inline-block;
