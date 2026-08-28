@@ -70,30 +70,52 @@
         </div>
 
         <div class="row-mix">
-          <button
-            type="button"
-            class="flag"
-            :class="{ on: track.isSolo }"
-            title="Solo"
-            @click="setTrackSolo(track.index, !track.isSolo)"
-          >S</button>
-          <button
-            type="button"
-            class="flag"
-            :class="{ on: track.isMute }"
-            title="Mute"
-            @click="setTrackMute(track.index, !track.isMute)"
-          >M</button>
+          <span class="flags">
+            <button
+              type="button"
+              class="flag"
+              :class="{ on: track.isSolo }"
+              title="Solo"
+              @click="setTrackSolo(track.index, !track.isSolo)"
+            >S</button>
+            <button
+              type="button"
+              class="flag"
+              :class="{ on: track.isMute }"
+              title="Mute"
+              @click="setTrackMute(track.index, !track.isMute)"
+            >M</button>
+          </span>
           <input
             type="range"
             min="0"
             max="2"
             step="0.05"
             :value="track.volume"
+            :aria-label="`Volume for ${track.name}`"
             title="Track volume"
             @input="setTrackVolume(track.index, Number($event.target.value))"
           />
           <span class="vol">{{ Math.round(track.volume * 100) }}%</span>
+        </div>
+
+        <!-- Same grid as the row above, so this slider lines up under the
+             volume one. Panning has no live synth setter, so it previews on
+             `input` and only rebuilds the midi on `change` (release). -->
+        <div class="row-mix">
+          <span class="pan-label">Pan</span>
+          <input
+            type="range"
+            min="0"
+            max="16"
+            step="1"
+            :value="track.balance"
+            :aria-label="`Panning for ${track.name}`"
+            title="Panning, applied when you release the slider"
+            @input="setTrackBalance(track.index, Number($event.target.value), false)"
+            @change="setTrackBalance(track.index, Number($event.target.value))"
+          />
+          <span class="vol">{{ formatBalance(track.balance) }}</span>
         </div>
       </li>
     </ul>
@@ -104,6 +126,7 @@
 import { computed } from 'vue'
 import { usePlayer } from '@/composables/usePlayer'
 import { GM_GROUPS } from '@/utils/gmPrograms'
+import { formatBalance } from '@/utils/format'
 
 defineEmits(['close'])
 
@@ -114,6 +137,7 @@ const {
   showAllTracks,
   setTrackProgram,
   setTrackVolume,
+  setTrackBalance,
   setTrackMute,
   setTrackSolo,
   resetMixer,

@@ -1,7 +1,7 @@
 import { ref, shallowRef, watch } from 'vue'
 import * as alphaTab from '@coderline/alphatab'
 import { familyOf, programName } from '@/utils/gmPrograms'
-import { applyTrackProgram } from '@/utils/trackSound'
+import { applyTrackProgram, applyTrackBalance } from '@/utils/trackSound'
 
 // Single shared alphaTab instance for the whole app.
 //
@@ -63,6 +63,8 @@ function trackDescriptor(track, renderedIndexes) {
     color: colorToCss(track.color),
     rendered: renderedIndexes.has(track.index),
     volume: 1,
+    // 0-16, 8 = centre. Seeded from the file, which usually pans tracks apart.
+    balance: track.playbackInfo?.balance ?? 8,
     isMute: false,
     isSolo: false,
   }
@@ -314,6 +316,27 @@ export function usePlayer() {
     api.changeTrackVolume([track], value)
   }
 
+  // Panning, 0-16 with 8 = centre.
+  //
+  // Unlike volume/mute/solo there is no live synth setter, so this goes through
+  // the data model and a full midi rebuild. That is far too expensive to run on
+  // every `input` event of a drag, so callers preview with commit=false while
+  // dragging and commit once on release.
+  function setTrackBalance(index, balance, commit = true) {
+    const track = scoreTracks.find((t) => t.index === index)
+    const descriptor = tracks.value.find((t) => t.index === index)
+    if (!track || !descriptor) return
+
+    const value = Math.min(16, Math.max(0, Math.round(balance)))
+    descriptor.balance = value
+    if (!commit) return
+    if (!api || track.playbackInfo.balance === value) return
+
+    applyTrackBalance(track, value)
+    pendingRestore = { tick: api.tickPosition, wasPlaying: isPlaying.value }
+    api.loadMidiForScore()
+  }
+
   function setTrackMute(index, muted) {
     if (!api) return
     const track = scoreTracks.find((t) => t.index === index)
@@ -337,10 +360,27 @@ export function usePlayer() {
     api.changeTrackMute(scoreTracks, false)
     api.changeTrackSolo(scoreTracks, false)
     api.changeTrackVolume(scoreTracks, 1)
+
+    // Balance is model-side, so it needs a midi rebuild. Do it once for the
+    // whole score rather than once per track.
+    let balanceChanged = false
+    for (const track of scoreTracks) {
+      if (track.playbackInfo.balance !== 8) {
+        applyTrackBalance(track, 8)
+        balanceChanged = true
+      }
+    }
+
     for (const t of tracks.value) {
       t.volume = 1
+      t.balance = 8
       t.isMute = false
       t.isSolo = false
+    }
+
+    if (balanceChanged) {
+      pendingRestore = { tick: api.tickPosition, wasPlaying: isPlaying.value }
+      api.loadMidiForScore()
     }
   }
 
@@ -370,6 +410,7 @@ export function usePlayer() {
     showAllTracks,
     setTrackProgram,
     setTrackVolume,
+    setTrackBalance,
     setTrackMute,
     setTrackSolo,
     resetMixer,

@@ -8,3 +8,12 @@ export function formatTime(ms) {
   const pad = (n) => String(n).padStart(2, '0')
   return hours > 0 ? `${hours}:${pad(minutes)}:${pad(seconds)}` : `${minutes}:${pad(seconds)}`
 }
+
+// alphaTab stores stereo balance as 0-16 with 8 = centre. Show it the way a
+// mixer does: C in the middle, L1-L8 and R1-R8 either side.
+export function formatBalance(balance) {
+  if (!Number.isFinite(balance)) return 'C'
+  const offset = Math.round(balance) - 8
+  if (offset === 0) return 'C'
+  return (offset < 0 ? 'L' : 'R') + Math.abs(offset)
+}

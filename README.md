@@ -54,9 +54,14 @@ is expensive.
 family. Percussion tracks show a static label instead: percussion plays on MIDI
 channel 10 and is not addressed by a program number.
 
-**Mixer per track** - solo, mute and volume (0-200%), via `changeTrackSolo`,
-`changeTrackMute` and `changeTrackVolume`. Independent of what is displayed:
-every track is audible whether it is on screen or not.
+**Mixer per track** - solo, mute, volume (0-200%) and panning (L8 to R8), on two
+aligned rows. Independent of what is displayed: every track is audible whether it
+is on screen or not.
+
+Solo, mute and volume use alphaTab's live setters (`changeTrackSolo`,
+`changeTrackMute`, `changeTrackVolume`) and apply instantly. Panning has **no**
+live setter, so it goes through the data model and a midi rebuild; the slider
+previews while dragging and commits once on release. See the gotcha below.
 
 **Collapsible track panel** - the panel slides out of the way and collapses to a
 30px rail carrying the reopen control, so it never disappears without a way
@@ -160,7 +165,18 @@ the UI reads a flat `tracks` array of descriptors instead.
 
 ---
 
-## The instrument-change gotcha
+## The model-side mixer gotcha
+
+alphaTab has live setters for volume, mute, solo and transposition, but **not**
+for the midi program or the balance. Those two are only read while the midi is
+generated from the score, so changing them means editing the model and calling
+`api.loadMidiForScore()`. Both live in
+[src/utils/trackSound.js](src/utils/trackSound.js).
+
+Two consequences for panning specifically: `balance` is `0-16` with `8` = centre
+(alphaTab emits it as MIDI `PanCoarse` = `balance * 8`, clamped to 127, verified
+at both extremes), and because each change rebuilds the midi, the slider must not
+commit on every `input` event of a drag.
 
 Setting `track.playbackInfo.program` is **not** enough to change a track's sound.
 

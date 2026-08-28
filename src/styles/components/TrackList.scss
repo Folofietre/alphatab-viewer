@@ -200,15 +200,27 @@ header {
   color: var(--chrome-text-muted);
 }
 
+// One grid shared by the volume row and the pan row, so the two sliders and the
+// two readouts line up exactly. The first column is sized to hold the S and M
+// buttons (2 x 1.5rem + the gap).
 .row-mix {
-  display: flex;
+  display: grid;
+  grid-template-columns: 3.3rem minmax(0, 1fr) 2.5rem;
   align-items: center;
   gap: 0.3rem;
 
   input[type='range'] {
-    flex: 1;
     min-width: 0;
   }
+}
+.flags {
+  display: flex;
+  gap: 0.3rem;
+}
+.pan-label {
+  @include section-label;
+  font-size: 0.6rem;
+  color: var(--chrome-text-muted);
 }
 
 .flag {
