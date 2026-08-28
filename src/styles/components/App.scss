@@ -67,23 +67,86 @@
 }
 
 .workspace {
+  position: relative;
   flex: 1;
   min-height: 0;
   display: flex;
   align-items: stretch;
+  // Clips the track panel while it is sliding out.
+  overflow: hidden;
 }
 
-// Same chrome as the action bar: the panel and the bar read as one continuous
-// frame around the score.
+// The track panel overlays the workspace rather than sitting in the flex flow,
+// and only its `transform` is animated.
+//
+// This is deliberate and load-bearing. alphaTab re-lays out the whole score
+// whenever its container width changes, debounced by `resizeThrottle` = 10ms.
+// Animation frames are ~16.7ms apart, so the debounce expires between every
+// frame: transitioning the score's width would trigger a full re-layout on
+// each frame of the slide. Overlaying the panel means .stage changes width
+// exactly once, in a single step, so alphaTab re-lays out once.
+// The collapsed state of the track panel: a full-height rail carrying the
+// reopen control. It sits under the panel (lower z-index) and is simply
+// uncovered as the panel slides away.
+//
+// Deliberate exception to "interaction is round": this is a button, but it
+// reads as a structural edge of the workspace, so it stays square like the
+// other delimiting surfaces.
+.rail {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 1;
+  width: $rail-w;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: $gap-sm;
+  padding: $gap-sm 0;
+  background: var(--chrome);
+  border: none;
+  border-right: 1px solid var(--chrome-border);
+  border-radius: $radius-block;
+  color: var(--chrome-text-muted);
+  cursor: pointer;
+  transition: background-color $transition-fast, color $transition-fast;
+
+  &:hover {
+    background: var(--chrome-raised);
+    color: var(--chrome-text);
+  }
+}
+.rail-icon {
+  font-size: 0.8rem;
+  line-height: 1;
+}
+.rail-label {
+  @include section-label;
+  // Reads bottom-to-top up the rail, the usual convention for a vertical tab.
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  letter-spacing: 0.14em;
+}
+
 .sidebar {
-  flex: none;
-  width: 290px;
-  min-width: 0;
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 2;
+  width: $sidebar-w;
   overflow-y: auto;
   background: var(--chrome);
   color: var(--chrome-text);
-  // The single vertical line separating sidebar from score.
+  // The single vertical line separating panel from score.
   border-right: 1px solid var(--chrome-border);
+  transform: translateX(0);
+  transition: transform $transition-slide;
+
+  &.closed {
+    transform: translateX(-100%);
+  }
 }
 
 .stage {
@@ -92,6 +155,19 @@
   min-width: 0;
   display: flex;
   flex-direction: column;
+  // Leaves room for the overlaying panel. Intentionally NOT transitioned, see
+  // the note above.
+  margin-left: $sidebar-w;
+
+  // Panel collapsed: only the rail still takes space.
+  &.railed {
+    margin-left: $rail-w;
+  }
+
+  // No score open, so neither panel nor rail exists.
+  &.full {
+    margin-left: 0;
+  }
 }
 
 .empty-overlay {
@@ -108,14 +184,59 @@
   }
 }
 
+// Narrow layout: the panel becomes a strip above the score and returns to the
+// normal flow, so there is no horizontal room to slide into. It simply shows or
+// hides.
 @media (max-width: 900px) {
   .workspace {
     flex-direction: column;
+    overflow: visible;
   }
   .sidebar {
+    position: static;
     width: auto;
     max-height: 40vh;
     border-right: none;
     border-bottom: 1px solid var(--chrome-border);
+    transform: none;
+    transition: none;
+
+    &.closed {
+      display: none;
+    }
+  }
+  // No horizontal room for a vertical rail; the panel's own header button and
+  // this rail collapse into a plain full-width strip instead.
+  .rail {
+    position: static;
+    width: auto;
+    height: $rail-w;
+    flex-direction: row;
+    justify-content: center;
+    border-right: none;
+    border-bottom: 1px solid var(--chrome-border);
+
+    // In the stacked layout the rail cannot hide behind the panel, so it has
+    // to step aside explicitly while the panel is open.
+    &.covered {
+      display: none;
+    }
+  }
+  .rail-label {
+    writing-mode: horizontal-tb;
+    transform: none;
+  }
+  .stage,
+  .stage.full,
+  .stage.railed {
+    margin-left: 0;
+  }
+}
+
+// Respect a user who has asked for less motion: the panel still opens and
+// closes, it just does not animate.
+@media (prefers-reduced-motion: reduce) {
+  .sidebar {
+    transition: none;
   }
 }

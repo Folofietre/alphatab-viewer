@@ -35,6 +35,7 @@ header {
 
 .bulk {
   display: flex;
+  align-items: center;
   gap: $gap-xs;
 
   button {
@@ -42,6 +43,14 @@ header {
     padding: 0.16rem 0.42rem;
     font-size: 0.68rem;
   }
+}
+
+// Collapse the panel. Sits at the far edge of the header, pointing the way it
+// will move.
+.collapse {
+  font-size: 0.8rem;
+  line-height: 1;
+  padding: 0.1rem 0.34rem;
 }
 
 .legend {

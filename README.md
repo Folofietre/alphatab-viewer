@@ -53,6 +53,11 @@ channel 10 and is not addressed by a program number.
 `changeTrackMute` and `changeTrackVolume`. Independent of what is displayed:
 every track is audible whether it is on screen or not.
 
+**Collapsible track panel** - the panel slides out of the way and collapses to a
+30px rail carrying the reopen control, so it never disappears without a way
+back. The slide animates the panel's `transform` only; see the note below on why
+the layout itself must not be animated.
+
 **Transport** - play/pause, stop, scrub bar, playback speed (0.25x-2x), master
 volume, loop, metronome, all in the top action bar. Space is play/pause from
 anywhere on the page. Clicking a beat in the score seeks to it
@@ -106,8 +111,8 @@ Two rules, both encoded as tokens so they cannot drift:
 `$radius-control` is `0.3rem`; there is deliberately no general-purpose "medium
 radius". Panels, bars, the score surface and list rows have hard corners so
 their 1px borders read as delimiters. Anything clickable or draggable is
-rounded. The shipped CSS currently has 5 rules at radius `0` and 7 at
-`0.3rem` - all of the latter on buttons, selects or the compact dropzone.
+rounded. One documented exception: the collapsed `.rail` is a button but reads
+as a structural edge of the workspace, so it stays square.
 
 **Two colour zones.** `--chrome-*` is the dark navy action bar; everything else
 is the light working area. Every token is named for what it is *for*, never for
@@ -120,6 +125,19 @@ so a rule placed in a shared partial is duplicated into all of them. Measured
 with a probe rule: it came out 7 times, once globally and once scoped per
 component. That is also why `styles/main.scss` is imported from `main.js`
 rather than merged into a partial.
+
+### Never animate the score's width
+
+alphaTab re-lays out the entire score whenever its container width changes. The
+re-render is debounced by `resizeThrottle`, which is **10ms**, and alphaTab's
+`throttle` helper is really a debounce (it clears and resets the timer on every
+event). Animation frames are ~16.7ms apart, so the timer expires *between* every
+frame: transitioning the score container's width triggers a full re-layout on
+each frame of the animation.
+
+This is why the track panel is absolutely positioned and slides via `transform`
+while `.stage`'s `margin-left` changes in a single un-transitioned step. alphaTab
+re-lays out once per toggle instead of ~15 times.
 
 ### `usePlayer()` is a module-level singleton
 

@@ -14,7 +14,6 @@
 $gap-xs:  0.25rem;
 $gap-sm:  0.5rem;
 $gap-md:  0.75rem;
-$gap-lg:  1rem;
 
 // Corner radii.
 //
@@ -31,5 +30,12 @@ $radius-pill:    999px;
 $transition-fast: 0.15s ease;
 $transition-med:  0.25s ease;
 
-// Chrome heights, needed by more than one component.
+// Chrome geometry, needed by more than one component.
 $action-bar-h: 46px;
+$sidebar-w:    290px;
+// Width the track panel collapses to, rather than disappearing entirely.
+$rail-w:       30px;
+
+// The track panel slide. Kept here because the duration is referenced by the
+// panel and by the surface it uncovers.
+$transition-slide: 0.22s cubic-bezier(0.4, 0, 0.2, 1);
