@@ -20,6 +20,22 @@
   overflow: auto;
   background: var(--bg-surface);
   border-radius: $radius-block;
+
+  // Contain alphaTab's own stacking. It sets `z-index: 1` on every rendered
+  // page placeholder and `z-index: 1000` on the cursor wrapper, while giving
+  // its canvas element `position: relative` with no z-index, so that canvas is
+  // NOT a stacking context and both values escape into ours. Without this the
+  // score paints straight through anything with `z-index: auto` - which is how
+  // the empty-state dropzone ended up showing the previous score through it,
+  // and would also have let the cursor layer cover the track panel (z-index 2).
+  isolation: isolate;
+
+  // Nothing loaded: keep the box in layout, because alphaTab measures this
+  // element's width, but show none of the score still held in memory.
+  // `renderTracks([])` cannot help here - alphaTab ignores an empty array.
+  &.empty {
+    visibility: hidden;
+  }
 }
 
 .alphatab-host {

@@ -165,6 +165,30 @@ the UI reads a flat `tracks` array of descriptors instead.
 
 ---
 
+## alphaTab escapes your stacking context
+
+alphaTab sets `z-index: 1` on every rendered page placeholder and `z-index: 1000`
+on its cursor wrapper. It also sets `position: relative` on its canvas element
+but **no** `z-index`, so that canvas is not a stacking context and both values
+escape into whatever context encloses the player.
+
+The visible consequence: the score painted straight through the empty-state
+dropzone, so closing a score showed the drop target as a transparent panel over
+the score that was supposedly gone. The track panel (`z-index: 2`) was latently
+vulnerable to the cursor layer for the same reason.
+
+The fix is one line in
+[styles/components/ScoreViewer.scss](src/styles/components/ScoreViewer.scss):
+`isolation: isolate` on the scroll container, which turns it into a stacking
+context and confines alphaTab's z-indexes to it. Anything overlaying the score
+then wins by ordinary DOM order.
+
+Related: closing a score does **not** unload it from alphaTab. There is no API
+for that - `renderTracks([])` is a no-op, alphaTab ignores an empty array - so
+the surface is hidden with `visibility: hidden` (not `display: none`, because
+alphaTab measures that element's width) and the score is simply replaced on the
+next load.
+
 ## The model-side mixer gotcha
 
 alphaTab has live setters for volume, mute, solo and transposition, but **not**
