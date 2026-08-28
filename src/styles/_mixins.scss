@@ -1,0 +1,186 @@
+// Shared SCSS mixins.
+//
+// Components import these via `@use '@/styles/mixins' as *;` at the top of
+// their scoped <style lang="scss"> block. Mixins keep markup repetitive
+// patterns to one source of truth — change once here, everything refreshes.
+//
+// Conventions:
+//  - All colors come from CSS custom properties defined in style.scss so the
+//    palette can be themed at runtime without rebuilding.
+//  - Mixins should be small and composable. Don't bundle 10 concerns into one.
+
+// Re-export tokens so consumers only need to `@use '@/styles/mixins' as *`
+// — they get both the mixins and the underlying $variables.
+@forward './tokens';
+@use './tokens' as *;
+
+// ---------------------------------------------------------------------------
+// Surfaces
+// ---------------------------------------------------------------------------
+
+// A subtle elevated surface — used for stat panels, category headers,
+// settings popovers, post-session panels.
+@mixin panel-card {
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: $radius-md;
+}
+
+// A slightly more pronounced surface inside a panel (e.g. tab card inside
+// a category, tooltip inside a popover).
+@mixin nested-card {
+  background: var(--bg-elevated);
+  border: 1px solid transparent;
+  border-radius: $radius-sm;
+  transition:
+    border-color $transition-fast,
+    background-color $transition-fast,
+    color $transition-fast;
+}
+
+// ---------------------------------------------------------------------------
+// Typography helpers
+// ---------------------------------------------------------------------------
+
+// Small uppercase label used for section headings ("DANGER ZONE", "PLAYLIST",
+// "BUILT-IN SCORES"…). Compact and quiet.
+@mixin section-label {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  opacity: 0.8;
+}
+
+// Italic, low-opacity text for hints under labels.
+@mixin hint-text {
+  font-size: 0.8rem;
+  opacity: 0.65;
+  font-style: italic;
+  line-height: 1.4;
+}
+
+// Tabular numeric values (stat displays, percentages, etc.)
+@mixin tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+// ---------------------------------------------------------------------------
+// Buttons
+// ---------------------------------------------------------------------------
+
+// Reset + base style for inline buttons inside our UI. Inherits typography
+// from the host. Hover / disabled handled here so individual variants stay
+// minimal.
+@mixin button-base {
+  font: inherit;
+  color: var(--text-h);
+  background: var(--panel-strong);
+  border: 1px solid var(--panel-border);
+  padding: 0.4rem 0.85rem;
+  border-radius: $radius-sm;
+  cursor: pointer;
+  transition:
+    background-color $transition-fast,
+    border-color $transition-fast,
+    color $transition-fast;
+
+  &:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+  }
+  &:hover:not(:disabled) {
+    background: var(--accent-bg);
+    border-color: var(--accent-border);
+    color: var(--accent);
+  }
+}
+
+// Primary action button — accent palette.
+@mixin button-accent {
+  @include button-base;
+  background: var(--accent-bg);
+  border-color: var(--accent-border);
+  color: var(--accent);
+
+  &:hover:not(:disabled) {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: var(--vanilla-cream);
+  }
+}
+
+// Dangerous action — copper/warn palette.
+@mixin button-danger {
+  @include button-base;
+  background: var(--warn-bg);
+  border-color: var(--warn-border);
+  color: var(--faded-copper);
+
+  &:hover:not(:disabled) {
+    background: var(--faded-copper);
+    border-color: var(--faded-copper);
+    color: var(--vanilla-cream);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Interactive cards (clickable tab rows, instrument picker cards…)
+// ---------------------------------------------------------------------------
+
+@mixin selectable-card {
+  @include nested-card;
+  display: flex;
+  align-items: flex-start;
+  gap: $gap-sm;
+  padding: 0.65rem 0.8rem;
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+  color: var(--text);
+
+  &:hover:not(:disabled) {
+    border-color: var(--accent-border);
+    background: var(--accent-bg);
+    color: var(--accent);
+  }
+  &:active:not(:disabled) {
+    transform: scale(0.98);
+  }
+  &:disabled {
+    cursor: not-allowed;
+    opacity: 0.45;
+  }
+}
+
+// Highlight when a selectable card represents the "currently selected" item.
+@mixin selectable-card-active {
+  border-color: var(--accent);
+  background: var(--accent-bg);
+  color: var(--accent);
+}
+
+// ---------------------------------------------------------------------------
+// Visual primitives
+// ---------------------------------------------------------------------------
+
+// Slim horizontal divider between panel sections.
+@mixin divider {
+  height: 1px;
+  background: var(--panel-border);
+  margin: $gap-xs 0;
+}
+
+// A linear "progress fill" track + value. Apply to a wrapper + inner element.
+// Call @include progress-track on the outer, @include progress-fill on the inner.
+@mixin progress-track($height: 12px) {
+  height: $height;
+  background: var(--panel-strong);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+@mixin progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--muted-olive), var(--palm-leaf));
+  transition: width 0.4s ease;
+}

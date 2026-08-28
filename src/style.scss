@@ -1,0 +1,109 @@
+@use '@/styles/mixins' as *;
+
+// ---------------------------------------------------------------------------
+// Design tokens (CSS custom properties — runtime-themeable)
+// ---------------------------------------------------------------------------
+
+:root {
+  // Palette
+  --vanilla-cream: #f0ead2;
+  --tea-green:     #dde5b6;
+  --muted-olive:   #adc178;
+  --palm-leaf:     #7b8f4b;
+  --faded-copper:  #a98467;
+  --ash-brown:     #6c584c;
+  --ash-brown-2:   #79675c;
+
+  // Roles
+  --bg:            var(--vanilla-cream);
+  --bg-elevated:   #faf6e3;
+  --bg-surface:    #fffdf3;             // score viewer background
+  --panel:         rgba(108, 88, 76, 0.06);
+  --panel-strong:  rgba(108, 88, 76, 0.10);
+  --panel-border:  rgba(108, 88, 76, 0.22);
+
+  --text:          var(--ash-brown);
+  --text-h:        #3f342c;
+  --text-muted:    var(--ash-brown-2);
+  --text-inverse:  var(--vanilla-cream);
+
+  --accent:        var(--palm-leaf);
+  --accent-soft:   var(--muted-olive);
+  --accent-bg:     rgba(123, 143, 75, 0.14);
+  --accent-border: rgba(123, 143, 75, 0.45);
+
+  --warn:          var(--faded-copper);
+  --warn-bg:       rgba(169, 132, 103, 0.14);
+  --warn-border:   rgba(169, 132, 103, 0.45);
+
+  --gain:          var(--palm-leaf);
+  --loss:          var(--faded-copper);
+
+  --shadow:
+    rgba(108, 88, 76, 0.12) 0 6px 16px -4px,
+    rgba(108, 88, 76, 0.08) 0 2px 4px -1px;
+
+  --sans:    system-ui, 'Segoe UI', Roboto, sans-serif;
+  --heading: system-ui, 'Segoe UI', Roboto, sans-serif;
+  --mono:    ui-monospace, Consolas, monospace;
+
+  font: 16px/1.45 var(--sans);
+  letter-spacing: 0.18px;
+  color-scheme: light;
+  color: var(--text);
+  background: var(--bg);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+// ---------------------------------------------------------------------------
+// Resets / base elements
+// ---------------------------------------------------------------------------
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+}
+
+h1, h2, h3, h4 {
+  font-family: var(--heading);
+  color: var(--text-h);
+  margin: 0;
+}
+
+p { margin: 0; }
+
+button {
+  @include button-base;
+}
+
+progress {
+  appearance: none;
+  height: 14px;
+  border: none;
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--panel-strong);
+
+  &::-webkit-progress-bar {
+    background: var(--panel-strong);
+    border-radius: 999px;
+  }
+  &::-webkit-progress-value {
+    background: linear-gradient(90deg, var(--muted-olive), var(--palm-leaf));
+    border-radius: 999px;
+    transition: width 0.2s linear;
+  }
+  &::-moz-progress-bar {
+    background: linear-gradient(90deg, var(--muted-olive), var(--palm-leaf));
+    border-radius: 999px;
+  }
+}
+
+input[type='range'] {
+  accent-color: var(--palm-leaf);
+}

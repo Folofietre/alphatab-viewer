@@ -1,0 +1,27 @@
+// Design tokens.
+//
+// CSS custom properties live in style.scss and drive everything at runtime
+// (they're easier for the in-browser inspector and they work transparently in
+// scoped styles). This file exposes a small SCSS subset for cases where we
+// need a real Sass variable — e.g. when doing arithmetic, when generating
+// computed values at compile time, or when authoring shared mixins that need
+// type-safe color references.
+//
+// Anything referenced via `var(--token)` in CSS does NOT need a SCSS twin;
+// only add aliases here when a mixin or function genuinely needs the value at
+// compile time.
+
+// Spacing scale (only used by mixins so far)
+$gap-xs:  0.25rem;
+$gap-sm:  0.5rem;
+$gap-md:  0.75rem;
+$gap-lg:  1rem;
+$gap-xl:  1.25rem;
+
+$radius-sm: 0.4rem;
+$radius-md: 0.5rem;
+$radius-lg: 0.75rem;
+
+// Transition presets
+$transition-fast: 0.15s ease;
+$transition-med:  0.25s ease;
