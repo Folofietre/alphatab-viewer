@@ -7,7 +7,6 @@
 :root {
   // Palette
   --vanilla-cream: #f0ead2;
-  --tea-green:     #dde5b6;
   --muted-olive:   #adc178;
   --palm-leaf:     #7b8f4b;
   --faded-copper:  #a98467;
@@ -31,17 +30,8 @@
   --accent-soft:   var(--muted-olive);
   --accent-bg:     rgba(123, 143, 75, 0.14);
   --accent-border: rgba(123, 143, 75, 0.45);
-
-  --warn:          var(--faded-copper);
   --warn-bg:       rgba(169, 132, 103, 0.14);
   --warn-border:   rgba(169, 132, 103, 0.45);
-
-  --gain:          var(--palm-leaf);
-  --loss:          var(--faded-copper);
-
-  --shadow:
-    rgba(108, 88, 76, 0.12) 0 6px 16px -4px,
-    rgba(108, 88, 76, 0.08) 0 2px 4px -1px;
 
   --sans:    system-ui, 'Segoe UI', Roboto, sans-serif;
   --heading: system-ui, 'Segoe UI', Roboto, sans-serif;
@@ -79,29 +69,6 @@ p { margin: 0; }
 
 button {
   @include button-base;
-}
-
-progress {
-  appearance: none;
-  height: 14px;
-  border: none;
-  border-radius: 999px;
-  overflow: hidden;
-  background: var(--panel-strong);
-
-  &::-webkit-progress-bar {
-    background: var(--panel-strong);
-    border-radius: 999px;
-  }
-  &::-webkit-progress-value {
-    background: linear-gradient(90deg, var(--muted-olive), var(--palm-leaf));
-    border-radius: 999px;
-    transition: width 0.2s linear;
-  }
-  &::-moz-progress-bar {
-    background: linear-gradient(90deg, var(--muted-olive), var(--palm-leaf));
-    border-radius: 999px;
-  }
 }
 
 input[type='range'] {

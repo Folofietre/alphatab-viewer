@@ -27,45 +27,4 @@ defineProps({
 defineEmits(['file', 'close'])
 </script>
 
-<style scoped lang="scss">
-@use '@/styles/mixins' as *;
-
-.score-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: $gap-lg;
-  flex-wrap: wrap;
-}
-.titles {
-  min-width: 0;
-}
-h2 {
-  font-size: 1.25rem;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.meta {
-  display: flex;
-  gap: $gap-sm;
-  flex-wrap: wrap;
-  margin-top: 0.15rem;
-  font-size: 0.8rem;
-  color: var(--text-muted);
-
-  span + span::before {
-    content: '·';
-    margin-right: $gap-sm;
-    opacity: 0.5;
-  }
-}
-.actions {
-  display: flex;
-  align-items: center;
-  gap: $gap-sm;
-
-  button {
-    font-size: 0.85rem;
-  }
-}
-</style>
+<style scoped lang="scss" src="@/styles/components/ScoreHeader.scss"></style>
