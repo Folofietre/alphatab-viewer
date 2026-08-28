@@ -97,16 +97,31 @@ header {
   min-width: 0;
 }
 
+// The primary control of the row: clicking it shows this track alone. It is a
+// real <button> for keyboard and screen-reader support, so the global button
+// styling from main.scss has to be undone to leave it reading as plain text.
 .name {
   display: flex;
   align-items: center;
   gap: 0.4rem;
   flex: 1;
   min-width: 0;
+  padding: 0;
+  background: none;
+  border: none;
+  text-align: left;
   cursor: pointer;
   font-size: 0.85rem;
   font-weight: 600;
   color: var(--chrome-text);
+
+  // Beats `button:hover:not(:disabled)` on specificity, so the inherited
+  // background and border never appear.
+  &:hover:not(:disabled) {
+    background: none;
+    border: none;
+    color: var(--accent-soft);
+  }
 }
 .name-text {
   overflow: hidden;
@@ -122,14 +137,6 @@ header {
   flex: none;
   background: var(--accent-soft);
   border: 1px solid rgba(255, 255, 255, 0.3);
-}
-
-.only {
-  @include button-chrome;
-  padding: 0.12rem 0.36rem;
-  font-size: 0.64rem;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
 }
 
 .row-sound {

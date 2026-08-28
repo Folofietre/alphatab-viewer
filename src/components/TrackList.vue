@@ -16,39 +16,38 @@
     </header>
 
     <p class="legend">
-      The checkbox controls what is <strong>displayed</strong>; mute, solo and volume
-      control what is <strong>heard</strong>. Every track is audible whether it is
-      displayed or not.
+      Click a track to show it <strong>alone</strong>, or tick its box to
+      <strong>add</strong> it to the view. Mute, solo and volume control what is
+      <strong>heard</strong>: every track is audible whether it is displayed or not.
     </p>
 
     <ul class="tracks">
       <li v-for="track in tracks" :key="track.index" :class="{ rendered: track.rendered }">
         <div class="row-main">
           <input
-            :id="`render-${track.index}`"
             type="checkbox"
             :checked="track.rendered"
             :disabled="track.rendered && renderedCount === 1"
+            :aria-label="`Also display ${track.name}`"
             :title="track.rendered && renderedCount === 1
               ? 'At least one track must stay displayed'
-              : 'Display this track'"
+              : 'Add this track to the view'"
             @change="setTrackRendered(track.index, $event.target.checked)"
             @keydown.enter.prevent="setTrackRendered(track.index, !track.rendered)"
           />
-          <label class="name" :for="`render-${track.index}`">
+          <button
+            type="button"
+            class="name"
+            :title="`Show only ${track.name}`"
+            @click="showOnlyTrack(track.index)"
+          >
             <span
               class="dot"
               :style="track.color ? { background: track.color } : null"
               aria-hidden="true"
             />
             <span class="name-text">{{ track.name }}</span>
-          </label>
-          <button
-            type="button"
-            class="only"
-            title="Display only this track"
-            @click="showOnlyTrack(track.index)"
-          >only</button>
+          </button>
         </div>
 
         <div class="row-sound">

@@ -266,6 +266,11 @@ export function usePlayer() {
 
   function showOnlyTrack(index) {
     if (!tracks.value.some((t) => t.index === index)) return
+    // This is now the primary click target in the track list, so bail out when
+    // the track is already the only one displayed: re-laying out a score is
+    // expensive and clicking the current selection is a no-op.
+    const rendered = tracks.value.filter((t) => t.rendered)
+    if (rendered.length === 1 && rendered[0].index === index) return
     for (const t of tracks.value) t.rendered = t.index === index
     applyRenderedTracks()
   }

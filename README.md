@@ -40,10 +40,15 @@ reported through alphaTab's `error` event and shown as a banner.
 
 ## Features
 
-**Track display** - one checkbox per track drives `api.renderTracks()`. `only`
-isolates a single track, `All` renders everything. At least one track must stay
-displayed (alphaTab needs a non-empty selection). alphaTab renders only the first
-track on load, and the checkboxes are seeded from what it actually rendered.
+**Track display** - clicking a track name shows that track alone; its checkbox
+adds it to the current view alongside the others. `All` renders everything. At
+least one track must stay displayed, since alphaTab needs a non-empty selection,
+so the last remaining checkbox is disabled. alphaTab renders only the first track
+on load, and the checkboxes are seeded from what it actually rendered.
+
+Clicking a name that is already the sole displayed track returns early rather
+than re-rendering: it is the primary click target now, and re-laying out a score
+is expensive.
 
 **Sound per track** - a `<select>` of the 128 General MIDI programs, grouped by
 family. Percussion tracks show a static label instead: percussion plays on MIDI
