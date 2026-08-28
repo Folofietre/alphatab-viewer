@@ -63,26 +63,46 @@ volume, loop, metronome. Clicking a beat in the score seeks to it
 
 ```
 src/
-  main.js                    app entry
+  main.js                    app entry, imports styles/main.scss
   App.vue                    layout: sidebar (tracks) + stage (score, transport)
-  style.scss                 CSS custom properties, resets
-  styles/_tokens.scss        SCSS spacing / radius / transition scale
-  styles/_mixins.scss        panel-card, button-base, section-label, ...
-  composables/usePlayer.js   the single alphaTab instance + all app state
+  composables/
+    usePlayer.js             the single alphaTab instance + all app state
+    useShortcuts.js          page-wide keys (Space = play/pause)
   components/
-    ScoreViewer.vue          owns the alphaTab host element, calls init()
+    ScoreViewer.vue          owns the alphaTab host + scroll wrapper, calls init()
     ScoreHeader.vue          title / artist / tempo / bars + open + close
     TrackList.vue            display checkboxes, GM program select, mixer
     TransportBar.vue         play, stop, scrub, speed, volume, loop, click
     FileDropzone.vue         window-wide drag & drop + file picker
+  styles/
+    main.scss                :root custom properties + element resets (global)
+    _tokens.scss             SCSS spacing / radius / transition scale
+    _mixins.scss             panel-card, button-base, section-label, ...
+    components/*.scss        one file per component, one-to-one by name
   utils/
     gmPrograms.js            the 128 GM programs and their 16 families
     trackSound.js            applyTrackProgram() - see the gotcha below
-    format.js               formatTime()
-public/
-  font/Bravura.*             music font, required by alphaTab's renderer
-  soundfont/sonivox.sf2      SoundFont, required for playback
+    format.js                formatTime()
 ```
+
+### Styling rules
+
+**No CSS lives in a `.vue` file.** Each component links its stylesheet and
+nothing more:
+
+```vue
+<style scoped lang="scss" src="@/styles/components/TrackList.scss"></style>
+```
+
+Scoping is preserved, so `:deep()` still works for reaching alphaTab's own
+`.at-*` classes.
+
+**`_tokens.scss` and `_mixins.scss` must never emit CSS** - only variables,
+mixins and `@forward`. Every SFC style block is its own Sass compilation unit,
+so a rule placed in a shared partial is duplicated into all of them. Measured
+with a probe rule: it came out 7 times, once globally and once scoped per
+component. That is also why `styles/main.scss` is imported from `main.js`
+rather than merged into a partial.
 
 ### `usePlayer()` is a module-level singleton
 

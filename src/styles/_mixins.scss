@@ -1,13 +1,14 @@
 // Shared SCSS mixins.
 //
-// Components import these via `@use '@/styles/mixins' as *;` at the top of
-// their scoped <style lang="scss"> block. Mixins keep markup repetitive
-// patterns to one source of truth — change once here, everything refreshes.
+// Every per-component stylesheet in styles/components/ starts with
+// `@use '@/styles/mixins' as *;`, which also forwards the tokens below.
 //
 // Conventions:
-//  - All colors come from CSS custom properties defined in style.scss so the
-//    palette can be themed at runtime without rebuilding.
-//  - Mixins should be small and composable. Don't bundle 10 concerns into one.
+//  - Colors always come from the CSS custom properties in styles/main.scss, so
+//    the palette stays themeable at runtime without a rebuild.
+//  - Mixins stay small and composable. Don't bundle several concerns into one.
+//  - This file must never emit CSS. Each SFC style block is its own Sass
+//    compilation unit, so a rule placed here is duplicated into all of them.
 
 // Re-export tokens so consumers only need to `@use '@/styles/mixins' as *`
 // — they get both the mixins and the underlying $variables.
@@ -18,16 +19,15 @@
 // Surfaces
 // ---------------------------------------------------------------------------
 
-// A subtle elevated surface — used for stat panels, category headers,
-// settings popovers, post-session panels.
+// A subtle elevated surface. Used by the transport bar.
 @mixin panel-card {
   background: var(--panel);
   border: 1px solid var(--panel-border);
   border-radius: $radius-md;
 }
 
-// A slightly more pronounced surface inside a panel (e.g. tab card inside
-// a category, tooltip inside a popover).
+// A slightly more pronounced surface nested inside a panel. Used by the track
+// rows in the sidebar.
 @mixin nested-card {
   background: var(--bg-elevated);
   border: 1px solid transparent;
@@ -42,8 +42,7 @@
 // Typography helpers
 // ---------------------------------------------------------------------------
 
-// Small uppercase label used for section headings ("DANGER ZONE", "PLAYLIST",
-// "BUILT-IN SCORES"…). Compact and quiet.
+// Small, quiet uppercase label for a section heading ("TRACKS").
 @mixin section-label {
   font-size: 0.75rem;
   text-transform: uppercase;
