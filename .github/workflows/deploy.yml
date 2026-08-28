@@ -1,0 +1,57 @@
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Permissions required by actions/deploy-pages.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deployment at a time, and never cancel one mid-publish.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+
+      - run: npm ci
+      - run: npm run build
+
+      # The classic cause of a blank page on Pages is a `base` that does not
+      # match the repo name, which makes every asset 404. Catch it here rather
+      # than after publishing.
+      - name: Check base path matches the repo name
+        run: |
+          repo="${GITHUB_REPOSITORY#*/}"
+          if ! grep -q "\"/${repo}/assets/" dist/index.html; then
+            echo "::error::vite base does not match the repo name '${repo}'. Fix 'base' in vite.config.js."
+            grep -o 'src="[^"]*"' dist/index.html || true
+            exit 1
+          fi
+
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5

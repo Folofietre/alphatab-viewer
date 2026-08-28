@@ -135,8 +135,44 @@ Two consequences worth knowing:
 
 ---
 
-## Deploying
+## Deploying to GitHub Pages
 
-`vite.config.js` has `base: '/'`. Every asset path goes through
-`import.meta.env.BASE_URL`, so for a GitHub Pages project site the only change
-needed is `base: '/<repo-name>/'`.
+Deployment is automatic: [.github/workflows/deploy.yml](.github/workflows/deploy.yml)
+builds and publishes on every push to `main`, and can also be run by hand from
+the Actions tab (`workflow_dispatch`). `dist/` is never committed.
+
+**One-time setup in the repository settings:** Settings > Pages > Source =
+**GitHub Actions**. The workflow cannot do this itself - `configure-pages`
+supports an `enablement` input, but it "requires a token other than
+`GITHUB_TOKEN`", so it is not usable with the default workflow token.
+
+Live URL: `https://<user>.github.io/alphatab-viewer/`
+
+### The base path
+
+`vite.config.js` pins `base: '/alphatab-viewer/'`, which **must match the
+repository name**. Every asset resolves through `import.meta.env.BASE_URL`, so a
+mismatch 404s all of them and the page renders blank. That covers four things
+worth knowing about:
+
+```
+/alphatab-viewer/assets/index-*.js
+/alphatab-viewer/assets/alphaTab.worker-*.js     <- emitted by @coderline/alphatab-vite
+/alphatab-viewer/assets/alphaTab.worklet-*.js    <- emitted by @coderline/alphatab-vite
+/alphatab-viewer/font/                           <- core.fontDirectory
+/alphatab-viewer/soundfont/sonivox.sf2           <- player.soundFont
+```
+
+The workflow greps the built `dist/index.html` for the repo name and fails the
+build on a mismatch, so a renamed repo produces a red run instead of a silently
+broken site.
+
+If you ever serve from a domain root (custom domain, user site), set `base: '/'`.
+
+### Bundled assets and licences
+
+Both third-party assets are redistributable and ship with their licence texts:
+
+- `public/font/Bravura.*` - SIL Open Font License (`Bravura-OFL.txt`)
+- `public/soundfont/sonivox.*` - Apache License 2.0, Copyright (c) 2004-2006
+  Sonic Network Inc. (`soundfont/LICENSE`)
