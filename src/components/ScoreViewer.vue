@@ -1,6 +1,10 @@
 <template>
   <div class="viewer">
-    <div ref="host" class="alphatab-host" />
+    <!-- The scroll container must be an ANCESTOR of the alphaTab container,
+         never the same element. See the long comment in usePlayer.init(). -->
+    <div ref="scroller" class="alphatab-scroll">
+      <div ref="host" class="alphatab-host" />
+    </div>
     <div v-if="isRendering" class="rendering">Rendering…</div>
   </div>
 </template>
@@ -10,9 +14,10 @@ import { ref, onMounted, onBeforeUnmount } from 'vue'
 import { usePlayer } from '@/composables/usePlayer'
 
 const host = ref(null)
+const scroller = ref(null)
 const { init, destroy, isRendering } = usePlayer()
 
-onMounted(() => init(host.value))
+onMounted(() => init(host.value, scroller.value))
 onBeforeUnmount(() => destroy())
 </script>
 
@@ -23,14 +28,16 @@ onBeforeUnmount(() => destroy())
   position: relative;
   min-width: 0;
 }
-.alphatab-host {
+.alphatab-scroll {
   height: calc(100vh - 210px);
   min-height: 320px;
   overflow: auto;
   background: var(--bg-surface);
-  color: var(--ash-brown);
   border: 1px solid var(--panel-border);
   border-radius: $radius-md;
+}
+.alphatab-host {
+  color: var(--ash-brown);
 
   // alphaTab renders its own DOM inside the host; these are its documented
   // hook classes for the playback cursor and the hovered/played elements.

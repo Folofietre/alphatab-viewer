@@ -88,8 +88,24 @@ function readScoreInfo(loaded) {
 }
 
 export function usePlayer() {
-  function init(element) {
-    if (api || !element) return
+  // `element` hosts the alphaTab render output; `scrollElement` is the element
+  // that actually scrolls and MUST be a distinct ancestor of `element`.
+  //
+  // Why it must be distinct: with LayoutMode.Page + ScrollMode.Continuous,
+  // alphaTab's VerticalContinuousScrollHandler scrolls to
+  //   getOffset(scrollContainer, api.container).y + barY + scrollOffsetY
+  // and getOffset() computes
+  //   container.rect.top + scrollContainer.scrollTop - scrollContainer.rect.top
+  // When the scroll container IS the alphaTab container, the two rect.top terms
+  // are the same number and cancel, leaving plain `scrollTop`. Every system
+  // change then scrolls to `scrollTop + barY` instead of `barY`, so the view
+  // runs away to the end of the score while the cursor is still mid-song, and
+  // the playing bar ends up far above the viewport.
+  //
+  // With a real ancestor, the inner container's rect moves up as the wrapper
+  // scrolls, so the expression correctly collapses to 0 and the target is barY.
+  function init(element, scrollElement) {
+    if (api || !element || !scrollElement) return
 
     api = new alphaTab.AlphaTabApi(element, {
       core: {
@@ -104,8 +120,11 @@ export function usePlayer() {
         // deliberately disabled this, we deliberately enable it.
         enableUserInteraction: true,
         soundFont: `${import.meta.env.BASE_URL}soundfont/sonivox.sf2`,
-        scrollElement: element,
+        scrollElement,
         scrollMode: alphaTab.ScrollMode.Continuous,
+        // Land the system a little below the top edge instead of flush against
+        // it. Negative, because the target scroll position is barY + this.
+        scrollOffsetY: -12,
       },
       display: {
         layoutMode: alphaTab.LayoutMode.Page,

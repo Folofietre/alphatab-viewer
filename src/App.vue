@@ -36,6 +36,7 @@
 
 <script setup>
 import { usePlayer } from '@/composables/usePlayer'
+import { useShortcuts } from '@/composables/useShortcuts'
 import ScoreViewer from '@/components/ScoreViewer.vue'
 import ScoreHeader from '@/components/ScoreHeader.vue'
 import TrackList from '@/components/TrackList.vue'
@@ -43,6 +44,10 @@ import TransportBar from '@/components/TransportBar.vue'
 import FileDropzone from '@/components/FileDropzone.vue'
 
 const { loadFile, clearScore, isScoreLoaded, scoreInfo, fileName, loadError } = usePlayer()
+
+// Page-wide keys. Space is play/pause everywhere, including while a button
+// still has focus from the last click.
+useShortcuts()
 </script>
 
 <style scoped lang="scss">

@@ -5,7 +5,7 @@
         type="button"
         class="primary"
         :disabled="!isPlayerReady"
-        :title="isPlaying ? 'Pause' : 'Play'"
+        :title="isPlaying ? 'Pause (Space)' : 'Play (Space)'"
         @click="playPause"
       >
         {{ isPlaying ? '❙❙' : '▶' }}

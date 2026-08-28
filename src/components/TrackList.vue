@@ -26,6 +26,7 @@
               ? 'At least one track must stay displayed'
               : 'Display this track'"
             @change="setTrackRendered(track.index, $event.target.checked)"
+            @keydown.enter.prevent="setTrackRendered(track.index, !track.rendered)"
           />
           <label class="name" :for="`render-${track.index}`">
             <span
