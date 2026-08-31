@@ -22,9 +22,10 @@ import { downloadScoreAsGp } from '@/utils/exportScore'
 // what has to be re-rendered or re-generated after each edit.
 //
 // The division of labour, which is the point of the whole design:
-//   scoreEdits.js  writes the model, and nothing else. Pure, named, tested.
-//   this file       decides what the write invalidates, and tracks selection.
-//   EditPanel.vue   renders flat reactive data and calls the functions below.
+//   scoreEdits.js       writes the model, and nothing else. Pure, named, tested.
+//   this file           decides what the write invalidates, and tracks selection.
+//   TrackEditPanel.vue  render flat reactive data and call the functions below.
+//   ScoreEditPanel.vue  Split by SCOPE: one edits a track, the other the score.
 //
 // No component ever touches the alphaTab model, so a command stack could be
 // added later by giving each function in scoreEdits.js an inverse, without
@@ -125,18 +126,12 @@ function message(kind, text) {
 //                   changes bar 0 onwards anyway.
 function propagate(result, { render = false, midi = false, firstChangedBar = null } = {}) {
   if (!result.ok) {
-    log('propagate: REFUSED -', result.reason)
     message('error', result.reason)
     return result
   }
   message(null, null)
-  if (!result.changed) {
-    log('propagate: edit applied but nothing changed (already that value)')
-    return result
-  }
+  if (!result.changed) return result
 
-  log('propagate: applied. render =', render, '| midi =', midi,
-    '| firstChangedBar =', firstChangedBar)
   scoreEditHost.markDirty()
 
   if (render) {
@@ -154,32 +149,10 @@ function propagate(result, { render = false, midi = false, firstChangedBar = nul
   return result
 }
 
-// ---------------------------------------------------------------------------
-// TEMPORARY DIAGNOSTIC - remove once note selection is confirmed in a browser.
-// ---------------------------------------------------------------------------
-const DEBUG = '[edit-debug]'
-function log(...args) {
-  console.log(DEBUG, ...args)
-}
-function describeTarget(el) {
-  if (!el) return 'null'
-  return `${el.tagName ?? '?'}${el.type ? `[type=${el.type}]` : ''}${el.className ? `.${String(el.className).split(' ')[0]}` : ''}`
-}
-// ---------------------------------------------------------------------------
-
 function bind() {
   const api = scoreEditHost.api
-  if (!api || api === boundApi) {
-    log('bind() skipped:', !api ? 'no api yet' : 'already bound to this api')
-    return
-  }
+  if (!api || api === boundApi) return
   boundApi = api
-
-  // The single most important line: if this says false, note selection CANNOT
-  // work and no amount of clicking will help. It has to be set when the
-  // AlphaTabApi is constructed, so a hard reload is needed after changing it.
-  log('bind() subscribing. core.includeNoteBounds =', api.settings?.core?.includeNoteBounds,
-    '| player.enableUserInteraction =', api.settings?.player?.enableUserInteraction)
   // A new api means a new model, so nothing that was selected still exists.
   clearSelection()
 
@@ -187,8 +160,6 @@ function bind() {
   // defaults to false: without it alphaTab never runs the note hit-test and this
   // handler is never called. See the comment at that setting.
   api.noteMouseDown.on((note) => {
-    log('noteMouseDown FIRED. string =', note?.string, 'fret =', note?.fret,
-      'isStringed =', note?.isStringed, 'harmonicType =', note?.harmonicType)
     missedNote = false
     selected = note
     selectedNote.value = describeNote(note)
@@ -207,28 +178,26 @@ function bind() {
     refreshSelectionRects()
   })
 
-  // Say so when a click landed on a beat but not on a note head.
+  // A click that landed on a beat but not on a note head DESELECTS.
   //
-  // alphaTab's hit-test is a STRICT rectangle over `note.noteHeadBounds`, with
-  // no tolerance, so clicking a hair off a fret digit selects nothing. Without
-  // this, that failure is completely silent and indistinguishable from the
-  // shortcut being broken.
+  // Clicking a bar is a normal seek, not a mistake, so this is silent: the ring
+  // vanishing is the feedback, and a message on every seek would be noise.
   //
-  // How it detects the miss: alphaTab fires `beatMouseDown` and then, in the
-  // same synchronous handler, `noteMouseDown` if a note was hit. So the flag set
-  // here is still true by the time the microtask runs only when no note was hit.
-  api.beatMouseDown.on((beat) => {
-    log('beatMouseDown fired (bar', beat?.voice?.bar?.masterBar?.index,
-      '). Waiting to see whether noteMouseDown follows...')
+  // How the miss is detected: alphaTab fires `beatMouseDown` and then, in the
+  // same synchronous handler, `noteMouseDown` if the hit-test found a note head.
+  // So the flag set here is still true by the time the microtask runs only when
+  // no note was hit.
+  //
+  // Limit worth knowing: alphaTab only fires `beatMouseDown` when the click is
+  // inside a bar (`if (beat)` guards it), so clicking the page well away from
+  // any staff does not reach this and leaves the selection alone.
+  api.beatMouseDown.on(() => {
     missedNote = true
     queueMicrotask(() => {
-      if (!missedNote) {
-        log('  -> a note WAS hit, selection updated.')
-        return
-      }
+      if (!missedNote) return
       missedNote = false
-      log('  -> NO note hit: the click landed on the beat but outside every note head.')
-      message('info', 'No note there. Click directly on a note head to select it.')
+      clearSelection()
+      message(null, null)
     })
   })
 
@@ -277,7 +246,6 @@ function refreshSelectionRects() {
     }
   }
   selectedNoteRects.value = rects
-  log('selection marker rects:', JSON.stringify(rects))
 }
 
 export function useScoreEdit() {
@@ -322,10 +290,13 @@ export function useScoreEdit() {
   // cannot lock the panel against itself.
   const canEdit = computed(() => player.isScoreLoaded.value && !player.isPlaying.value)
 
+  function refused(reason) {
+    message('error', reason)
+    return { ok: false, changed: false, reason }
+  }
+
   function refusePlayback() {
     const reason = 'Pause playback to edit the score.'
-    log('edit BLOCKED: isPlaying =', player.isPlaying.value,
-      '| isScoreLoaded =', player.isScoreLoaded.value)
     message('error', reason)
     return { ok: false, changed: false, reason }
   }
@@ -345,6 +316,21 @@ export function useScoreEdit() {
     const result = renameTrack(scoreEditHost.trackAt(index ?? -1), name)
     if (result.changed) scoreEditHost.syncTrack(index)
     return propagate(result, { render: true })
+  }
+
+  // The midi program. The write itself already lives in usePlayer (it needs the
+  // automation rewrite from trackSound.js), so this only adds the playback gate
+  // and the panel's error reporting on top of it.
+  function setInstrument(program) {
+    if (!canEdit.value) return refusePlayback()
+    const index = editedTrack.value?.index
+    if (typeof index !== 'number') return refused('No track selected.')
+    if (editedTrack.value?.isPercussion) {
+      return refused('Percussion plays on the drum channel and has no program number.')
+    }
+    player.setTrackProgram(index, program)
+    message(null, null)
+    return { ok: true, changed: true, reason: null }
   }
 
   // The tempo marking is drawn on the score AND drives playback. `now` rather
@@ -408,9 +394,7 @@ export function useScoreEdit() {
       // by this point and needs no midi rebuild - which is exactly why the
       // rebuild is deferred to `onPlay`: doing it now would call stop() and cut
       // this off.
-      const sounded = scoreEditHost.previewNote(selected)
-      log('preview note:', sounded ? 'played' : 'NOT played (player not ready?)',
-        '| midi key =', selected.realValue)
+      scoreEditHost.previewNote(selected)
     }
     return propagate(result, {
       render: true,
@@ -428,12 +412,7 @@ export function useScoreEdit() {
   // the neck, a natural harmonic - is explained, because those are surprising.
   function nudgeSelectedString(delta) {
     if (!canEdit.value) return refusePlayback()
-    log('nudgeSelectedString(', delta, ') | a note is selected:', !!selected,
-      selected ? `(string ${selected.string}, fret ${selected.fret})` : '')
-    if (!selected) {
-      log('  -> ABORT: nothing selected. Click a note head first.')
-      return { ok: false, changed: false, reason: 'No note selected.' }
-    }
+    if (!selected) return { ok: false, changed: false, reason: 'No note selected.' }
 
     const bar = selectedNote.value?.barIndex ?? null
     const trackIndex = selectedNote.value?.trackIndex ?? null
@@ -442,7 +421,6 @@ export function useScoreEdit() {
 
     // The edge of the fretboard: silent.
     if (target < 1 || target > strings) {
-      log('  -> refused silently: no string', target, '(staff has', strings, ')')
       return { ok: false, changed: false, reason: `There is no string ${target}.` }
     }
 
@@ -468,15 +446,9 @@ export function useScoreEdit() {
   // still returned, so a caller that wants it can show it.
   function nudgeSelectedFret(delta) {
     if (!canEdit.value) return refusePlayback()
-    log('nudgeSelectedFret(', delta, ') | a note is selected:', !!selected,
-      selected ? `(string ${selected.string}, fret ${selected.fret})` : '')
-    if (!selected) {
-      log('  -> ABORT: nothing selected. Click a note head first.')
-      return { ok: false, changed: false, reason: 'No note selected.' }
-    }
+    if (!selected) return { ok: false, changed: false, reason: 'No note selected.' }
     const target = selected.fret + delta
     if (target < MIN_FRET || target > MAX_FRET) {
-      log('  -> refused silently: fret', target, 'is out of the', MIN_FRET, '-', MAX_FRET, 'range')
       return { ok: false, changed: false, reason: `Fret ${target} is out of range.` }
     }
     // Anything else that refuses - a natural harmonic, say - keeps its message:
@@ -548,6 +520,7 @@ export function useScoreEdit() {
 
     // edits
     rename,
+    setInstrument,
     setTempo,
     transposeByTuning,
     transposeByFrets,

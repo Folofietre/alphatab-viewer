@@ -1,0 +1,80 @@
+@use '@/styles/mixins' as *;
+
+// Score-level editing: the document, the tempo, and saving. Sits on the dark
+// chrome supplied by .sidebar, so it paints no surface of its own.
+//
+// Shares its visual language with TrackEditPanel through the edit-* mixins,
+// rather than by copying rules: two components, one look.
+.score-edit-panel {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+header {
+  @include edit-header;
+}
+
+// The unsaved marker. A word rather than a dot: a dot next to a heading is
+// ambiguous, and there is room for four characters.
+.dirty {
+  @include section-label;
+  padding: 0.06rem 0.3rem;
+  font-size: 0.58rem;
+  letter-spacing: 0.06em;
+  background: var(--warn-bg);
+  border: 1px solid var(--warn-border);
+  border-radius: $radius-control;
+  color: var(--warn-text-chrome);
+}
+
+.bulk {
+  display: flex;
+  align-items: center;
+  gap: $gap-xs;
+
+  button {
+    @include button-chrome;
+    padding: 0.16rem 0.42rem;
+    font-size: 0.68rem;
+  }
+}
+
+.message {
+  @include edit-message;
+}
+
+.legend {
+  @include edit-hint;
+  padding: $gap-sm;
+  font-size: 0.7rem;
+  border-top: 1px solid var(--chrome-divider);
+}
+
+.field {
+  @include edit-field;
+}
+
+hr {
+  @include edit-divider;
+}
+
+.row {
+  @include edit-row;
+}
+
+input[type='number'] {
+  @include edit-control;
+}
+
+.hint {
+  @include edit-hint;
+}
+
+// A read-out rather than a control: the document's own name.
+.inspector {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--chrome-text);
+  overflow-wrap: anywhere;
+}

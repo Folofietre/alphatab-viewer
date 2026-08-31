@@ -101,6 +101,163 @@
   }
 }
 
+// ---------------------------------------------------------------------------
+// Edit panels
+// ---------------------------------------------------------------------------
+//
+// The score-edit and track-edit panels are two components with one visual
+// language, so their shared pieces live here rather than being copied. They both
+// sit on the dark chrome supplied by .sidebar, so every colour is --chrome-*.
+
+// One labelled control group. Square and divider-separated, like the mixer rows,
+// so a panel reads as one delimited block rather than a stack of cards.
+@mixin edit-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  padding: 0.5rem $gap-sm;
+  min-width: 0;
+
+  > label {
+    @include section-label;
+    font-size: 0.6rem;
+    color: var(--chrome-text-muted);
+  }
+}
+
+// Controls sitting side by side: a value and the buttons that act on it.
+@mixin edit-row {
+  display: flex;
+  align-items: center;
+  gap: $gap-xs;
+  min-width: 0;
+  flex-wrap: wrap;
+
+  input[type='number'] {
+    width: 4.5rem;
+    flex: none;
+  }
+  button {
+    @include button-chrome;
+    padding: 0.2rem 0.45rem;
+    font-size: 0.7rem;
+  }
+}
+
+// Text and number entry, and the selects. Same geometry as the mixer's program
+// picker, so the whole sidebar has one control style.
+@mixin edit-control {
+  font: inherit;
+  font-size: 0.76rem;
+  width: 100%;
+  min-width: 0;
+  padding: 0.22rem 0.3rem;
+  color: var(--chrome-text);
+  background: var(--chrome-raised);
+  border: 1px solid var(--chrome-border);
+  border-radius: $radius-control;
+
+  &:hover:not(:disabled) {
+    border-color: var(--accent);
+  }
+  &:disabled {
+    cursor: not-allowed;
+    opacity: 0.45;
+  }
+}
+
+// A <select> on chrome. The option colours are a best effort: the dropdown list
+// is drawn by the platform, so macOS ignores them entirely.
+@mixin edit-select {
+  cursor: pointer;
+
+  option {
+    background: var(--chrome-raised);
+    color: var(--chrome-text);
+  }
+  // `background-color` alone is dropped by some Chromium builds; declaring the
+  // same colour as a gradient makes it a background-image, which is honoured.
+  option:checked {
+    background: var(--accent) linear-gradient(0deg, var(--accent), var(--accent));
+    color: var(--text-inverse);
+    font-weight: 700;
+  }
+  optgroup {
+    background: var(--chrome);
+    color: var(--chrome-text-muted);
+    font-style: normal;
+    font-weight: 700;
+  }
+}
+
+// Low-emphasis explanation under a control.
+@mixin edit-hint {
+  @include hint-text;
+  font-size: 0.66rem;
+  color: var(--chrome-text-muted);
+
+  strong {
+    color: var(--chrome-text);
+    font-weight: 700;
+  }
+}
+
+// The result of the last edit, or why editing is unavailable. Refusals carry
+// numbers and are the main way a panel explains itself, so this is a real block
+// rather than a tooltip.
+@mixin edit-message {
+  @include hint-text;
+  padding: 0.4rem $gap-sm;
+  font-size: 0.72rem;
+  border-bottom: 1px solid var(--chrome-divider);
+
+  &.error {
+    background: var(--warn-bg);
+    border-bottom-color: var(--warn-border);
+    // The chrome variant: --warn-text is a dark red meant for the light zone
+    // and would be unreadable on this surface.
+    color: var(--warn-text-chrome);
+  }
+  &.ok {
+    color: var(--accent-soft);
+  }
+  // A hint about how to proceed rather than a refusal, so it stays quiet.
+  &.info {
+    color: var(--chrome-text-muted);
+  }
+}
+
+// Sticky panel header, shared by the mixer and both edit panels so the three
+// tabs read as the same kind of thing.
+@mixin edit-header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: $gap-sm;
+  padding: 0.5rem $gap-sm;
+  background: var(--chrome-raised);
+  border-bottom: 1px solid var(--chrome-border);
+
+  h2 {
+    @include section-label;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    color: var(--chrome-text-muted);
+  }
+}
+
+// Separates control groups without the weight of a border on each one.
+@mixin edit-divider {
+  height: 0;
+  margin: 0;
+  border: none;
+  border-top: 1px solid var(--chrome-divider);
+}
+
 // An on/off control that is currently ON.
 @mixin control-active {
   background: var(--accent);

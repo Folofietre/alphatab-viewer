@@ -156,40 +156,11 @@ export function matchesModifiers(binding, event) {
   )
 }
 
-// TEMPORARY DIAGNOSTIC - remove once Alt + arrow is confirmed in a browser.
-function debugTarget(el) {
-  if (!el) return 'null'
-  const cls = el.className ? `.${String(el.className).split(' ')[0]}` : ''
-  return `${el.tagName ?? '?'}${el.type ? `[type=${el.type}]` : ''}${cls}`
-}
-
 export function useShortcuts() {
   const player = usePlayer()
   const edit = useScoreEdit()
 
   function onKeyDown(event) {
-    // TEMPORARY DIAGNOSTIC: log every arrow press and every Alt combination, so
-    // a key that never reaches the page is distinguishable from one that reaches
-    // it and gets filtered out.
-    const isInteresting = event.altKey || event.code === 'ArrowUp' || event.code === 'ArrowDown'
-    if (isInteresting) {
-      const binding = BINDINGS.find(
-        (b) => b.code === event.code && matchesModifiers(b, event),
-      )
-      console.log(
-        '[edit-debug] keydown',
-        `code=${event.code}`,
-        `key=${event.key}`,
-        `alt=${event.altKey} ctrl=${event.ctrlKey} meta=${event.metaKey} shift=${event.shiftKey}`,
-        `repeat=${event.repeat}`,
-        `defaultPrevented=${event.defaultPrevented}`,
-        `target=${debugTarget(event.target)}`,
-        `activeElement=${debugTarget(document.activeElement)}`,
-        `-> binding=${binding ? binding.label : 'NONE'}`,
-        binding ? `appliesTo=${binding.appliesTo(event.target)}` : '',
-      )
-    }
-
     // Respect a handler that already acted.
     if (event.defaultPrevented) return
 
@@ -213,7 +184,6 @@ export function useShortcuts() {
     // consumer of useScoreEdit already did it.
     edit.bindSelection()
     window.addEventListener('keydown', onKeyDown)
-    console.log('[edit-debug] keydown listener installed on window')
   })
   onBeforeUnmount(() => window.removeEventListener('keydown', onKeyDown))
 }

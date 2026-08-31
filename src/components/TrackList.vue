@@ -1,7 +1,7 @@
 <template>
   <section class="track-panel">
     <header>
-      <h2>Tracks <span class="count">{{ tracks.length }}</span></h2>
+      <h2>Mixer <span class="count">{{ tracks.length }}</span></h2>
       <div class="bulk">
         <button type="button" title="Render every track" @click="showAllTracks">All</button>
         <button type="button" title="Reset volume, mute and solo" @click="resetMixer">Reset mix</button>
@@ -11,7 +11,9 @@
     <p class="legend">
       Click a track to show it <strong>alone</strong>, or tick its box to
       <strong>add</strong> it to the view. Mute, solo and volume control what is
-      <strong>heard</strong>: every track is audible whether it is displayed or not.
+      <strong>heard</strong>: every track is audible whether it is displayed or
+      not, and none of it is saved with the score. Names, instruments and tunings
+      are, and they live in the <strong>Track</strong> tab.
     </p>
 
     <ul class="tracks">
@@ -42,21 +44,14 @@
           </button>
         </div>
 
+        <!-- The instrument is shown but not editable here: it is written into
+             the score, so it belongs with the other track edits rather than
+             among the listening controls. The picker is in the Track tab. -->
         <div class="row-sound">
-          <select
-            v-if="!track.isPercussion"
-            class="program"
-            :value="track.program"
-            title="MIDI instrument used to play this track"
-            @change="setTrackProgram(track.index, Number($event.target.value))"
-          >
-            <optgroup v-for="group in GM_GROUPS" :key="group.family" :label="group.family">
-              <option v-for="option in group.options" :key="option.program" :value="option.program">
-                {{ option.label }}
-              </option>
-            </optgroup>
-          </select>
-          <span v-else class="percussion" title="Percussion plays on the drum channel">
+          <span v-if="!track.isPercussion" class="program" :title="`Instrument: ${track.programLabel}. Change it in the Track tab.`">
+            {{ track.programLabel }}
+          </span>
+          <span v-else class="program" title="Percussion plays on the drum channel">
             🥁 Percussion kit
           </span>
         </div>
@@ -117,7 +112,6 @@
 <script setup>
 import { computed } from 'vue'
 import { usePlayer } from '@/composables/usePlayer'
-import { GM_GROUPS } from '@/utils/gmPrograms'
 import { formatBalance } from '@/utils/format'
 
 const {
@@ -125,7 +119,6 @@ const {
   setTrackRendered,
   showOnlyTrack,
   showAllTracks,
-  setTrackProgram,
   setTrackVolume,
   setTrackBalance,
   setTrackMute,

@@ -39,11 +39,11 @@
         :class="{ covered: isTracksOpen }"
         :aria-expanded="isTracksOpen"
         :inert="isTracksOpen ? true : undefined"
-        :title="`Show the ${panel === 'edit' ? 'edit' : 'track'} panel`"
+        :title="`Show the ${activePanelLabel.toLowerCase()} panel`"
         @click="isTracksOpen = true"
       >
         <span class="rail-icon" aria-hidden="true">&raquo;</span>
-        <span class="rail-label">{{ panel === 'edit' ? 'Edit' : 'Tracks' }}</span>
+        <span class="rail-label">{{ activePanelLabel }}</span>
       </button>
 
       <!-- `inert` rather than aria-hidden: the panel keeps focusable controls
@@ -57,11 +57,15 @@
         :class="{ closed: !isTracksOpen }"
         :inert="isTracksOpen ? undefined : true"
       >
-        <!-- Two panels, one at a time. Tabs rather than a stack: the sidebar is
-             290px wide and the track list is arbitrarily long, so an edit panel
-             below it would be unreachable on a nine-track score. The strip also
-             owns the collapse control, which is why TrackList no longer has one
-             of its own. -->
+        <!-- Three panels, one at a time, split by SCOPE rather than by feature:
+             Mixer is what you see and hear and is never saved; Track edits one
+             track; Score edits the document. Mixing a tempo field in among a
+             track's name and tuning was the confusion this replaces.
+
+             Tabs rather than a stack: the sidebar is 290px wide and the track
+             list is arbitrarily long, so a panel below it would be unreachable
+             on a nine-track score. The strip also owns the collapse control,
+             which is why TrackList no longer has one of its own. -->
         <div class="panel-tabs">
           <!-- Toggle buttons with aria-pressed rather than role="tab": a real
                tablist promises arrow-key navigation between tabs and an
@@ -90,9 +94,10 @@
 
         <!-- v-show, not v-if: switching tabs must not throw away the panels'
              local state (a half-typed name, a chosen tuning) or re-run their
-             setup, and neither panel is expensive enough to unmount. -->
-        <TrackList v-show="panel === 'tracks'" />
-        <EditPanel v-show="panel === 'edit'" />
+             setup, and none of them is expensive enough to unmount. -->
+        <TrackList v-show="panel === 'mixer'" />
+        <TrackEditPanel v-show="panel === 'track'" />
+        <ScoreEditPanel v-show="panel === 'score'" />
       </aside>
 
       <div
@@ -112,13 +117,14 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { usePlayer } from '@/composables/usePlayer'
 import { useShortcuts } from '@/composables/useShortcuts'
 import ScoreViewer from '@/components/ScoreViewer.vue'
 import ScoreHeader from '@/components/ScoreHeader.vue'
 import TrackList from '@/components/TrackList.vue'
-import EditPanel from '@/components/EditPanel.vue'
+import TrackEditPanel from '@/components/TrackEditPanel.vue'
+import ScoreEditPanel from '@/components/ScoreEditPanel.vue'
 import TransportBar from '@/components/TransportBar.vue'
 import FileDropzone from '@/components/FileDropzone.vue'
 import BarsPerRow from '@/components/BarsPerRow.vue'
@@ -151,12 +157,23 @@ function closeScore() {
 // rail both drive it, and App owns the layout.
 const isTracksOpen = ref(true)
 
-// Which of the two sidebar panels is showing.
+// Which sidebar panel is showing.
+//
+// Named for the SCOPE each one acts on. "Mixer" rather than "Tracks", because
+// "Tracks" next to "Track" reads as the same thing, and what that panel does is
+// choose what is displayed and mix what is heard - none of which is saved.
 const PANELS = [
-  { id: 'tracks', label: 'Tracks' },
-  { id: 'edit', label: 'Edit' },
+  { id: 'mixer', label: 'Mixer' },
+  { id: 'track', label: 'Track' },
+  { id: 'score', label: 'Score' },
 ]
-const panel = ref('tracks')
+const panel = ref('mixer')
+
+// The rail names the panel it will reveal, so collapsing does not lose the
+// user's place.
+const activePanelLabel = computed(
+  () => PANELS.find((p) => p.id === panel.value)?.label ?? PANELS[0].label,
+)
 
 // Page-wide keys. Space is play/pause everywhere, including while a button
 // still has focus from the last click.

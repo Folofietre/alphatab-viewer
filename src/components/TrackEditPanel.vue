@@ -1,25 +1,9 @@
 <template>
-  <section class="edit-panel">
+  <section class="track-edit-panel">
     <header>
-      <h2>Edit <span v-if="isDirty" class="dirty" title="This score has unsaved changes">modified</span></h2>
-      <div class="bulk">
-        <button
-          type="button"
-          :disabled="isExporting"
-          :title="isDirty ? 'Download this score as a .gp file' : 'Download this score as a .gp file (nothing changed yet)'"
-          @click="download"
-        >{{ isExporting ? 'Saving...' : 'Save .gp' }}</button>
-        <button
-          type="button"
-          :disabled="!canRevert"
-          title="Throw away every change and reload the file as it was opened"
-          @click="onRevert"
-        >Revert</button>
-      </div>
+      <h2>Track</h2>
     </header>
 
-    <!-- Editing stands down during playback. Saying so, and disabling the
-         controls, beats letting a click do nothing. -->
     <p v-if="!canEdit" class="message info" role="status">
       Paused only: press stop or pause to edit this score.
     </p>
@@ -30,14 +14,15 @@
     <p v-if="!editedTrack" class="legend">No track to edit.</p>
 
     <template v-else>
-      <!-- Which track the edits apply to. Deliberately separate from which
-           tracks are DISPLAYED: clicking a note in the score also sets this. -->
+      <!-- Which track everything below applies to. Deliberately separate from
+           which tracks are DISPLAYED: clicking a note in the score sets this
+           too, so the panel follows where you are working. -->
       <div class="field">
-        <label :for="ids.track">Track being edited</label>
+        <label :for="ids.track">Editing</label>
         <select
           :id="ids.track"
-          :disabled="!canEdit"
           :value="editedTrack.index"
+          :disabled="!canEdit"
           @change="selectTrack(Number($event.target.value))"
         >
           <option v-for="track in tracks" :key="track.index" :value="track.index">
@@ -45,13 +30,16 @@
           </option>
         </select>
         <p class="hint">
-          {{ editedTrack.programLabel }}<template v-if="editedTrack.isStringed">,
-          {{ editedTrack.stringCount }} strings, frets
-          {{ editedTrack.frets.min }}-{{ editedTrack.frets.max }}</template>
+          <template v-if="editedTrack.isStringed">
+            {{ editedTrack.stringCount }} strings, frets
+            {{ editedTrack.frets.min }}-{{ editedTrack.frets.max }},
+            {{ editedTrack.frets.count }} notes
+          </template>
+          <template v-else>No tablature: frets and tunings do not apply.</template>
         </p>
       </div>
 
-      <!-- Rename. Commits on change and on Enter, never per keystroke: each
+      <!-- Name. Commits on change and on Enter, never per keystroke: each
            commit re-renders the notation to repaint the stave label. -->
       <div class="field">
         <label :for="ids.name">Name</label>
@@ -68,31 +56,29 @@
 
       <hr />
 
-      <!-- Tempo. The count matters: above one, this field scales a whole tempo
-           MAP written by the author rather than a single number. -->
+      <!-- Instrument. The 128 General MIDI programs, grouped by family.
+           Percussion plays on the drum channel and is not addressed by a
+           program number, so it gets a label instead. -->
       <div class="field">
-        <label :for="ids.tempo">Tempo (BPM)</label>
-        <div class="row">
-          <input
-            :id="ids.tempo"
-            v-model="tempoDraft"
-            type="number"
-            :min="MIN_TEMPO"
-            :max="MAX_TEMPO"
-            step="1"
-            :disabled="!canEdit"
-            @change="commitTempo"
-            @keydown.enter.prevent="commitTempo"
-          />
-        </div>
+        <label :for="ids.program">Instrument</label>
+        <select
+          v-if="!editedTrack.isPercussion"
+          :id="ids.program"
+          class="program"
+          :value="editedTrack.program"
+          :disabled="!canEdit"
+          @change="setInstrument(Number($event.target.value))"
+        >
+          <optgroup v-for="group in GM_GROUPS" :key="group.family" :label="group.family">
+            <option v-for="option in group.options" :key="option.program" :value="option.program">
+              {{ option.label }}
+            </option>
+          </optgroup>
+        </select>
+        <p v-else class="inspector">Percussion kit</p>
         <p class="hint">
-          <template v-if="tempo.automationCount > 1">
-            This score has {{ tempo.automationCount }} tempo changes. Setting this
-            scales all of them, keeping the author's tempo map.
-          </template>
-          <template v-else>Written into the score and saved with it.</template>
-          Use the transport's speed control to just listen slower: that one is not
-          saved.
+          Saved with the score. Volume, pan, mute and solo are listening
+          settings and live in the <strong>Mixer</strong> tab.
         </p>
       </div>
 
@@ -143,7 +129,11 @@
            of the two things to preserve. -->
       <div class="field">
         <label :for="ids.tuning">Tuning</label>
-        <select :id="ids.tuning" v-model="tuningId" :disabled="!canEdit || tuningOptions.length === 0">
+        <select
+          :id="ids.tuning"
+          v-model="tuningId"
+          :disabled="!canEdit || tuningOptions.length === 0"
+        >
           <option v-for="option in tuningOptions" :key="option.id" :value="option.id">
             {{ option.label }}
           </option>
@@ -172,13 +162,12 @@
 
       <hr />
 
-      <!-- Note inspector. Text only: drawing a highlight on the score means
-           boundsLookup, a positioned overlay and invalidating it on every
-           re-render, which is out of scope for this tier. -->
+      <!-- The selected note. Ringed on the score itself, so this is the numbers
+           behind that marker plus the two ways to move it. -->
       <div class="field">
         <label>Selected note</label>
         <p v-if="!selectedNote" class="hint">
-          Click a note in the score to select it.
+          Click a note head in the score to select it.
         </p>
         <template v-else>
           <p class="inspector">
@@ -236,7 +225,7 @@
 import { computed, ref, watch, useId } from 'vue'
 import { usePlayer } from '@/composables/usePlayer'
 import { useScoreEdit } from '@/composables/useScoreEdit'
-import { MAX_TEMPO, MIN_TEMPO } from '@/utils/scoreEdits'
+import { GM_GROUPS } from '@/utils/gmPrograms'
 
 const { tracks } = usePlayer()
 const {
@@ -244,43 +233,34 @@ const {
   selectedNote,
   selectTrack,
   tuningOptions,
-  tempo,
   canEdit,
   editMessage,
-  isExporting,
-  isDirty,
   rename,
-  setTempo,
+  setInstrument,
   transposeByTuning,
   transposeByFrets,
   retune,
   nudgeSelectedFret,
   nudgeSelectedString,
-  download,
-  revert,
-  canRevert,
   MIN_FRET,
   MAX_FRET,
   RETUNE_KEEP_PITCH,
   RETUNE_REASSIGN,
 } = useScoreEdit()
 
-// Stable ids for the label/control pairs, so every <label for> points at its own
-// control even though this panel is mounted once per app.
+// Stable ids for the label/control pairs.
 const base = useId()
 const ids = {
   track: `${base}-track`,
   name: `${base}-name`,
-  tempo: `${base}-tempo`,
+  program: `${base}-program`,
   semitones: `${base}-semitones`,
   tuning: `${base}-tuning`,
 }
 
 // Local drafts. The model is the source of truth, so these mirror it and are
-// re-seeded whenever it changes underneath - after a revert, a new file, or an
-// edit made from somewhere else.
+// re-seeded whenever it changes underneath.
 const nameDraft = ref('')
-const tempoDraft = ref('')
 const semitones = ref(1)
 const tuningId = ref('')
 
@@ -288,14 +268,6 @@ watch(
   () => editedTrack.value?.name,
   (name) => {
     nameDraft.value = name ?? ''
-  },
-  { immediate: true },
-)
-
-watch(
-  () => tempo.value.tempo,
-  (value) => {
-    tempoDraft.value = value == null ? '' : String(value)
   },
   { immediate: true },
 )
@@ -321,23 +293,10 @@ function commitName() {
   if (!result.ok) nameDraft.value = editedTrack.value?.name ?? ''
 }
 
-function commitTempo() {
-  const result = setTempo(tempoDraft.value)
-  if (!result.ok) tempoDraft.value = tempo.value.tempo == null ? '' : String(tempo.value.tempo)
-}
-
 function applyTuning(mode) {
   if (!pendingTuning.value) return
   retune(pendingTuning.value.tunings, mode)
 }
-
-// The one destructive action in the panel, and there is no undo, so it asks.
-function onRevert() {
-  if (isDirty.value && !window.confirm('Discard every change and reload the file as it was opened?')) {
-    return
-  }
-  revert()
-}
 </script>
 
-<style scoped lang="scss" src="@/styles/components/EditPanel.scss"></style>
+<style scoped lang="scss" src="@/styles/components/TrackEditPanel.scss"></style>

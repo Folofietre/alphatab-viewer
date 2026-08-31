@@ -1,0 +1,88 @@
+@use '@/styles/mixins' as *;
+
+// Track-level editing: name, instrument, transposition, tuning, and the
+// selected note. Sits on the dark chrome supplied by .sidebar.
+//
+// Shares its visual language with ScoreEditPanel through the edit-* mixins,
+// rather than by copying rules: two components, one look.
+.track-edit-panel {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+header {
+  @include edit-header;
+}
+
+.message {
+  @include edit-message;
+}
+
+.legend {
+  @include edit-hint;
+  padding: $gap-sm;
+  font-size: 0.72rem;
+}
+
+.field {
+  @include edit-field;
+}
+
+hr {
+  @include edit-divider;
+}
+
+.row {
+  @include edit-row;
+}
+
+input[type='text'],
+input[type='number'],
+select {
+  @include edit-control;
+}
+
+select {
+  @include edit-select;
+}
+
+// The instrument picker holds 128 options in 16 groups, so highlighting the
+// family that carries the selection helps while scrolling. Ignored where :has()
+// is unsupported.
+.program optgroup:has(option:checked) {
+  color: var(--accent-soft);
+}
+
+.hint {
+  @include edit-hint;
+}
+
+// A read-out rather than a control: the selected note, or a percussion track's
+// fixed kit. Tabular so the numbers do not jitter as the selection moves.
+.inspector {
+  @include tabular;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+  font-size: 0.7rem;
+  color: var(--chrome-text);
+}
+
+.badge {
+  padding: 0.06rem 0.3rem;
+  font-weight: 700;
+  background: var(--accent);
+  border-radius: $radius-control;
+  color: var(--text-inverse);
+}
+
+kbd {
+  @include tabular;
+  font-size: 0.62rem;
+  padding: 0.12rem 0.32rem;
+  border: 1px solid var(--chrome-divider);
+  border-radius: $radius-control;
+  color: var(--chrome-text-muted);
+}

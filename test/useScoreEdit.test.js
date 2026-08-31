@@ -69,6 +69,7 @@ const host = {
 const player = {
   isScoreLoaded: ref(true),
   isPlaying: ref(false),
+  setTrackProgram: vi.fn(),
   tracks: ref([]),
   scoreInfo: shallowRef(null),
   fileName: ref('fixture.gp'),
@@ -94,6 +95,7 @@ const { stringedNotes, RETUNE_KEEP_PITCH, RETUNE_REASSIGN } = await import('@/ut
 
 const LEAD = 0
 const RHYTHM = 1
+const BASS = 2
 const HARM = 3
 const DRUMS = 4
 
@@ -158,10 +160,13 @@ beforeEach(async () => {
     index: track.index,
     name: track.name,
     isStringed: track.staves.some((s) => s.isStringed),
+    isPercussion: track.isPercussion,
+    program: track.playbackInfo.program,
   }))
   player.scoreInfo.value = { tempo: score.tempo }
   player.isDirty.value = false
   player.revertToOriginal.mockClear()
+  player.setTrackProgram.mockClear()
   download.mockClear()
 
   edit = useScoreEdit()
@@ -267,20 +272,36 @@ describe('selection', () => {
     expect(edit.selectedTrackIndex.value).toBe(0)
   })
 
-  it('a click that misses every note head says how to aim', async () => {
-    // alphaTab's note hit-test is a strict rectangle over the note head, so
-    // this is a real and easy failure - and a silent one without this message.
-    clickAt(null)
-    await Promise.resolve()
-    expect(edit.selectedNote.value).toBeNull()
-    expect(edit.editMessage.value).toMatchObject({ kind: 'info' })
-    expect(edit.editMessage.value.text).toMatch(/note head/)
-  })
-
-  it('a click that hits a note head does NOT produce the miss message', async () => {
+  it('a click that misses every note head DESELECTS, silently', async () => {
+    // Clicking a bar is a normal seek, not a mistake: the ring vanishing is the
+    // feedback, and a message on every seek would be noise.
     clickAt([...stringedNotes(score.tracks[LEAD].staves[0])][0])
     await Promise.resolve()
     expect(edit.selectedNote.value).not.toBeNull()
+    expect(edit.selectedNoteRects.value.length).toBeGreaterThan(0)
+
+    clickAt(null)
+    await Promise.resolve()
+    expect(edit.selectedNote.value).toBeNull()
+    expect(edit.selectedNoteRects.value).toEqual([])
+    expect(edit.editMessage.value).toBeNull()
+  })
+
+  it('a click that hits a note head keeps the selection it just made', async () => {
+    const note = [...stringedNotes(score.tracks[LEAD].staves[0])][0]
+    clickAt(note)
+    await Promise.resolve()
+    expect(edit.selectedNote.value).toMatchObject({ string: note.string, fret: note.fret })
+    expect(edit.editMessage.value).toBeNull()
+  })
+
+  it('a miss clears a refusal message too, rather than leaving a stale one', async () => {
+    edit.selectTrack(RHYTHM)
+    edit.transposeByFrets(1) // refused: frets already at 0 and 24
+    expect(edit.editMessage.value?.kind).toBe('error')
+
+    clickAt(null)
+    await Promise.resolve()
     expect(edit.editMessage.value).toBeNull()
   })
 
@@ -390,6 +411,27 @@ describe('the selected note fret', () => {
     expect(edit.editMessage.value?.text).toMatch(/Click a note/)
     expect(edit.nudgeSelectedFret(1).ok).toBe(false)
     expect(host.renders).toEqual([])
+  })
+})
+
+describe('setInstrument', () => {
+  it('delegates the write to usePlayer, which owns the automation rewrite', () => {
+    expect(edit.setInstrument(42).ok).toBe(true)
+    expect(player.setTrackProgram).toHaveBeenCalledWith(LEAD, 42)
+  })
+
+  it('acts on the track being EDITED, not on the first one', () => {
+    edit.selectTrack(BASS)
+    expect(edit.setInstrument(33).ok).toBe(true)
+    expect(player.setTrackProgram).toHaveBeenCalledWith(BASS, 33)
+  })
+
+  it('refuses a percussion track, which has no program number', () => {
+    edit.selectTrack(DRUMS)
+    const result = edit.setInstrument(42)
+    expect(result.ok).toBe(false)
+    expect(result.reason).toMatch(/drum channel/)
+    expect(player.setTrackProgram).not.toHaveBeenCalled()
   })
 })
 
@@ -524,6 +566,7 @@ describe('the selected note string (Alt + arrow)', () => {
 describe('editing only while paused', () => {
   const EDITS = [
     ['rename', () => edit.rename('Nope')],
+    ['setInstrument', () => edit.setInstrument(42)],
     ['setTempo', () => edit.setTempo(200)],
     ['transposeByTuning', () => edit.transposeByTuning(1)],
     ['transposeByFrets', () => edit.transposeByFrets(1)],
@@ -560,6 +603,7 @@ describe('editing only while paused', () => {
     expect(host.midiStale).toBe(false)
     expect(host.previews).toEqual([])
     expect(host.dirty).toBe(false)
+    expect(player.setTrackProgram).not.toHaveBeenCalled()
     expect({ name: score.tracks[LEAD].name, tempo: score.tempo, fret: note.fret }).toEqual(before)
   })
 

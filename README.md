@@ -56,8 +56,9 @@ than re-rendering: it is the primary click target now, and re-laying out a score
 is expensive.
 
 **Sound per track** - a `<select>` of the 128 General MIDI programs, grouped by
-family. Percussion tracks show a static label instead: percussion plays on MIDI
-channel 10 and is not addressed by a program number.
+family, in the **Track** tab. Percussion tracks show a static label instead:
+percussion plays on MIDI channel 10 and is not addressed by a program number.
+The Mixer tab shows the current instrument as a read-out.
 
 **Mixer per track** - solo, mute, volume (0-200%) and panning (L8 to R8), on two
 aligned rows. Independent of what is displayed: every track is audible whether it
@@ -68,34 +69,59 @@ Solo, mute and volume use alphaTab's live setters (`changeTrackSolo`,
 live setter, so it goes through the data model and a midi rebuild; the slider
 previews while dragging and commits once on release. See the gotcha below.
 
-**Collapsible sidebar, two tabs** - `Tracks` and `Edit`. Tabs rather than a
-stack: the sidebar is 290px wide and the track list is arbitrarily long, so an
-edit panel below it would be unreachable on a nine-track score. The tab strip
-also owns the collapse control, since it acts on the container both panels sit
-in. The two tabs are toggle buttons with `aria-pressed`, not `role="tab"`: a real
-tablist promises arrow-key navigation and an `aria-controls` / `role="tabpanel"`
-pairing, and a half-implemented one is worse for a screen reader than an honest
-pair of toggles. The panel slides out of the way and collapses to a 30px rail carrying the
-reopen control, so it never disappears without a way back. The slide animates
-the panel's `transform` only; see the note below on why the layout itself must
-not be animated.
+**Collapsible sidebar, three tabs** - `Mixer`, `Track`, `Score`, named for the
+scope each one acts on. `Mixer` rather than `Tracks`, because "Tracks" next to
+"Track" reads as the same thing.
 
-The two panels are toggled with `v-show`, not `v-if`: switching tabs must not
-throw away a half-typed name or a chosen tuning, and neither panel is expensive
-enough to unmount.
+Tabs rather than a stack: the sidebar is 290px wide and the track list is
+arbitrarily long, so a panel below it would be unreachable on a nine-track score.
+The tab strip also owns the collapse control, since it acts on the container all
+three panels sit in. The tabs are toggle buttons with `aria-pressed`, not
+`role="tab"`: a real tablist promises arrow-key navigation and an `aria-controls`
+/ `role="tabpanel"` pairing, and a half-implemented one is worse for a screen
+reader than an honest set of toggles. The panel slides out of the way and
+collapses to a 30px rail carrying the reopen control, labelled with the panel it
+will reveal, so it never disappears without a way back. The slide animates the
+panel's `transform` only; see the note below on why the layout itself must not be
+animated.
+
+The panels are toggled with `v-show`, not `v-if`: switching tabs must not throw
+away a half-typed name or a chosen tuning, and none of them is expensive enough
+to unmount.
+
+`ScoreEditPanel` and `TrackEditPanel` are two components with one visual
+language, so their shared pieces are `edit-*` **mixins** in `_mixins.scss` rather
+than copied rules. Mixins, not a shared rule block: that partial must never emit
+CSS, since every SFC style block is its own Sass compilation unit and a rule
+placed there would be duplicated into all of them.
 
 **Transport** - play/pause, stop, scrub bar, playback speed (0.25x-2x), master
 volume, loop, metronome, all in the top action bar. Space is play/pause from
 anywhere on the page. Clicking a beat in the score seeks to it
 (`enableUserInteraction`).
 
-**Editing** - the sidebar's second tab. Seven operations, all on the track
-selected in the panel (clicking a note in the score selects its track too):
+**Editing** - split across two sidebar tabs, by the SCOPE each one acts on:
+
+- **Track** edits one track: its name, instrument, tuning, transposition, and the
+  selected note.
+- **Score** edits the document: the tempo, plus saving and reverting.
+
+That split is the point. A tempo field sitting between a track's name and its
+tuning invited the reader to think tempo was a track property.
+
+The third tab, **Mixer**, is deliberately NOT editing: it chooses what is
+displayed and mixes what is heard, and **none** of it is written into the score.
+The one exception used to live there and moved out - the instrument picker, since
+a program number IS saved. The mixer still shows each track's instrument as a
+read-out, so the overview survives.
+
+Seven operations, all on the track selected in the Track tab (clicking a note in
+the score selects its track too):
 
 | Operation | What it writes |
 | --- | --- |
 | Rename a track | `track.name` and `track.shortName` |
-| Instrument | `playbackInfo.program` + the `Instrument` automations (in the Tracks tab) |
+| Instrument | `playbackInfo.program` + the `Instrument` automations |
 | Tempo | every `masterBar.tempoAutomations[].value`, proportionally |
 | Transpose, keep the fingering (`Detune`) | `staff.stringTuning` |
 | Transpose, keep the tuning (`Move frets`) | `note.fret` on every note |
@@ -123,7 +149,8 @@ explained in the panel.
 
 The selected note is **ringed on the score**, once per staff it is drawn on (the
 note head on the standard staff and the fret number on the tablature), so there
-is never a doubt about whether a click landed. See the note on how, below.
+is never a doubt about whether a click landed. Clicking a bar rather than a note
+clears it. See the note on how, below.
 
 Changing the pitch also **sounds the note**, so a semitone nudge can be checked
 by ear. The string move stays silent, and that asymmetry is the point: it keeps
@@ -154,11 +181,15 @@ bars, undo, changing the number of strings, and any validation of note durations
 
 ### What is NOT saved with the score
 
-The transport's **playback speed** and the **master volume** are listening
-preferences and are never written to the model. The **tempo** field in the edit
-panel is the opposite: it changes the score and goes out with the file. Mixer
-**volume**, **mute** and **solo** are session state, but **panning** is
-model-side and does get saved - see the mixer gotcha below.
+This is what the tab split encodes. The transport's **playback speed** and the
+**master volume** are listening preferences and are never written to the model,
+and neither are the Mixer tab's **volume**, **mute** and **solo**. Everything in
+the **Track** and **Score** tabs is written into the score and goes out with the
+file.
+
+One control sits on the wrong side of that line and stays there: **panning** is
+in the Mixer tab but IS model-side and does get saved, because alphaTab has no
+live setter for it - see the mixer gotcha below.
 
 ---
 
@@ -167,7 +198,7 @@ model-side and does get saved - see the mixer gotcha below.
 ```
 src/
   main.js                    app entry, imports styles/main.scss
-  App.vue                    layout: sidebar (Tracks | Edit tabs) + stage
+  App.vue                    layout: sidebar (Mixer | Track | Score tabs) + stage
   composables/
     usePlayer.js             the single alphaTab instance + all app state
     useScoreEdit.js          selection, isDirty, the render/midi propagation
@@ -175,8 +206,9 @@ src/
   components/
     ScoreViewer.vue          owns the alphaTab host + scroll wrapper, calls init()
     ScoreHeader.vue          document strip: title / artist / tempo / bars + close
-    TrackList.vue            display checkboxes, GM program select, mixer
-    EditPanel.vue            name, tempo, transpose, tuning, note inspector, save
+    TrackList.vue            "Mixer": display checkboxes, solo/mute/volume/pan
+    TrackEditPanel.vue       "Track": name, instrument, transpose, tuning, note
+    ScoreEditPanel.vue       "Score": tempo, save, revert
     TransportBar.vue         play, stop, scrub, speed, volume, loop, click (in the action bar)
     BarsPerRow.vue           force a fixed number of bars per system
     FileDropzone.vue         window-wide drag & drop + file picker
@@ -331,9 +363,12 @@ Two consequences of how the hit-test works:
 
 - It is a **strict rectangle** over `note.noteHeadBounds`, with no tolerance
   (11x9 to 22x14 CSS px on a default render). Clicking a hair off a fret digit
-  selects nothing, so the panel says "click directly on a note head" rather than
-  staying silent - detected by watching whether `noteMouseDown` follows
-  `beatMouseDown` in the same synchronous handler.
+  selects nothing, so a click that lands on a bar but on no note head
+  **deselects**, silently: clicking a bar is a normal seek rather than a mistake,
+  and the ring vanishing is the feedback. The miss is detected by watching
+  whether `noteMouseDown` follows `beatMouseDown` in the same synchronous
+  handler. alphaTab only fires `beatMouseDown` when the click is inside a bar, so
+  clicking the page well away from any staff leaves the selection alone.
 - alphaTab calls `preventDefault()` on its mousedown, which **suppresses the
   focus change**. Clicking a note does not move focus out of whatever field the
   user last typed in, which is why the arrow bindings stand down only for

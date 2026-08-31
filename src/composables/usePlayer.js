@@ -79,9 +79,9 @@ if (Number.isFinite(storedVolume)) {
 // resetting volume, mute, solo or what is displayed - those are app state, not
 // file state.
 //
-// The editing fields (tuning, fret range, harmonic count) are what let EditPanel
-// stay a pure reader of flat reactive data, per the rule that no component ever
-// touches the alphaTab model. They cost one walk of the track's notes, which is
+// The editing fields (tuning, fret range, harmonic count) are what let
+// TrackEditPanel stay a pure reader of flat reactive data, per the rule that no
+// component ever touches the alphaTab model. They cost one walk of the track's notes, which is
 // sub-millisecond even on a 3700-note score.
 function trackModelFields(track) {
   const program = track.playbackInfo?.program ?? 0
