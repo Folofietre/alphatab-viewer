@@ -1,0 +1,30 @@
+# MkDocs configuration.
+#
+# `docs_dir` points at mkdoc/ rather than the conventional docs/, because that is
+# where this project keeps its documentation. Nothing else here is unusual.
+#
+#   pip install mkdocs
+#   mkdocs serve
+#
+# The default theme is used deliberately: no extra Python dependency is needed to
+# read the docs, and nothing in them relies on a theme feature. Add
+# mkdocs-material if you want it.
+site_name: AlphaTab Viewer
+site_description: A client-side Guitar Pro score viewer, player and light editor
+docs_dir: mkdoc
+use_directory_urls: false
+
+nav:
+  - Overview: index.md
+  - Features: features.md
+  - Architecture: architecture.md
+  - Editing internals: editing.md
+  - Keyboard shortcuts: shortcuts.md
+  - alphaTab gotchas: alphatab-gotchas.md
+  - Tests: tests.md
+
+markdown_extensions:
+  - tables
+  - fenced_code
+  - toc:
+      permalink: true
