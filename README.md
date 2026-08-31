@@ -1,17 +1,13 @@
 # AlphaTab Viewer
 
 A minimal, fully client-side score viewer, player and light editor built on
-[alphaTab](https://alphatab.net/). Drop a Guitar Pro or MusicXML file, choose
-which tracks are displayed, change the MIDI instrument each track is played
-with, and make a handful of targeted edits - rename, retune, transpose, tempo,
-one note's fret - then save the result as a `.gp` file.
+[alphaTab](https://alphatab.net/). 
 
-No backend, no account, no game layer. Nothing is uploaded and nothing is
-written to your files: the edited score is handed back as a download. The only
-thing persisted is the master volume (`localStorage`).
+Drop a Guitar Pro or MusicXML file, choose which tracks are displayed, 
+change the MIDI instrument each track is played with, 
+and make a handful of targeted edits - rename, retune, transpose, tempo, one note's fret - then save the result as a `.gp` file.
 
-Extracted from the `alphatabrpg` project: the design system (`src/styles/`), the
-Bravura font and the SONiVOX SoundFont come from there; the player logic is new.
+Deployed at [github page](https://folofietre.github.io/alphatab-viewer/)
 
 ---
 
