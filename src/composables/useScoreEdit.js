@@ -60,6 +60,22 @@ let selected = null
 // Nothing is ever unsubscribed: a destroyed api takes its emitters with it.
 let boundApi = null
 
+// Double-click detection, done from alphaTab's own `beatMouseDown` rather than
+// from a DOM `dblclick`.
+//
+// Why not the DOM event: it would need the coordinates hit-tested against
+// `boundsLookup` all over again, or a listener on alphaTab's host reaching for
+// the beat some other way. `beatMouseDown` has already done that work and hands
+// over the Beat.
+//
+// What is given up is the OS double-click interval, replaced by a fixed one. The
+// SAME beat is required, not just two clicks in a row, so two quick clicks on
+// different beats stay two clicks - which is what someone moving the playhead
+// twice means.
+const DOUBLE_CLICK_MS = 400
+let lastBeatDown = null
+let lastBeatDownAt = 0
+
 // Set by `beatMouseDown` and cleared by `noteMouseDown`. See the handlers below.
 let missedNote = false
 
@@ -248,64 +264,58 @@ function bind() {
   // single-track, like the transposition and the retuning.
   api.playbackRangeHighlightChanged.on((args) => {
     const { startBeat, endBeat } = args ?? {}
-    if (!startBeat || !endBeat) {
-      clearRange()
-      return
-    }
-    const track = startBeat.voice?.bar?.staff?.track ?? null
-    if (!track) {
-      clearRange()
-      return
-    }
-
-    const startTick = startBeat.absolutePlaybackStart
-    const endTick = endBeat.absolutePlaybackStart + endBeat.playbackDuration
-    rangeNotes = notesInTickRange(track, startTick, endTick)
-
-    if (rangeNotes.length === 0) {
-      clearRange()
-      return
-    }
-
-    // A range and a single note are two different things to act on, so having
-    // both would make Alt+arrow ambiguous. The range wins, since it is the more
-    // deliberate gesture.
-    clearSelection()
-    selectedTrackIndex.value = track.index
-    selectedRange.value = {
-      trackIndex: track.index,
-      trackName: track.name?.trim() || `Track ${track.index + 1}`,
-      noteCount: rangeNotes.length,
-      startBar: startBeat.voice.bar.masterBar.index,
-      endBar: endBeat.voice.bar.masterBar.index,
-    }
-    // Ring every note the batch will touch, with the same marker the single
-    // selection uses.
-    refreshSelectionRects()
-    message(null, null)
+    setRangeFromBeats(startBeat, endBeat)
   })
 
-  // A click that landed on a beat but not on a note head DESELECTS.
+
+
+  // ONE handler for beatMouseDown, doing two jobs in a deliberate order.
   //
-  // Clicking a bar is a normal seek, not a mistake, so this is silent: the ring
-  // vanishing is the feedback, and a message on every seek would be noise.
+  // Two separate handlers would have worked by accident: the deselection below
+  // is armed synchronously and disarmed by `clearSelection()` inside the bar
+  // selection, so it depended on which handler alphaTab happened to call first.
+  // Written out here, the order is the code rather than a coincidence.
+  //
+  // Job 1, DOUBLE CLICK: two presses on the same beat inside DOUBLE_CLICK_MS
+  // select the whole measure. The state resets on every non-matching press, so a
+  // slow second click starts over rather than pairing with something older.
+  //
+  // Job 2, DESELECTION: a click that landed on a beat but not on a note head
+  // drops WHATEVER was selected, note or range. Clicking a bar is a normal seek,
+  // not a mistake, so this is silent - the ring vanishing is the feedback, and a
+  // message on every seek would be noise.
+  //
+  // Both are cleared, not just the note: leaving a measure selected after a
+  // click elsewhere would mean Alt+arrow still acted on it.
   //
   // How the miss is detected: alphaTab fires `beatMouseDown` and then, in the
-  // same synchronous handler, `noteMouseDown` if the hit-test found a note head.
+  // SAME synchronous handler, `noteMouseDown` if the hit-test found a note head.
   // So the flag set here is still true by the time the microtask runs only when
-  // no note was hit.
+  // no note was hit. A bar selection disarms it explicitly, because it has just
+  // put a range where the microtask would wipe the rings.
   //
   // Limit worth knowing: alphaTab only fires `beatMouseDown` when the click is
   // inside a bar (`if (beat)` guards it), so clicking the page well away from
   // any staff does not reach this and leaves the selection alone.
-  api.beatMouseDown.on(() => {
+  api.beatMouseDown.on((beat) => {
+    const now = Date.now()
+    const isDouble = beat && beat === lastBeatDown && now - lastBeatDownAt <= DOUBLE_CLICK_MS
+    lastBeatDown = isDouble ? null : beat
+    lastBeatDownAt = now
+
     missedNote = true
     queueMicrotask(() => {
       if (!missedNote) return
       missedNote = false
       clearSelection()
+      clearRange()
       message(null, null)
     })
+
+    if (isDouble && selectBar(beat)) {
+      // The bar is now the selection, so the deselection above must not run.
+      missedNote = false
+    }
   })
 
   // Closing a score has no alphaTab event, so usePlayer calls this directly.
@@ -339,9 +349,83 @@ function clearSelection() {
   missedNote = false
 }
 
+// Turn a pair of beats into the current range: the notes in their tick window on
+// the track the FIRST beat belongs to.
+//
+// Shared by the drag subscription and the double click, so the two cannot end up
+// meaning different things by "a selected passage".
+function setRangeFromBeats(startBeat, endBeat) {
+  if (!startBeat || !endBeat) {
+    clearRange()
+    return false
+  }
+  const track = startBeat.voice?.bar?.staff?.track ?? null
+  if (!track) {
+    clearRange()
+    return false
+  }
+
+  const startTick = startBeat.absolutePlaybackStart
+  const endTick = endBeat.absolutePlaybackStart + endBeat.playbackDuration
+  rangeNotes = notesInTickRange(track, startTick, endTick)
+  if (rangeNotes.length === 0) {
+    clearRange()
+    return false
+  }
+
+  // A range and a single note are two different things to act on, so having both
+  // would make Alt+arrow ambiguous. The range wins, since it is the more
+  // deliberate gesture.
+  clearSelection()
+  selectedTrackIndex.value = track.index
+  selectedRange.value = {
+    trackIndex: track.index,
+    trackName: track.name?.trim() || `Track ${track.index + 1}`,
+    noteCount: rangeNotes.length,
+    startBar: startBeat.voice.bar.masterBar.index,
+    endBar: endBeat.voice.bar.masterBar.index,
+  }
+  // Ring every note the batch will touch, with the same marker the single
+  // selection uses.
+  refreshSelectionRects()
+  message(null, null)
+  return true
+}
+
+// Select every note of the bar a beat sits in.
+//
+// The visual band comes from alphaTab, via `highlightPlaybackRange`, which is
+// documented for exactly this - "building custom selection systems". That also
+// sets the loop range through `applyPlaybackRangeFromHighlight`, so a
+// double-clicked bar looks and loops like a dragged one.
+//
+// The notes then come from `setRangeFromBeats` directly rather than from the
+// event the highlight fires, because of one edge alphaTab cannot express: it
+// reports an EMPTY range when the start and end beats are the same, so a bar
+// holding a single beat (a whole-bar chord, a full-bar rest) would highlight to
+// nothing. Calling the highlight first and setting the range after means that
+// empty event lands before the range is built, so it cannot wipe it.
+function selectBar(beat) {
+  // The beats of the VOICE that was clicked, not `bar.voices[0]`: a bar holds
+  // several voices and the highlight should span the one the click landed in.
+  // The notes come from the tick window either way, so every voice of the bar is
+  // included regardless.
+  const beats = beat?.voice?.beats ?? []
+  if (beats.length === 0) return false
+
+  const first = beats[0]
+  const last = beats[beats.length - 1]
+
+  scoreEditHost.api?.highlightPlaybackRange(first, last)
+  scoreEditHost.api?.applyPlaybackRangeFromHighlight()
+
+  return setRangeFromBeats(first, last)
+}
+
 function clearRange() {
   rangeNotes = []
   selectedRange.value = null
+  lastBeatDown = null
   // The rings went with it, unless a single note is selected.
   refreshSelectionRects()
 }

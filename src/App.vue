@@ -152,6 +152,7 @@ import { usePlayer } from '@/composables/usePlayer'
 import { useScoreEdit } from '@/composables/useScoreEdit'
 import { useShortcuts } from '@/composables/useShortcuts'
 import { useHelp } from '@/composables/useHelp'
+import { useUnsavedGuard } from '@/composables/useUnsavedGuard'
 import ScoreViewer from '@/components/ScoreViewer.vue'
 import ScoreHeader from '@/components/ScoreHeader.vue'
 import TrackList from '@/components/TrackList.vue'
@@ -173,13 +174,14 @@ const { undo, canUndo, undoLabel, undoDepth } = useScoreEdit()
 // state lives in its own composable rather than in either.
 const { isHelpOpen, toggleHelp } = useHelp()
 
-// Both ways out of a score go through a confirmation while there are unsaved
+// Every way out of a score goes through a confirmation while there are unsaved
 // edits: the undo stack is bounded and is cleared with the score, so nothing
 // else would stop the model being replaced.
 //
-// Deliberately NOT a `beforeunload` handler: the browser shows its own
-// unskippable dialog for that, which is out of proportion for a viewer, and it
-// would fire on every reload during development.
+// The two IN-APP ways - opening another file, closing this one - are handled
+// here with a plain confirm, because this is where the layout owns those
+// controls. Leaving the PAGE is the third way, and it needs a different
+// mechanism entirely: see useUnsavedGuard.
 function confirmDiscard(question) {
   return !isDirty.value || window.confirm(`This score has unsaved changes. ${question}`)
 }
@@ -219,6 +221,10 @@ const activePanelLabel = computed(
 // Page-wide keys. Space is play/pause everywhere, including while a button
 // still has focus from the last click.
 useShortcuts()
+
+// Reloading, closing the tab or navigating away with unsaved edits. Not a key
+// handler: F5 is only two of the ways out. See useUnsavedGuard.
+useUnsavedGuard()
 </script>
 
 <style scoped lang="scss" src="@/styles/components/App.scss"></style>

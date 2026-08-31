@@ -145,6 +145,19 @@ function fakeApi() {
     playbackRangeHighlightChanged: emitter(),
     scoreLoaded: emitter(),
     postRenderFinished: emitter(),
+    highlights: [],
+    appliedHighlights: 0,
+    highlightPlaybackRange(startBeat, endBeat) {
+      this.highlights.push([startBeat, endBeat])
+      // alphaTab fires the change event synchronously, and reports EMPTY args
+      // when the two beats are the same - the edge the bar selection works
+      // around.
+      if (startBeat === endBeat) this.playbackRangeHighlightChanged.emit({})
+      else this.playbackRangeHighlightChanged.emit({ startBeat, endBeat })
+    },
+    applyPlaybackRangeFromHighlight() {
+      this.appliedHighlights += 1
+    },
     settings: apiSettings,
     boundsLookup: fakeBoundsLookup(),
     render: (hints) => host.renders.push(hints ?? null),
@@ -157,6 +170,12 @@ function fakeApi() {
 function clickAt(hitNote) {
   host.api.beatMouseDown.emit(null)
   if (hitNote) host.api.noteMouseDown.emit(hitNote)
+}
+
+// Reproduce a double click: two presses on the SAME beat, close together.
+function doubleClick(beat) {
+  host.api.beatMouseDown.emit(beat)
+  host.api.beatMouseDown.emit(beat)
 }
 
 // Reproduce a click-and-drag range. alphaTab normalises the order itself and
@@ -729,6 +748,111 @@ describe('the range wears the same marker as a single note', () => {
     }
     dragOver(beats[0], beats[3])
     expect(calls).toBe(4) // four beats, not four notes-times-staves
+  })
+})
+
+describe('double click selects the whole measure', () => {
+  // The fixture is 4 beats to a bar, one note per beat on the Lead track.
+  it('selects every note of the bar, on the track that was clicked', async () => {
+    const beats = beatsOf(LEAD)
+    doubleClick(beats[1]) // second beat of bar 1
+    await Promise.resolve()
+
+    expect(edit.selectedRange.value).toMatchObject({
+      trackIndex: LEAD,
+      startBar: 0,
+      endBar: 0,
+      noteCount: 4,
+    })
+  })
+
+  it('asks alphaTab for the band, so it looks and loops like a drag', () => {
+    const beats = beatsOf(LEAD)
+    doubleClick(beats[0])
+    // First and last beat of the bar, and the loop range applied.
+    expect(host.api.highlights).toHaveLength(1)
+    expect(host.api.highlights[0][0]).toBe(beats[0])
+    expect(host.api.highlights[0][1]).toBe(beats[3])
+    expect(host.api.appliedHighlights).toBe(1)
+  })
+
+  it('works on a later bar too', async () => {
+    const beats = beatsOf(LEAD)
+    doubleClick(beats[6]) // bar 2
+    await Promise.resolve()
+    expect(edit.selectedRange.value).toMatchObject({ startBar: 1, endBar: 1, noteCount: 4 })
+  })
+
+  it('rings every note of the measure', async () => {
+    doubleClick(beatsOf(LEAD)[0])
+    await Promise.resolve()
+    // 4 notes, drawn on the score staff and the tablature.
+    expect(edit.selectedNoteRects.value).toHaveLength(8)
+  })
+
+  it('a SLOW second click is two clicks, not a double', async () => {
+    const beats = beatsOf(LEAD)
+    vi.useFakeTimers()
+    try {
+      host.api.beatMouseDown.emit(beats[0])
+      // Past the threshold, so the two presses do not pair.
+      vi.advanceTimersByTime(1000)
+      host.api.beatMouseDown.emit(beats[0])
+      await Promise.resolve()
+      expect(edit.selectedRange.value).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('two quick clicks on DIFFERENT beats are two clicks', async () => {
+    const beats = beatsOf(LEAD)
+    host.api.beatMouseDown.emit(beats[0])
+    host.api.beatMouseDown.emit(beats[1])
+    await Promise.resolve()
+    // Moving the playhead twice is not a measure selection.
+    expect(edit.selectedRange.value).toBeNull()
+  })
+
+  it('does not let the miss-deselection wipe the selection it just made', async () => {
+    // Both jobs live in one beatMouseDown handler precisely so this cannot
+    // depend on which ran first.
+    doubleClick(beatsOf(LEAD)[0])
+    await Promise.resolve()
+    expect(edit.selectedRange.value).not.toBeNull()
+    expect(edit.selectedNoteRects.value.length).toBeGreaterThan(0)
+  })
+
+  it('a THIRD click starts over rather than re-selecting', async () => {
+    const beats = beatsOf(LEAD)
+    doubleClick(beats[0])
+    await Promise.resolve()
+    expect(edit.selectedRange.value).not.toBeNull()
+
+    host.api.beatMouseDown.emit(beats[0])
+    await Promise.resolve()
+    // A single click on a bar deselects, as it always did.
+    expect(edit.selectedRange.value).toBeNull()
+  })
+
+  it('the measure can then be batch-edited like any other selection', () => {
+    const beats = beatsOf(LEAD)
+    const notes = beats.slice(0, 4).flatMap((b) => b.notes)
+    const before = notes.map((n) => n.fret)
+
+    doubleClick(beats[0])
+    expect(edit.nudgeSelectedFret(1).ok).toBe(true)
+
+    expect(notes.map((n) => n.fret)).toEqual(before.map((f) => f + 1))
+    expect(edit.undoLabel.value).toBe('Transpose selection')
+  })
+
+  it('leaves a percussion bar alone rather than selecting nothing', async () => {
+    // notesInTickRange only yields stringed notes, so a drum bar has none.
+    const beats = beatsOf(DRUMS)
+    doubleClick(beats[0])
+    await Promise.resolve()
+    expect(edit.selectedRange.value).toBeNull()
   })
 })
 

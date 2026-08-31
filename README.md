@@ -135,9 +135,10 @@ deliberately takes the key from the browser's "Save page as" - and `Revert`
 reloads the file exactly as it was opened.
 
 Those two note-level moves work on **one note or a whole passage**. Click and
-drag across the score - the same gesture that sets alphaTab's loop range - and
-Alt+arrow acts on every note in it. The two selections exclude each other: a drag
-drops the single note, a click drops the range.
+drag across the score - the same gesture that sets alphaTab's loop range - or
+**double click a bar** to take the whole measure, and Alt+arrow acts on every
+note in it. The two selections exclude each other: a drag drops the single note,
+and a single click on a bar drops whichever was there.
 
 A batch is **all or nothing**. If one note of twelve would run off the neck, the
 whole selection is refused with the numbers, because a passage where nine notes
@@ -238,6 +239,7 @@ src/
     useScoreEdit.js          selection, isDirty, the render/midi propagation
     useShortcuts.js          the binding table, and the help derived from it
     useHelp.js               whether the shortcut modal is showing
+    useUnsavedGuard.js       warn before leaving the page with unsaved edits
   components/
     ScoreViewer.vue          owns the alphaTab host + scroll wrapper, calls init()
     ScoreHeader.vue          document strip: title / artist / tempo / bars + close
@@ -268,6 +270,7 @@ test/
   scoreHistory.test.js       the stack: bound, ordering, the clean flag
   noteSelection.test.js      why selection needs core.includeNoteBounds
   useShortcuts.test.js       which key combination resolves to which action
+  useUnsavedGuard.test.js    when the page refuses to leave
   exportScore.test.js        filenames and the .gp round trip
   useScoreEdit.test.js       the propagation matrix and the selection
   realScores.test.js         invariants against your own files (opt-in)
@@ -455,7 +458,8 @@ Three details make it usable:
   distinguishes a click from a drag.
 - alphaTab **normalises the order** itself, so `startBeat` is always the earlier
   one and a right-to-left drag needs no special case.
-- The range is turned into a **tick window** on the track the drag STARTED on,
+- The range is turned into a **tick window** on the track the drag or double
+  click STARTED on,
   using `beat.absolutePlaybackStart`. That field is model-absolute, so it ignores
   repeats and is comparable across staves and voices, which the per-voice
   `beat.index` is not. A drag that wanders onto another staff still edits the
@@ -472,6 +476,34 @@ one at a time lets the departing note's `delete` erase the arriving note's entry
 in `Beat.noteStringLookup` (pitfall 5), or the reverse, depending on order.
 `applyNoteStringMoves()` therefore drops **every** mover from its lookup first
 and only then writes, which makes the result independent of order.
+
+### Double click a bar: detected from alphaTab, not from the DOM
+
+There is no `dblclick` in alphaTab's event set, and using the DOM one would mean
+hit-testing the coordinates against `boundsLookup` all over again. `beatMouseDown`
+has already done that work and hands over the `Beat`, so the detector is two
+presses on the **same** beat inside 400ms. Requiring the same beat is what keeps
+two quick clicks on different beats meaning two clicks, which is what someone
+moving the playhead twice means. What is given up is the OS double-click
+interval, replaced by a fixed one.
+
+The band then comes from alphaTab itself:
+`highlightPlaybackRange(first, last)` - documented for exactly this, "building
+custom selection systems" - followed by `applyPlaybackRangeFromHighlight()`, so a
+double-clicked bar looks and loops like a dragged one.
+
+The notes are set directly rather than taken from the event that highlight fires,
+because of one edge alphaTab cannot express: `_cursorSelectRange` reports an
+**empty** range when the start and end beats are the same, so a bar holding a
+single beat (a whole-bar chord, a full-bar rest) would highlight to nothing.
+Calling the highlight first and setting the range after means that empty event
+lands *before* the range is built and cannot wipe it.
+
+Both jobs on `beatMouseDown` - the double click and the click-off-a-note
+deselection - live in **one** handler. Two handlers would have worked by
+accident: the deselection is armed synchronously and disarmed by the bar
+selection, so it depended on which one alphaTab happened to call first. In one
+handler the order is the code rather than a coincidence.
 
 ### Two selection visuals, two jobs
 
@@ -541,6 +573,31 @@ Two details that bite:
 A test pins the whole reverse path against a real headless render: two rectangles
 for a note on a score+tab staff, at two different vertical positions, and
 clicking the centre of each finds the same `Note` back.
+
+### Unsaved changes: `beforeunload`, not a key handler
+
+Catching `F5` and `Ctrl+F5` on keydown covers exactly two of the ways out of the
+page. It never sees `Ctrl+R`, the reload button, a closed tab, a typed URL or a
+back navigation, and some of those combinations are reserved by the browser so
+`preventDefault()` cannot touch them at all. A warning that fires on `F5` while
+the reload button silently discards the work is **worse than none**: it teaches
+confidence the app has not earned.
+
+So the guard is a `beforeunload` listener, gated on `isDirty`, which covers every
+one of those paths - `F5` and `Ctrl+F5` included. Two things about it are not
+fixable from the page: the dialog is the browser's, so its wording cannot be set
+and its appearance cannot be styled (returning a string stopped working years
+ago); and browsers only honour it once the page has had a real user interaction,
+which is never a problem here because there is no way to have unsaved edits
+without having clicked or typed first.
+
+This reverses an earlier decision recorded in the code, which had ruled
+`beforeunload` out as "out of proportion for a viewer" and as firing on every
+reload during development. Gated on `isDirty` it fires only when there really are
+unsaved edits, which during development is almost never.
+
+`guardUnload(event, isDirty)` is split out from the listener so the decision is
+testable without a window.
 
 ### The shortcut help is generated, not written
 

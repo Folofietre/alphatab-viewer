@@ -39,6 +39,12 @@
             <dt><span class="gesture">Click a note head</span></dt>
             <dd>Select that note. It is ringed on every staff it is drawn on.</dd>
 
+            <dt><span class="gesture">Double click a bar</span></dt>
+            <dd>
+              Select every note of that measure, on the track you clicked, and set
+              it as the loop range.
+            </dd>
+
             <dt><span class="gesture">Click and drag</span></dt>
             <dd>
               Select a passage on the track the drag started on, and set it as the
