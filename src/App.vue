@@ -15,6 +15,7 @@
       <p v-else class="bar-placeholder">Drop a score to begin</p>
 
       <div class="bar-side bar-side-end">
+        <BarsPerRow v-if="isScoreLoaded" />
         <kbd v-if="isScoreLoaded" class="bar-hint" title="Space toggles playback">Space</kbd>
       </div>
     </header>
@@ -84,6 +85,7 @@ import ScoreHeader from '@/components/ScoreHeader.vue'
 import TrackList from '@/components/TrackList.vue'
 import TransportBar from '@/components/TransportBar.vue'
 import FileDropzone from '@/components/FileDropzone.vue'
+import BarsPerRow from '@/components/BarsPerRow.vue'
 
 const { loadFile, clearScore, isScoreLoaded, scoreInfo, fileName, loadError } = usePlayer()
 

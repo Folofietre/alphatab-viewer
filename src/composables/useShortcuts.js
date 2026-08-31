@@ -33,15 +33,30 @@ function ownsSpace(el) {
   return false
 }
 
+function isCheckbox(el) {
+  return el?.tagName === 'INPUT' && (el.type || '').toLowerCase() === 'checkbox'
+}
+
 // One entry per shortcut. `code` is KeyboardEvent.code, which is keyboard-layout
 // independent (unlike `key`), so this works the same on AZERTY and QWERTY.
-// Adding a shortcut is one entry here.
+// `appliesTo` decides whether the binding acts on the focused element; when it
+// returns false the key is left entirely alone. Adding a shortcut is one entry.
 export const BINDINGS = [
   {
     code: 'Space',
     label: 'Play / pause',
-    owns: ownsSpace,
+    appliesTo: (el) => !ownsSpace(el),
     run: (player) => player.playPause(),
+  },
+  {
+    code: 'Enter',
+    label: 'Toggle the focused checkbox',
+    // Taking Space for play/pause removes a checkbox's ONLY native toggle key:
+    // Enter does nothing on a checkbox. Hand it back here, once, instead of in
+    // every component that renders one. Non-checkbox targets are untouched, so
+    // Enter keeps working normally on buttons and links.
+    appliesTo: isCheckbox,
+    run: (_player, event) => event.target.click(),
   },
 ]
 
@@ -56,14 +71,14 @@ export function useShortcuts() {
 
     const binding = BINDINGS.find((b) => b.code === event.code)
     if (!binding) return
-    if (binding.owns?.(event.target)) return
+    if (!binding.appliesTo(event.target)) return
 
-    // Swallow auto-repeat (held key) so it neither scrolls the page nor
-    // toggles playback dozens of times per second.
+    // Swallow auto-repeat (held key) so it neither scrolls the page nor fires
+    // the action dozens of times per second.
     event.preventDefault()
     if (event.repeat) return
 
-    binding.run(player)
+    binding.run(player, event)
   }
 
   onMounted(() => window.addEventListener('keydown', onKeyDown))

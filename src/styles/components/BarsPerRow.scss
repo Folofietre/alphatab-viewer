@@ -1,0 +1,41 @@
+@use '@/styles/mixins' as *;
+
+// Sits in the dark action bar, so it draws no surface of its own.
+.bars-per-row {
+  display: flex;
+  align-items: center;
+  gap: $gap-xs;
+  white-space: nowrap;
+}
+
+.toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  cursor: pointer;
+  font-size: 0.72rem;
+  color: var(--chrome-text);
+
+  input {
+    cursor: pointer;
+  }
+}
+
+.count {
+  @include tabular;
+  width: 2.9rem;
+  padding: 0.2rem 0.3rem;
+  font-size: 0.72rem;
+  color: var(--chrome-text);
+  background: var(--chrome-raised);
+  border: 1px solid var(--chrome-border);
+  border-radius: $radius-control;
+
+  &:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+  &:hover:not(:disabled) {
+    border-color: var(--accent);
+  }
+}

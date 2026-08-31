@@ -33,7 +33,6 @@
               ? 'At least one track must stay displayed'
               : 'Add this track to the view'"
             @change="setTrackRendered(track.index, $event.target.checked)"
-            @keydown.enter.prevent="setTrackRendered(track.index, !track.rendered)"
           />
           <button
             type="button"

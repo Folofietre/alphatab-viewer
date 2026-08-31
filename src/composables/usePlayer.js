@@ -37,6 +37,11 @@ const tracks = ref([])
 const scoreInfo = shallowRef(null) // { title, artist, album, tempo, barCount }
 const position = ref({ currentTime: 0, endTime: 0, currentTick: 0, endTick: 0 })
 
+// Score layout: force a fixed number of bars on every system (row), or leave
+// alphaTab to wrap as it sees fit.
+const forceBarsPerRow = ref(false)
+const barsPerRow = ref(4)
+
 const masterVolume = ref(0.8)
 const playbackSpeed = ref(1)
 const isLooping = ref(false)
@@ -384,6 +389,45 @@ export function usePlayer() {
     }
   }
 
+  // ---- score layout -------------------------------------------------------
+
+  // alphaTab's `display.barsPerRow` limits how many bars go into one system,
+  // with -1 meaning "wrap automatically". It is only honoured by
+  // LayoutMode.Page, which is what this app uses.
+  //
+  // Verified against the implementation rather than the docs: the shipped
+  // defaults are `barsPerRow = -1`, `layoutMode = Page` and
+  // `systemsLayoutMode = 0` (Automatic). The generated docs claim
+  // systemsLayoutMode defaults to `1` (UseModelLayout), which is wrong and
+  // would have meant the file's own layout overriding this setting.
+  //
+  // A settings change needs updateSettings() to propagate and render() to take
+  // effect. render() only re-lays out the notation; it leaves the synth and the
+  // playback position alone, unlike loadMidiForScore().
+  function applyBarsPerRow() {
+    if (!api) return
+    const value = forceBarsPerRow.value
+      ? Math.min(32, Math.max(1, Math.round(barsPerRow.value)))
+      : -1
+    if (api.settings.display.barsPerRow === value) return
+    api.settings.display.barsPerRow = value
+    api.updateSettings()
+    api.render()
+  }
+
+  function setForceBarsPerRow(enabled) {
+    forceBarsPerRow.value = !!enabled
+    applyBarsPerRow()
+  }
+
+  // Callers commit on `change`, not `input`: every call re-lays out the whole
+  // score, so this must not fire per keystroke or per spinner tick held down.
+  function setBarsPerRow(count) {
+    if (!Number.isFinite(count)) return
+    barsPerRow.value = Math.min(32, Math.max(1, Math.round(count)))
+    if (forceBarsPerRow.value) applyBarsPerRow()
+  }
+
   // ---- transport ----------------------------------------------------------
 
   function playPause() {
@@ -415,6 +459,9 @@ export function usePlayer() {
     setTrackSolo,
     resetMixer,
 
+    setForceBarsPerRow,
+    setBarsPerRow,
+
     playPause,
     stop,
     seekToTime,
@@ -428,6 +475,8 @@ export function usePlayer() {
     tracks,
     scoreInfo,
     position,
+    forceBarsPerRow,
+    barsPerRow,
     masterVolume,
     playbackSpeed,
     isLooping,
