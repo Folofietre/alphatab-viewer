@@ -258,6 +258,24 @@
   border-top: 1px solid var(--chrome-divider);
 }
 
+// A monochrome icon, painted from its own alpha channel.
+//
+// `mask` rather than `<img>`, and that is the whole point: the source files are
+// BLACK on transparent, so an <img> would be invisible on the dark chrome. Using
+// the alpha as a mask and filling with `currentColor` means the icon inherits the
+// button's colour, so it follows `button-chrome` normally and `control-active`
+// when the toggle is on, with no second asset and no filter tricks.
+//
+// The -webkit- prefix is still needed: Safari only unprefixed `mask` recently.
+@mixin mask-icon($url, $size: 1rem) {
+  display: block;
+  width: $size;
+  height: $size;
+  background-color: currentColor;
+  mask: url($url) center / contain no-repeat;
+  -webkit-mask: url($url) center / contain no-repeat;
+}
+
 // An on/off control that is currently ON.
 @mixin control-active {
   background: var(--accent);

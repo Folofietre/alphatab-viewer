@@ -75,16 +75,31 @@
 .toggles {
   display: flex;
   gap: $gap-xs;
+}
 
-  button {
-    @include button-chrome;
-    font-size: 0.72rem;
-    padding: 0.24rem 0.5rem;
+// Icon-only toggles, so square rather than the text buttons' pill shape. Sized
+// from the icon plus its padding rather than from a font, so the two are
+// identical whatever the icon.
+.toggle {
+  @include button-chrome;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.26rem;
+  line-height: 1;
 
-    &.on {
-      @include control-active;
-    }
+  &.on {
+    @include control-active;
   }
+}
+
+// The icons take `currentColor`, so they follow the button through its normal,
+// hover and `on` states without a second asset. See the mask-icon mixin.
+.icon-loop {
+  @include mask-icon('@/assets/loop.png', 1rem);
+}
+.icon-metronome {
+  @include mask-icon('@/assets/metronome.png', 1rem);
 }
 
 .loading {
@@ -105,6 +120,12 @@
   .seek {
     width: 150px;
   }
+}
+
+// The toggles used to go at 820px, when they were the words "Loop" and "Click"
+// and cost about 100px. As icons they cost 52px, so they survive much further
+// down - which is the point of making them icons rather than a side effect.
+@media (max-width: 560px) {
   .toggles {
     display: none;
   }

@@ -39,19 +39,32 @@
       <output>{{ Math.round(masterVolume * 100) }}%</output>
     </label>
 
+    <!-- Icon-only, so both need an explicit accessible name and an explicit
+         pressed state: with the words gone, the CSS `on` class is the only cue
+         left for a sighted user and none at all for a screen reader. -->
     <div class="toggles">
       <button
         type="button"
+        class="toggle"
         :class="{ on: isLooping }"
+        :aria-pressed="isLooping"
+        aria-label="Loop the song, or the selected range"
         title="Loop the song (or the selected range)"
         @click="isLooping = !isLooping"
-      >Loop</button>
+      >
+        <span class="icon icon-loop" aria-hidden="true" />
+      </button>
       <button
         type="button"
+        class="toggle"
         :class="{ on: metronome }"
+        :aria-pressed="metronome"
+        aria-label="Metronome"
         title="Metronome"
         @click="metronome = !metronome"
-      >Click</button>
+      >
+        <span class="icon icon-metronome" aria-hidden="true" />
+      </button>
     </div>
 
     <span v-if="!isPlayerReady" class="loading">Loading soundfont…</span>

@@ -96,7 +96,7 @@ CSS, since every SFC style block is its own Sass compilation unit and a rule
 placed there would be duplicated into all of them.
 
 **Transport** - play/pause, stop, scrub bar, playback speed (0.25x-2x), master
-volume, loop, metronome, all in the top action bar. Space is play/pause from
+volume, and icon toggles for loop and metronome, all in the top action bar. Space is play/pause from
 anywhere on the page. Clicking a beat in the score seeks to it
 (`enableUserInteraction`).
 
@@ -250,6 +250,8 @@ src/
     TransportBar.vue         play, stop, scrub, speed, volume, loop, click (in the action bar)
     BarsPerRow.vue           force a fixed number of bars per system
     FileDropzone.vue         window-wide drag & drop + file picker
+  assets/
+    loop.png metronome.png   monochrome toggle icons, used as CSS masks
   styles/
     main.scss                :root custom properties + element resets (global)
     _tokens.scss             SCSS spacing / radius / transition scale
@@ -316,6 +318,29 @@ nothing more:
 
 Scoping is preserved, so `:deep()` still works for reaching alphaTab's own
 `.at-*` classes.
+
+### Monochrome icons are masks, not images
+
+`src/assets/loop.png` and `metronome.png` are black on transparent, so an `<img>`
+would be invisible on the dark chrome of the action bar. They are used through
+`mask-icon()`: the alpha channel becomes a `mask` and the fill is
+`background-color: currentColor`.
+
+That is not a workaround, it is the reason the toggles need no second asset. The
+icon inherits the button's `color`, so it follows `button-chrome` normally and
+`control-active` when the toggle is on, in both cases without a recoloured copy
+or a `filter` trick. The `-webkit-` prefix is still paired with it, since Safari
+only unprefixed `mask` recently.
+
+The `url()` uses the `@/assets/...` alias and Vite rewrites it with the hash and
+the base path at build time, so this respects the single-knob rule for `base`
+rather than hardcoding the deploy path in CSS. Verified in both directions: the
+dev server serves `/alphatab-viewer/src/assets/loop.png` and the build emits
+`/alphatab-viewer/assets/loop-<hash>.png`.
+
+The buttons are icon-ONLY, which is why they carry an explicit `aria-label` and
+`aria-pressed`. With the words gone, the `on` class is the only cue left for a
+sighted user and none at all for a screen reader.
 
 ### Visual language
 
