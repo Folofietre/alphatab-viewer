@@ -3,6 +3,7 @@ import { usePlayer, scoreEditHost } from '@/composables/usePlayer'
 import {
   MAX_FRET,
   MIN_FRET,
+  deleteNotes,
   RETUNE_KEEP_PITCH,
   RETUNE_REASSIGN,
   applyScoreTempo,
@@ -501,6 +502,46 @@ export function useScoreEdit() {
     })
   }
 
+  // Delete / Backspace: replace whatever is selected with silence.
+  //
+  // Works on one note or a whole dragged range, and empties every beat it fully
+  // covers - `Beat.isRest` is a getter, so a beat with no notes left is already
+  // a rest of the same duration.
+  //
+  // The selection goes with it: the notes no longer exist, so nothing could be
+  // pointed at afterwards.
+  //
+  // The one edit with no way back except `Revert`, so it is a plain action with
+  // no confirmation: asking every time would make it useless for one note, and a
+  // threshold on the count would be arbitrary. `isDirty` already warns before
+  // the score is replaced or closed.
+  function deleteSelection() {
+    if (!canEdit.value) return refusePlayback()
+
+    const notes = selected ? [selected] : rangeNotes
+    if (notes.length === 0) {
+      return { ok: false, changed: false, reason: 'Nothing selected to delete.' }
+    }
+
+    const trackIndex = selected
+      ? (selectedNote.value?.trackIndex ?? null)
+      : (selectedRange.value?.trackIndex ?? null)
+    const bar = selected
+      ? (selectedNote.value?.barIndex ?? null)
+      : (selectedRange.value?.startBar ?? null)
+
+    const result = deleteNotes(notes, scoreEditHost.api?.settings)
+    if (result.changed) {
+      clearSelection()
+      clearRange()
+      if (typeof trackIndex === 'number') scoreEditHost.syncTrack(trackIndex)
+    }
+    // `deleteNotes` already ran finish(), which recomputes the tick grid - but it
+    // recomputes it to the same values, since removing a note does not change any
+    // duration. So the midi can still wait for the next play.
+    return propagate(result, { render: true, midi: 'onPlay', firstChangedBar: bar })
+  }
+
   // Alt + arrow: move the selected note to the adjacent string, keeping its
   // pitch. Only the fingering moves, so the score sounds identical.
   //
@@ -667,6 +708,7 @@ export function useScoreEdit() {
     setSelectedFret,
     nudgeSelectedFret,
     nudgeSelectedString,
+    deleteSelection,
 
     // saving
     download,

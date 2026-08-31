@@ -94,6 +94,14 @@ vi.mock('@/utils/exportScore', () => ({
   downloadScoreAsGp: (...args) => download(...args),
 }))
 
+const alphaTab = await import('@coderline/alphatab')
+// A REAL Settings object, not a stub: `deleteNotes` calls `score.finish(settings)`
+// and finish() reads `settings.notation.notationMode`, so a plain object throws.
+// Fresh rather than the shared one from helpers, because noteSelection.test.js
+// asserts that one still has alphaTab's `includeNoteBounds` default.
+const apiSettings = new alphaTab.Settings()
+apiSettings.core.includeNoteBounds = true
+
 const { useScoreEdit } = await import('@/composables/useScoreEdit')
 const { loadFixture } = await import('./helpers')
 const { stringedNotes, MAX_FRET, RETUNE_KEEP_PITCH, RETUNE_REASSIGN } =
@@ -133,7 +141,7 @@ function fakeApi() {
     playbackRangeHighlightChanged: emitter(),
     scoreLoaded: emitter(),
     postRenderFinished: emitter(),
-    settings: { core: { includeNoteBounds: true }, player: { enableUserInteraction: true } },
+    settings: apiSettings,
     boundsLookup: fakeBoundsLookup(),
     render: (hints) => host.renders.push(hints ?? null),
   }
@@ -800,6 +808,72 @@ describe('batch editing a dragged range', () => {
   })
 })
 
+describe('Delete replaces the selection with silence', () => {
+  it('empties the beat of a single selected note and drops the selection', () => {
+    const note = [...stringedNotes(score.tracks[LEAD].staves[0])][0]
+    const beat = note.beat
+    host.api.noteMouseDown.emit(note)
+
+    expect(edit.deleteSelection()).toMatchObject({ ok: true, changed: true })
+
+    expect(beat.notes).toHaveLength(0)
+    expect(beat.isRest).toBe(true)
+    // Nothing could be pointed at afterwards, so the selection and its rings go.
+    expect(edit.selectedNote.value).toBeNull()
+    expect(edit.selectedNoteRects.value).toEqual([])
+    expect(host.dirty).toBe(true)
+  })
+
+  it('empties every beat of a dragged range, and drops the range', () => {
+    const beats = beatsOf(LEAD)
+    dragOver(beats[0], beats[3])
+    const covered = beats.slice(0, 4)
+
+    expect(edit.deleteSelection().ok).toBe(true)
+
+    for (const beat of covered) expect(beat.isRest).toBe(true)
+    expect(edit.selectedRange.value).toBeNull()
+    expect(edit.selectedNoteRects.value).toEqual([])
+  })
+
+  it('renders from the bar it changed and leaves the midi for the next play', () => {
+    const note = [...stringedNotes(score.tracks[LEAD].staves[0])][0]
+    const bar = note.beat.voice.bar.masterBar.index
+    host.api.noteMouseDown.emit(note)
+
+    edit.deleteSelection()
+
+    expect(host.renders).toEqual([{ reuseViewport: true, firstChangedMasterBar: bar }])
+    expect(host.midiReloads).toBe(0)
+    expect(host.midiStale).toBe(true)
+  })
+
+  it('makes no sound: silence is not something to preview', () => {
+    host.api.noteMouseDown.emit([...stringedNotes(score.tracks[LEAD].staves[0])][0])
+    edit.deleteSelection()
+    expect(host.previews).toEqual([])
+    expect(host.beatPreviews).toEqual([])
+  })
+
+  it('asks for a selection rather than deleting something arbitrary', () => {
+    edit.clearSelection()
+    edit.clearRange()
+    const result = edit.deleteSelection()
+    expect(result.ok).toBe(false)
+    expect(result.reason).toMatch(/Nothing selected/)
+    expect(host.renders).toEqual([])
+  })
+
+  it('is blocked by playback like every other edit', () => {
+    const note = [...stringedNotes(score.tracks[LEAD].staves[0])][0]
+    host.api.noteMouseDown.emit(note)
+    player.isPlaying.value = true
+
+    expect(edit.deleteSelection().ok).toBe(false)
+    expect(note.beat.notes.length).toBeGreaterThan(0)
+  })
+})
+
 describe('editing only while paused', () => {
   const EDITS = [
     ['rename', () => edit.rename('Nope')],
@@ -811,6 +885,7 @@ describe('editing only while paused', () => {
     ['setSelectedFret', () => edit.setSelectedFret(7)],
     ['nudgeSelectedFret', () => edit.nudgeSelectedFret(1)],
     ['nudgeSelectedString', () => edit.nudgeSelectedString(1)],
+    ['deleteSelection', () => edit.deleteSelection()],
   ]
 
   it('canEdit follows the player, and a note preview does NOT clear it', () => {

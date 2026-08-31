@@ -30,6 +30,11 @@
 //           artificial one is there to prove those refusals do NOT overreach.
 //   Drums   percussion, so notes report string -1 / fret -1 and every fret and
 //           tuning operation has to skip it.
+//   Ties    6 strings, carrying TIES, HAMMER-ONS and a SLIDE, plus a two-note
+//           chord. The links are what the delete sweep has to clean up: a tie to
+//           a deleted note survives finish() and keeps extending a duration, and
+//           the chord is what proves deleting one note of it leaves the rest
+//           sounding. Appended LAST so the other tracks keep their indexes.
 //
 // Plus a tempo MAP of three automations rather than a single tempo, because the
 // proportional rewrite is only interesting when there is more than one value.
@@ -61,6 +66,9 @@ const tex = `\\title "Edit Fixture"
 \\track "Drums"
 \\instrument percussion
 :4 35 38 42 38 | 35 38 42 38 | 35 38 42 38 | 35 38 42 38 |
+\\track "Ties" \\staff{score tabs} \\tuning e4 b3 g3 d3 a2 e2
+\\instrument 26
+:4 5.3 -.3 7.3{h} 9.3 | 5.3{sl} 9.3 (5.3 7.4) 7.2 | 3.3 -.3 -.3 -.3 | 5.4 7.4{h} 9.4 10.4 |
 `
 
 const settings = new alphaTab.Settings()

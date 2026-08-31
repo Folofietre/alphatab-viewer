@@ -147,6 +147,56 @@ describe('Ctrl+S saves the score', () => {
   })
 })
 
+describe('Delete replaces the selection with silence', () => {
+  it('claims both Delete and Backspace', () => {
+    expect(resolve(key('Delete'))?.label).toMatch(/silence/)
+    expect(resolve(key('Backspace'))?.label).toMatch(/silence/)
+  })
+
+  it('leaves them to the browser under a modifier', () => {
+    // Ctrl+Backspace deletes a word in a field, Alt+Backspace navigates back on
+    // some platforms. Neither is ours.
+    for (const mods of [{ ctrl: true }, { alt: true }, { meta: true }]) {
+      expect(resolve(key('Delete', mods))).toBeNull()
+      expect(resolve(key('Backspace', mods))).toBeNull()
+    }
+  })
+
+  it('stands down wherever the key is the text-editing one', () => {
+    for (const code of ['Delete', 'Backspace']) {
+      const binding = resolve(key(code))
+      for (const el of [
+        { tagName: 'INPUT', type: 'text' },
+        { tagName: 'INPUT', type: 'number' },
+        { tagName: 'TEXTAREA' },
+        { tagName: 'SELECT' },
+        { isContentEditable: true, tagName: 'DIV' },
+      ]) {
+        expect(binding.appliesTo(el), `${code} on ${el.tagName}`).toBe(false)
+      }
+      expect(binding.appliesTo({ tagName: 'BUTTON' })).toBe(true)
+      expect(binding.appliesTo(null)).toBe(true)
+    }
+  })
+
+  it('does not repeat: the delete clears the selection anyway', () => {
+    for (const code of ['Delete', 'Backspace']) {
+      expect(!!resolve(key(code)).allowRepeat).toBe(false)
+    }
+  })
+
+  it('calls deleteSelection and nothing else', () => {
+    const calls = []
+    const edit = {
+      deleteSelection: () => calls.push('delete'),
+      download: () => calls.push('download'),
+    }
+    resolve(key('Delete')).run({}, {}, edit)
+    resolve(key('Backspace')).run({}, {}, edit)
+    expect(calls).toEqual(['delete', 'delete'])
+  })
+})
+
 describe('binding options', () => {
   it('the save bindings are the only ones that consult the player', () => {
     // appliesTo(element, player): most bindings only look at the focused

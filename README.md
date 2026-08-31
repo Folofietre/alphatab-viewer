@@ -128,6 +128,7 @@ the score selects its track too):
 | Retune, `Keep pitches` / `Keep frets` | `staff.stringTuning`, and the frets in the first mode |
 | Notes across the strings | `note.string` + `note.fret`, via the buttons or `Alt` + up/down |
 | Notes by a semitone | `note.fret`, via the buttons or `Alt` + `Shift` + up/down |
+| Notes replaced by silence | removes them from their beats, via `Silence` or `Suppr` / `Delete` |
 
 Then `Save .gp` downloads the result - or **`Ctrl+S`** / **`Cmd+S`**, which
 deliberately takes the key from the browser's "Save page as" - and `Revert`
@@ -190,8 +191,22 @@ invalidates; the panel renders flat reactive data. That is also what keeps an
 undo stack possible later without touching the UI - each function is already a
 command and would only need its inverse.
 
+**`Suppr` / `Delete` replaces the selection with silence.** A note becomes
+silence by being removed from its beat, and the duration takes care of itself:
+`Beat.isRest` is a getter over `notes.length === 0` and `beat.duration` is
+independent of its notes, so emptying a beat turns it into a rest of exactly the
+same length. A beat that still holds other notes keeps sounding them, so deleting
+one note of a chord silences that note, not the chord.
+
+It is the **only edit with no way back except `Revert`**: a transposition can be
+transposed back, but a deleted note's fret, effects and links are gone. There is
+deliberately no confirmation - asking every time would make it useless for one
+note, and a threshold on the count would be arbitrary - and `isDirty` already
+warns before the score is replaced or closed.
+
 **Deliberately out of scope for this tier:** entering notes, adding or removing
-bars, undo, changing the number of strings, and any validation of note durations.
+bars, undo, changing the number of strings, and any validation of note
+durations.
 
 ### What is NOT saved with the score
 
@@ -239,7 +254,7 @@ src/
     format.js                formatTime()
 test/
   fixtures/make-sample.mjs   regenerates sample.gp; the readable source of truth
-  fixtures/sample.gp         5 tracks chosen to make every refusal fire
+  fixtures/sample.gp         6 tracks chosen to make every refusal fire
   helpers.js                 load / round-trip / snapshot a score in Node
   scoreEdits.test.js         the model writes, against the fixture
   noteSelection.test.js      why selection needs core.includeNoteBounds
@@ -258,10 +273,11 @@ edit.
 
 The committed fixture is generated, not hand-picked, so what is in it is readable
 rather than binary: see the header of
-[test/fixtures/make-sample.mjs](test/fixtures/make-sample.mjs). Its five tracks
-exist to make every refusal fire - a 7-string track whose frets are already
-against both bounds, a 4-string bass with a different string count, a track
-carrying natural harmonics, and a percussion track.
+[test/fixtures/make-sample.mjs](test/fixtures/make-sample.mjs). Its six tracks
+exist to make every refusal and every cleanup path fire - a 7-string track whose
+frets are already against both bounds, a 4-string bass with a different string
+count, a track carrying natural harmonics, a percussion track, and a track of
+ties, hammer-ons, a slide and a chord for the delete sweep to clean up.
 
 To check the same invariants against real scores, without committing anyone's
 music to the repo:
@@ -624,9 +640,9 @@ Two consequences worth knowing:
 
 ---
 
-## Five alphaTab gotchas the editor had to be built around
+## Six alphaTab gotchas the editor had to be built around
 
-All five were found by running code against alphaTab **1.8.4** in Node, not by
+All six were found by running code against alphaTab **1.8.4** in Node, not by
 reading the docs, and each one silently corrupts an edit if you do the obvious
 thing. They are the reason
 [src/utils/scoreEdits.js](src/utils/scoreEdits.js) exists as its own module.
@@ -756,13 +772,52 @@ The sibling `noteValueLookup` (keyed on `realValue`) does go stale on a fret
 change, but it is only consulted by `findTieOrigin` for notes that are **not**
 stringed, and every operation here is on stringed notes.
 
-### And one non-gotcha: `finish()` is not needed after these edits
+### 6. Deleting a note leaves stale links that survive `finish()`
+
+`Note` carries **eleven** fields pointing at another `Note`: `tieOrigin` /
+`tieDestination`, `hammerPullOrigin` / `hammerPullDestination`, `slurOrigin` /
+`slurDestination`, `slideOrigin` / `slideTarget`, `effectSlurOrigin` /
+`effectSlurDestination`, and `bendOrigin`.
+
+`Note.finish()` looks like it heals a broken tie:
+
+```js
+const tieOrigin = this.tieOrigin ?? Note.findTieOrigin(this)
+if (!tieOrigin) this.isTieDestination = false
+```
+
+but the `??` short-circuits on a **stale** reference, so a tie whose origin was
+deleted keeps that deleted note as its origin. Measured on a real `.gpx`: deleting
+20 linked notes without a sweep left **34** dangling references alive after
+`finish()`, and the generated midi differed (7184 note-ons against 7186) because a
+tie to a deleted note kept extending a duration. Nothing crashed, in either the
+renderer, the midi generator or the exporter - which is exactly why this needed a
+test rather than trust.
+
+So `deleteNotes()` does three things beyond the removal, and all three are silent
+corruption if skipped:
+
+1. **Renumbers `note.index`.** `addNote` sets it to `notes.length` and
+   `removeNote` does not renumber, so deleting note 0 of three leaves the
+   survivors at index 1 and 2. `MidiFileGenerator` reads `note.index === 0` to
+   decide where to generate a beat's whammy bar, so a beat could lose its whammy
+   entirely.
+2. **Nulls every link to a removed note**, as a full sweep of the score rather
+   than by following the victims' back-references: several of those fields have
+   no inverse (`bendOrigin` for one), so only walking everything is provably
+   complete. Measured at 12ms over 7295 notes.
+3. **Calls `score.finish()`**, to rebuild the per-beat `noteValueLookup` and
+   re-resolve or clear the links that just lost their target. Measured at 12ms on
+   the same file, so ~24ms for a delete on the largest test score.
+
+### And one non-gotcha: `finish()` is not needed after the OTHER edits
 
 `score.finish()` is idempotent - measured on a 118-bar score at 16ms, then 9.5ms,
 then 6.2ms, with beat and note counts unchanged - but all it recomputes is
-structure and durations, and none of the seven operations changes either. So
-nothing in `scoreEdits.js` calls it. Adding or removing beats or bars **would**
-need it.
+structure, durations and cross-note links, and every operation except the delete
+changes none of those. So `deleteNotes()` is the single caller in
+`scoreEdits.js`, for the reasons above. Adding or removing beats or bars would
+need it too.
 
 ### Why there is no undo
 

@@ -14,6 +14,7 @@ import {
   fretRange,
   renameTrack,
   retuneTrack,
+  deleteNotes,
   setNoteFret,
   shiftNoteString,
   stringedNotes,
@@ -28,6 +29,7 @@ import {
   midiNoteOns,
   notesOf,
   roundTrip,
+  settings,
   snapshotTrack,
   stringedTracks,
   tempoMap,
@@ -39,11 +41,14 @@ const RHYTHM = 1 // 7 strings, custom tuning, frets 0-24 (against both bounds)
 const BASS = 2 // 4 strings, standard tuning, frets 0-7
 const HARM = 3 // 6 strings, carries 4 natural harmonics and 1 artificial one
 const DRUMS = 4 // percussion: string -1, fret -1
+const TIES = 5 // ties, hammer-ons, a slide and a chord: the delete sweep's target
 
 describe('the fixture is what the tests assume', () => {
   it('holds the four tracks and the tempo map the suite is written against', () => {
     const score = loadFixture()
-    expect(score.tracks.map((t) => t.name)).toEqual(['Lead', 'Rhythm', 'Bass', 'Harm', 'Drums'])
+    expect(score.tracks.map((t) => t.name)).toEqual([
+      'Lead', 'Rhythm', 'Bass', 'Harm', 'Drums', 'Ties',
+    ])
     expect(score.tempo).toBe(120)
     expect(tempoMap(score)).toEqual([
       [0, 120],
@@ -817,6 +822,155 @@ describe('shiftNoteString against the generated midi', () => {
     }
     expect(moved).toBeGreaterThan(10)
     expect(stale).toBe(moved) // every single one
+  })
+})
+
+// The only STRUCTURAL edit, and the only one that calls finish(). Deleting a
+// note is also the only one with no way back except reverting the file.
+describe('deleteNotes', () => {
+  const LINK_FIELDS = [
+    'tieOrigin', 'tieDestination', 'hammerPullOrigin', 'hammerPullDestination',
+    'slurOrigin', 'slurDestination', 'slideOrigin', 'slideTarget',
+    'effectSlurOrigin', 'effectSlurDestination', 'bendOrigin',
+  ]
+
+  function everyNote(score) {
+    const notes = []
+    for (const track of score.tracks) {
+      for (const staff of track.staves) {
+        for (const bar of staff.bars) {
+          for (const voice of bar.voices) {
+            for (const beat of voice.beats) notes.push(...beat.notes)
+          }
+        }
+      }
+    }
+    return notes
+  }
+
+  function beatsOf(score, trackIndex) {
+    const beats = []
+    for (const staff of score.tracks[trackIndex].staves) {
+      for (const bar of staff.bars) {
+        for (const voice of bar.voices) beats.push(...voice.beats)
+      }
+    }
+    return beats
+  }
+
+  it('turns an emptied beat into a rest of the SAME duration', () => {
+    const score = loadFixture()
+    const beat = beatsOf(score, LEAD)[0]
+    const duration = beat.duration
+    const note = beat.notes[0]
+
+    expect(beat.isRest).toBe(false)
+    expect(deleteNotes([note], settings)).toMatchObject({ ok: true, changed: true })
+
+    expect(beat.notes).toHaveLength(0)
+    expect(beat.isRest).toBe(true)
+    // The whole point: silence of the same length, with no duration arithmetic.
+    expect(beat.duration).toBe(duration)
+  })
+
+  it('leaves the rest of a chord sounding when one of its notes goes', () => {
+    const score = loadFixture()
+    const chord = beatsOf(score, TIES).find((b) => b.notes.length > 1)
+    expect(chord).toBeDefined()
+    const before = chord.notes.length
+    const survivor = chord.notes[1]
+    const survivorPitch = survivor.realValue
+
+    expect(deleteNotes([chord.notes[0]], settings).ok).toBe(true)
+
+    expect(chord.notes).toHaveLength(before - 1)
+    expect(chord.isRest).toBe(false)
+    expect(survivor.realValue).toBe(survivorPitch)
+  })
+
+  it('RENUMBERS note.index, which drives whammy generation', () => {
+    const score = loadFixture()
+    const chord = beatsOf(score, TIES).find((b) => b.notes.length > 1)
+    // removeNote() splices without renumbering, so without the fix the survivor
+    // would keep index 1 and no note would be index 0.
+    expect(deleteNotes([chord.notes[0]], settings).ok).toBe(true)
+    expect(chord.notes.map((n) => n.index)).toEqual(chord.notes.map((_, i) => i))
+  })
+
+  it('leaves NO link pointing at a deleted note', () => {
+    const score = loadFixture()
+    const linked = everyNote(score).filter(
+      (n) => n.tieDestination || n.hammerPullDestination || n.slideTarget,
+    )
+    expect(linked.length).toBeGreaterThan(0) // the fixture really has links
+
+    const victims = new Set(linked)
+    expect(deleteNotes(linked, settings).ok).toBe(true)
+
+    // A stale link survives finish(): Note.finish() only heals a tie whose
+    // origin is already null, because `tieOrigin ?? findTieOrigin(this)`
+    // short-circuits on a stale reference.
+    let dangling = 0
+    for (const note of everyNote(score)) {
+      for (const field of LINK_FIELDS) if (victims.has(note[field])) dangling += 1
+    }
+    expect(dangling).toBe(0)
+  })
+
+  it('and the deleted notes are gone from the midi', () => {
+    const before = midiNoteOns(loadFixture()).length
+
+    const score = loadFixture()
+    const notes = beatsOf(score, LEAD).slice(0, 4).flatMap((b) => b.notes)
+    expect(deleteNotes(notes, settings).ok).toBe(true)
+
+    expect(midiNoteOns(score).length).toBe(before - notes.length)
+  })
+
+  it('survives a .gp round trip: the rests come back as rests', () => {
+    const score = loadFixture()
+    const notes = beatsOf(score, LEAD).slice(0, 2).flatMap((b) => b.notes)
+    expect(deleteNotes(notes, settings).ok).toBe(true)
+
+    const back = roundTrip(score)
+    const beats = beatsOf(back, LEAD)
+    expect(beats[0].isRest).toBe(true)
+    expect(beats[1].isRest).toBe(true)
+    expect(beats[2].isRest).toBe(false)
+    expect(back.masterBars.length).toBe(score.masterBars.length)
+  })
+
+  it('deletes a percussion note too: it is silence like any other', () => {
+    const score = loadFixture()
+    const beat = beatsOf(score, DRUMS)[0]
+    expect(beat.notes.length).toBeGreaterThan(0)
+    expect(deleteNotes([...beat.notes], settings).ok).toBe(true)
+    expect(beat.isRest).toBe(true)
+  })
+
+  it('refuses an empty list and a note with no score', () => {
+    expect(deleteNotes([], settings).ok).toBe(false)
+    expect(deleteNotes(null, settings).ok).toBe(false)
+    expect(deleteNotes([{ beat: null }], settings).ok).toBe(false)
+  })
+
+  it('reports how many notes went and how many beats fell silent', () => {
+    const score = loadFixture()
+    const notes = beatsOf(score, LEAD).slice(0, 3).flatMap((b) => b.notes)
+    expect(deleteNotes(notes, settings)).toMatchObject({
+      ok: true,
+      noteCount: notes.length,
+      beatCount: 3,
+      restBeats: 3,
+    })
+  })
+
+  it('does not disturb the other tracks', () => {
+    const score = loadFixture()
+    const untouched = snapshotTrack(score.tracks[BASS])
+    const notes = beatsOf(score, LEAD).slice(0, 4).flatMap((b) => b.notes)
+    expect(deleteNotes(notes, settings).ok).toBe(true)
+    expect(snapshotTrack(score.tracks[BASS])).toEqual(untouched)
   })
 })
 

@@ -10,6 +10,7 @@ import {
   fretRange,
   renameTrack,
   retuneTrack,
+  deleteNotes,
   setNoteFret,
   shiftNoteString,
   stringedNotes,
@@ -19,7 +20,15 @@ import {
   tuningChoices,
   tuningForString,
 } from '@/utils/scoreEdits'
-import { loadFile, midiNoteOns, roundTrip, snapshotTrack, stringedTracks, tempoMap } from './helpers'
+import {
+  loadFile,
+  midiNoteOns,
+  roundTrip,
+  settings,
+  snapshotTrack,
+  stringedTracks,
+  tempoMap,
+} from './helpers'
 
 // The same operations, checked as INVARIANTS against whatever real scores are
 // pointed at - no assumption about track order, string counts or fret windows.
@@ -243,6 +252,49 @@ describe.skipIf(scores.length === 0)('invariants on real scores', () => {
         expect(moved).toBeGreaterThan(0)
         // Same pitches, same channels, same ticks - only the fingering moved.
         expect(midiNoteOns(score)).toEqual(before)
+      })
+
+      it('deleting linked notes leaves no dangling link and no lost bar', () => {
+        const LINK_FIELDS = [
+          'tieOrigin', 'tieDestination', 'hammerPullOrigin', 'hammerPullDestination',
+          'slurOrigin', 'slurDestination', 'slideOrigin', 'slideTarget',
+          'effectSlurOrigin', 'effectSlurDestination', 'bendOrigin',
+        ]
+        const everyNote = (score) => {
+          const notes = []
+          for (const track of score.tracks) {
+            for (const staff of track.staves) {
+              for (const bar of staff.bars) {
+                for (const voice of bar.voices) {
+                  for (const beat of voice.beats) notes.push(...beat.notes)
+                }
+              }
+            }
+          }
+          return notes
+        }
+
+        const score = loadFile(file)
+        const bars = score.masterBars.length
+        // Target the notes that ARE the origin of a link: the hard case.
+        const linked = everyNote(score)
+          .filter((n) => n.tieDestination || n.hammerPullDestination || n.slideTarget)
+          .slice(0, 40)
+        if (linked.length === 0) return
+
+        const victims = new Set(linked)
+        expect(deleteNotes(linked, settings).ok).toBe(true)
+
+        let dangling = 0
+        for (const note of everyNote(score)) {
+          for (const field of LINK_FIELDS) if (victims.has(note[field])) dangling += 1
+        }
+        expect(dangling).toBe(0)
+
+        // Emptying beats must not lose bars, and the result must still export.
+        expect(score.masterBars.length).toBe(bars)
+        expect(midiNoteOns(score).length).toBeGreaterThan(0)
+        expect(roundTrip(score).masterBars.length).toBe(bars)
       })
 
       it('offers a reachable tuning list for every stringed staff', () => {

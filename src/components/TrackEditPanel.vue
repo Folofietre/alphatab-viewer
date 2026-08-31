@@ -208,10 +208,23 @@
             <kbd>Alt + &#8679; + &uarr;&darr;</kbd>
           </div>
 
+          <div class="row">
+            <button
+              type="button"
+              class="danger"
+              :disabled="!canEdit"
+              title="Replace every note in the selection with silence of the same length"
+              @click="deleteSelection"
+            >Silence</button>
+            <kbd>Suppr</kbd>
+          </div>
+
           <p class="hint">
             Applied to <strong>every</strong> note at once, or to none: if one
             would run off the neck, the whole selection is refused. Drag on the
             score to change the range, or click a note to leave it.
+            <strong>Silence</strong> cannot be undone: use <strong>Revert</strong>
+            in the Score tab to get the file back.
           </p>
         </template>
 
@@ -260,10 +273,23 @@
             >Pitch -1</button>
             <kbd title="Alt, Shift and the up or down arrow transpose the note by a semitone">Alt + &#8679; + &uarr;&darr;</kbd>
           </div>
+          <div class="row">
+            <button
+              type="button"
+              class="danger"
+              :disabled="!canEdit"
+              title="Replace this note with silence of the same length"
+              @click="deleteSelection"
+            >Silence</button>
+            <kbd>Suppr</kbd>
+          </div>
+
           <p class="hint">
             <strong>String</strong> keeps the pitch and only moves the fingering,
             so it stays silent. <strong>Pitch</strong> moves the note by a
             semitone on the same string, and plays it.
+            <strong>Silence</strong> removes it, leaving a rest of the same
+            length, and cannot be undone.
           </p>
         </template>
       </div>
@@ -293,6 +319,7 @@ const {
   retune,
   nudgeSelectedFret,
   nudgeSelectedString,
+  deleteSelection,
   MIN_FRET,
   MAX_FRET,
   RETUNE_KEEP_PITCH,

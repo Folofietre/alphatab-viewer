@@ -58,6 +58,20 @@ select {
   @include edit-hint;
 }
 
+// The one irreversible action in this panel, so it does not look like the
+// others. A warning tint rather than a red fill: it is a normal edit that
+// happens to be unrecoverable, not a hazard to be feared into avoiding.
+.danger {
+  border-color: var(--warn-border);
+  color: var(--warn-text-chrome);
+
+  &:hover:not(:disabled) {
+    background: var(--warn-bg);
+    border-color: var(--warn-text-chrome);
+    color: var(--warn-text-chrome);
+  }
+}
+
 // A read-out rather than a control: the selected note, or a percussion track's
 // fixed kit. Tabular so the numbers do not jitter as the selection moves.
 .inspector {

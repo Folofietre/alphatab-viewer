@@ -70,12 +70,16 @@ import * as alphaTab from '@coderline/alphatab'
 //    fret change, but it is only consulted by `findTieOrigin` for notes that are
 //    NOT stringed, and every operation here is on stringed notes.
 //
-// And one thing deliberately NOT done: nothing here calls `score.finish()`.
-// finish() is idempotent (measured on a 118-bar score: 16ms, then 9.5ms, then
-// 6.2ms, with beat and note counts unchanged), but all it recomputes is
-// structure and durations, and no operation in this file changes either -
-// frets, tunings, tempo values and track names are read straight from the model
-// at render time. Adding or removing beats or bars WOULD need it.
+// `score.finish()` is called by exactly ONE operation, `deleteNotes`, and by no
+// other. finish() is idempotent (measured on a 118-bar score: 16ms, then 9.5ms,
+// then 6.2ms, with beat and note counts unchanged), but all it recomputes is
+// structure, durations and cross-note links - and every other operation here
+// changes none of those. Frets, tunings, tempo values and track names are read
+// straight from the model at render time.
+//
+// Deleting is the exception because it is the only STRUCTURAL edit: it changes
+// which notes exist, which invalidates the tie and slide resolution and the
+// per-beat `noteValueLookup`. See `deleteNotes`.
 
 // Fret bounds. A UI guard rail, not an alphaTab limit: the model holds any
 // number. 24 covers every instrument this viewer is likely to open, and a real
@@ -707,6 +711,113 @@ export function shiftNotesFret(notes, delta) {
 
   for (const note of list) note.fret += step
   return applied({ noteCount: count })
+}
+
+// Every field on `Note` that points at another Note.
+//
+// Listed once and swept as a group, because the failure mode of missing one is
+// invisible: a link to a deleted note SURVIVES finish(). `Note.finish()` heals a
+// tie whose origin is null (`if (!tieOrigin) this.isTieDestination = false`) but
+// its `this.tieOrigin ?? findTieOrigin(this)` short-circuits on a stale
+// reference, so the deleted note stays the origin.
+//
+// Measured on a real .gpx: deleting 20 linked notes without this sweep left 34
+// dangling references alive after finish(), and the generated midi differed
+// (7184 note-ons against 7186) because a tie to a deleted note kept extending a
+// duration. Nothing crashed - which is exactly why it needs a test rather than
+// trust.
+const NOTE_LINK_FIELDS = [
+  'tieOrigin',
+  'tieDestination',
+  'hammerPullOrigin',
+  'hammerPullDestination',
+  'slurOrigin',
+  'slurDestination',
+  'slideOrigin',
+  'slideTarget',
+  'effectSlurOrigin',
+  'effectSlurDestination',
+  'bendOrigin',
+]
+
+function* everyNote(score) {
+  for (const track of score?.tracks ?? []) {
+    for (const staff of track.staves ?? []) {
+      for (const bar of staff.bars ?? []) {
+        for (const voice of bar.voices ?? []) {
+          for (const beat of voice.beats ?? []) {
+            for (const note of beat.notes ?? []) yield note
+          }
+        }
+      }
+    }
+  }
+}
+
+// 7d. Replace notes with silence.
+//
+// A note becomes silence by being REMOVED from its beat, and the duration takes
+// care of itself: `Beat.isRest` is a getter over
+// `isEmpty || !deadSlapped && notes.length === 0`, and `beat.duration` is
+// independent of its notes. So emptying a beat turns it into a rest of exactly
+// the same length, with no duration arithmetic and no re-layout of the bar.
+//
+// A beat that still holds other notes keeps sounding them: deleting one note of
+// a chord silences that note, not the chord.
+//
+// This is the only operation here that is NOT reversible by doing the opposite.
+// A transposition can be transposed back; a deleted note's fret, effects and
+// links are gone. `Revert` in the score panel is the way back.
+//
+// Three things have to happen beyond the removal itself, and all three are
+// silent corruption if skipped:
+//
+//  1. `note.index` must be RENUMBERED. `addNote` sets it to `notes.length` and
+//     `removeNote` does not renumber, so deleting note 0 of three leaves the
+//     survivors at index 1 and 2. `MidiFileGenerator` reads `note.index === 0`
+//     to decide where to generate a beat's whammy bar, so a beat could lose its
+//     whammy entirely.
+//  2. Every cross-note link to a removed note must be NULLED. See
+//     NOTE_LINK_FIELDS.
+//  3. `score.finish()` must run, to rebuild the per-beat `noteValueLookup` and
+//     to re-resolve or clear the links that just lost their target.
+export function deleteNotes(notes, settings) {
+  const list = [...(notes ?? [])]
+  if (list.length === 0) return refused('Nothing selected to delete.')
+
+  const score = list[0].beat?.voice?.bar?.staff?.track?.score ?? null
+  if (!score) return refused('Those notes are not attached to a score.')
+
+  const victims = new Set(list)
+  const beats = new Set(list.map((note) => note.beat))
+
+  for (const note of list) note.beat?.removeNote(note)
+
+  // 1. Renumber the survivors of every touched beat.
+  for (const beat of beats) {
+    beat.notes.forEach((note, index) => {
+      note.index = index
+    })
+  }
+
+  // 2. Drop every link that now points at nothing. A full sweep rather than
+  // following the victims' own back-references: several of these fields have no
+  // inverse (`bendOrigin` for one), so only walking the score is provably
+  // complete. Measured at 12ms over 7295 notes, which is nothing for a
+  // deliberate one-shot action.
+  for (const note of everyNote(score)) {
+    for (const field of NOTE_LINK_FIELDS) {
+      if (victims.has(note[field])) note[field] = null
+    }
+  }
+
+  // 3. Rebuild what the removal invalidated.
+  score.finish(settings ?? null)
+
+  let restBeats = 0
+  for (const beat of beats) if (beat.isRest) restBeats += 1
+
+  return applied({ noteCount: list.length, beatCount: beats.size, restBeats })
 }
 
 // 7c. One note's fret, which DOES change the pitch by that many semitones.

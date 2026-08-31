@@ -146,6 +146,24 @@ export const BINDINGS = [
     appliesTo: (_el, player) => player.isScoreLoaded.value,
     run: saveScore,
   },
+  // Delete and Backspace both, since editors accept either and the user's
+  // keyboard may label only one of them. They stand down for anything that owns
+  // typing keys, where these are the text-editing keys and not ours.
+  //
+  // No repeat: the selection is cleared by the delete, so a held key would have
+  // nothing to act on anyway, and a chain-delete is not a gesture anyone means.
+  {
+    code: 'Delete',
+    label: 'Replace the selection with silence',
+    appliesTo: (el) => !ownsTypingKeys(el),
+    run: (_player, _event, edit) => edit.deleteSelection(),
+  },
+  {
+    code: 'Backspace',
+    label: 'Replace the selection with silence',
+    appliesTo: (el) => !ownsTypingKeys(el),
+    run: (_player, _event, edit) => edit.deleteSelection(),
+  },
   {
     code: 'ArrowUp',
     label: 'Selected note: up one string, same pitch',
