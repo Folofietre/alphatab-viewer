@@ -170,6 +170,27 @@ function naturalHarmonicRefusal(count, what) {
   )
 }
 
+// What a fret shift of `step` would need, measured over any set of notes.
+//
+// Shared by the whole-track transposition and the range batch so the two cannot
+// disagree about what is possible. It only MEASURES; each caller words its own
+// refusal, because "this track" and "these 12 notes" need different messages.
+export function measureFretShift(notes, step) {
+  let min = Number.POSITIVE_INFINITY
+  let max = Number.NEGATIVE_INFINITY
+  let count = 0
+  let harmonics = 0
+  for (const note of notes) {
+    if (!note.isStringed) continue
+    count += 1
+    if (note.fret < min) min = note.fret
+    if (note.fret > max) max = note.fret
+    if (note.harmonicType === alphaTab.model.HarmonicType.Natural) harmonics += 1
+  }
+  if (count === 0) return { count: 0, min: 0, max: 0, harmonics: 0, low: 0, high: 0 }
+  return { count, min, max, harmonics, low: min + step, high: max + step }
+}
+
 // Lowest and highest fret in use across a staff, with how many notes there are.
 // `count: 0` means there is nothing to move.
 export function fretRange(staff) {
@@ -182,6 +203,34 @@ export function fretRange(staff) {
     if (note.fret > max) max = note.fret
   }
   return count === 0 ? { count: 0, min: 0, max: 0 } : { count, min, max }
+}
+
+// The stringed notes of a track whose BEAT STARTS inside a tick window.
+//
+// `absolutePlaybackStart` is model-absolute: it ignores repeats, and it is
+// comparable across staves and across voices, which the per-voice `beat.index`
+// is not. So it is the right key for "what did the user drag over".
+//
+// A beat that starts just before the window is excluded even if it still sounds
+// inside it. "Beats that START in the selection" is a rule a user can predict;
+// "beats that overlap it" would silently pull in a note they did not drag over.
+export function notesInTickRange(track, startTick, endTick) {
+  const notes = []
+  for (const staff of track?.staves ?? []) {
+    if (!staff.isStringed) continue
+    for (const bar of staff.bars ?? []) {
+      for (const voice of bar.voices ?? []) {
+        for (const beat of voice.beats ?? []) {
+          const start = beat.absolutePlaybackStart
+          if (start < startTick || start >= endTick) continue
+          for (const note of beat.notes ?? []) {
+            if (note.isStringed) notes.push(note)
+          }
+        }
+      }
+    }
+  }
+  return notes
 }
 
 // Flat, plain-object description of a note, for the reactive UI.
@@ -413,26 +462,15 @@ export function transposeTrackByFrets(track, semitones) {
   const staves = stringedStaves(track)
   if (staves.length === 0) return refused('This track has no tablature to transpose.')
 
-  let min = Number.POSITIVE_INFINITY
-  let max = Number.NEGATIVE_INFINITY
-  let count = 0
-  for (const staff of staves) {
-    const range = fretRange(staff)
-    if (range.count === 0) continue
-    count += range.count
-    min = Math.min(min, range.min)
-    max = Math.max(max, range.max)
-  }
+  const all = staves.flatMap((staff) => [...stringedNotes(staff)])
+  const { count, min, max, low, high, harmonics } = measureFretShift(all, step)
   if (count === 0) return refused('This track has no fretted notes to transpose.')
 
   // Pitfall 4: these notes would not follow the frets.
-  const harmonics = staves.reduce((total, staff) => total + countNaturalHarmonics(staff), 0)
   if (harmonics > 0) {
     return refused(naturalHarmonicRefusal(harmonics, 'moving the frets'))
   }
 
-  const low = min + step
-  const high = max + step
   if (low < MIN_FRET) {
     return refused(
       `Cannot move ${count} notes by ${signed(step)} semitones: the lowest one sits on fret ${min} and would land on fret ${low}. Frets stay between ${MIN_FRET} and ${MAX_FRET}. Transpose the tuning instead to keep the fingering.`,
@@ -523,81 +561,155 @@ export function retuneTrack(track, tunings, mode) {
   return applied({ noteCount: count, staffCount: staves.length })
 }
 
-// Write `note.string`, keeping `Beat.noteStringLookup` in step. See pitfall 5:
-// this Map is read by the midi generator and by tie resolution, and nothing but
-// `finish()` would otherwise rebuild it.
-function writeNoteString(note, string) {
-  const lookup = note.beat?.noteStringLookup
-  if (lookup) lookup.delete(note.string)
-  note.string = string
-  if (lookup) lookup.set(string, note)
+// Apply a set of `{ note, string, fret }` moves, keeping every
+// `Beat.noteStringLookup` in step. See pitfall 5: that Map is read by the midi
+// generator and by tie resolution, and nothing but `finish()` rebuilds it.
+//
+// TWO PHASES, and that is the whole point. Moving a chord up one string means
+// the note leaving string 4 and the note arriving on string 4 are both in the
+// batch; writing them one at a time would let the departing note's `delete`
+// erase the arriving note's entry, or vice versa, depending on order. Dropping
+// every mover from its lookup first makes the result independent of order.
+function applyNoteStringMoves(moves) {
+  for (const { note } of moves) note.beat?.noteStringLookup?.delete(note.string)
+  for (const { note, string, fret } of moves) {
+    note.string = string
+    note.fret = fret
+    note.beat?.noteStringLookup?.set(string, note)
+  }
 }
 
-// 7a. Move one note to the ADJACENT STRING, keeping the pitch it sounds.
+// 7a. Move notes to the ADJACENT STRING, keeping the pitch each one sounds.
 //
-// This is the "same note, different place on the neck" move: the fret changes to
-// compensate for the new string's tuning, so the score sounds identical and only
-// the fingering moves.
+// This is the "same notes, different place on the neck" move: each fret changes
+// to compensate for the new string's tuning, so the passage sounds identical and
+// only the fingering moves.
 //
 // Direction: `delta` of +1 goes to the next string UP, meaning both higher in
-// pitch and higher on the tablature, since `staff.tuning` is stored with the
-// top tab line first and `note.string` counts up from the lowest string
-// (pitfall 2). A higher-pitched string needs a LOWER fret for the same note, so
-// moving up moves the fret number down. That is what Guitar Pro does, and it
-// keeps the note moving the way the key points on screen.
-export function shiftNoteString(note, delta) {
-  if (!note) return refused('No note selected.')
-  if (!note.isStringed) {
-    return refused('That note has no string: it is written as percussion or without tablature.')
-  }
+// pitch and higher on the tablature, since `staff.tuning` is stored with the top
+// tab line first and `note.string` counts up from the lowest string (pitfall 2).
+// A higher-pitched string needs a LOWER fret for the same note, so moving up
+// moves the fret number down. That is what Guitar Pro does, and it keeps the
+// note moving the way the key points on screen.
+//
+// ALL OR NOTHING. Every note is checked before any is written, so a selection of
+// twelve notes never ends up with nine moved and three left behind - which would
+// not be a re-fingering of the passage at all.
+export function shiftNotesString(notes, delta) {
+  const list = [...(notes ?? [])]
+  if (list.length === 0) return refused('No notes selected.')
+
   const step = Math.round(Number(delta))
-  if (!Number.isFinite(step) || step === 0) return noop()
+  if (!Number.isFinite(step)) return refused('Enter a number of strings.')
+  if (step === 0) return noop()
 
-  const staff = note.beat?.voice?.bar?.staff ?? null
-  const strings = staff?.tuning?.length ?? 0
-  if (!staff || strings === 0) return refused('That note is not on a tablature staff.')
+  const moves = []
+  const movers = new Set(list)
+  let harmonics = 0
 
-  const target = note.string + step
-  if (target < 1 || target > strings) {
-    return refused(
-      `There is no string ${target}: this staff has ${strings}. The note is already on the ${step > 0 ? 'highest' : 'lowest'} string.`,
-    )
+  for (const note of list) {
+    if (!note.isStringed) {
+      return refused('That selection includes notes with no string: percussion, or a staff without tablature.')
+    }
+    // Pitfall 4: a natural harmonic sounds at `harmonicPitch + stringTuning`, so
+    // changing its string changes its pitch and no fret can compensate.
+    if (note.harmonicType === alphaTab.model.HarmonicType.Natural) harmonics += 1
+
+    const staff = note.beat?.voice?.bar?.staff ?? null
+    const strings = staff?.tuning?.length ?? 0
+    if (!staff || strings === 0) return refused('That selection is not on a tablature staff.')
+
+    const target = note.string + step
+    if (target < 1 || target > strings) {
+      return refused(
+        list.length === 1
+          ? `There is no string ${target}: this staff has ${strings}. The note is already on the ${step > 0 ? 'highest' : 'lowest'} string.`
+          : `${countNotes(list.length)} cannot move ${step > 0 ? 'up' : 'down'} a string: at least one is already on the ${step > 0 ? 'highest' : 'lowest'} string.`,
+      )
+    }
+
+    // A beat holds at most one note per string, and `noteStringLookup` is keyed
+    // on exactly that. Landing on a string held by a note that is NOT moving
+    // would make two notes claim one key and silently drop one of them.
+    const occupant = note.beat.getNoteOnString(target)
+    if (occupant && occupant !== note && !movers.has(occupant)) {
+      return refused(
+        `String ${target} is already played by another note in that chord (fret ${occupant.fret}).`,
+      )
+    }
+
+    // Keep the pitch: newFret = fret + oldStringTuning - newStringTuning. Both
+    // reads go through tuningForString because of pitfall 2.
+    const newFret =
+      note.fret + tuningForString(staff.tuning, note.string) - tuningForString(staff.tuning, target)
+    if (newFret < MIN_FRET || newFret > MAX_FRET) {
+      return refused(
+        list.length === 1
+          ? `Keeping this note on string ${target} would need fret ${newFret}, outside the ${MIN_FRET}-${MAX_FRET} range.`
+          : `Keeping the pitches would need fret ${newFret} on at least one note, outside the ${MIN_FRET}-${MAX_FRET} range.`,
+      )
+    }
+
+    moves.push({ note, string: target, fret: newFret })
   }
 
-  // Pitfall 4: a natural harmonic sounds at `harmonicPitch + stringTuning`, so
-  // changing its string changes its pitch and no fret can compensate.
-  if (note.harmonicType === alphaTab.model.HarmonicType.Natural) {
-    return refused(
-      'That note is a natural harmonic: its pitch comes from the harmonic node, so it cannot be moved to another string without changing what it sounds.',
-    )
+  if (harmonics > 0) {
+    return refused(naturalHarmonicRefusal(harmonics, 'moving to another string'))
   }
 
-  // A beat holds at most one note per string, and `noteStringLookup` is keyed on
-  // exactly that. Moving onto an occupied string would make two notes claim one
-  // key and silently drop one of them from the Map.
-  const occupant = note.beat.getNoteOnString(target)
-  if (occupant && occupant !== note) {
-    return refused(
-      `String ${target} is already played by another note in this chord (fret ${occupant.fret}).`,
-    )
-  }
-
-  // Keep the pitch: newFret = fret + oldStringTuning - newStringTuning. Both
-  // reads go through tuningForString because of pitfall 2.
-  const newFret =
-    note.fret + tuningForString(staff.tuning, note.string) - tuningForString(staff.tuning, target)
-  if (newFret < MIN_FRET || newFret > MAX_FRET) {
-    return refused(
-      `Keeping this note on string ${target} would need fret ${newFret}, outside the ${MIN_FRET}-${MAX_FRET} range.`,
-    )
-  }
-
-  writeNoteString(note, target)
-  note.fret = newFret
-  return applied({ string: target, fret: newFret })
+  applyNoteStringMoves(moves)
+  return applied({ noteCount: moves.length })
 }
 
-// 7b. One note's fret, which DOES change the pitch by that many semitones.
+// One note, which is the keyboard's case. A wrapper rather than a second
+// implementation: the ordering and occupancy logic above is exactly the part
+// that must not exist twice.
+export function shiftNoteString(note, delta) {
+  if (!note) return refused('No note selected.')
+  return shiftNotesString([note], delta)
+}
+
+function countNotes(n) {
+  return n === 1 ? '1 note' : `${n} notes`
+}
+
+// 7b. Shift the fret of several notes by the same number of semitones, which
+// DOES change what they sound.
+//
+// ALL OR NOTHING, like the string move: a selection where some notes moved and
+// others hit the end of the neck is not a transposition of the passage.
+export function shiftNotesFret(notes, delta) {
+  const list = [...(notes ?? [])]
+  if (list.length === 0) return refused('No notes selected.')
+
+  const step = Math.round(Number(delta))
+  if (!Number.isFinite(step)) return refused('Enter a number of semitones.')
+  if (step === 0) return noop()
+
+  const { count, min, max, low, high, harmonics } = measureFretShift(list, step)
+  if (count === 0) return refused('That selection has no fretted notes.')
+  if (count !== list.length) {
+    return refused('That selection includes notes with no fret: percussion, or a staff without tablature.')
+  }
+  if (harmonics > 0) {
+    return refused(naturalHarmonicRefusal(harmonics, 'moving the frets'))
+  }
+  if (low < MIN_FRET) {
+    return refused(
+      `Cannot move ${countNotes(count)} by ${signed(step)} semitones: the lowest sits on fret ${min} and would land on fret ${low}. Frets stay between ${MIN_FRET} and ${MAX_FRET}.`,
+    )
+  }
+  if (high > MAX_FRET) {
+    return refused(
+      `Cannot move ${countNotes(count)} by ${signed(step)} semitones: the highest sits on fret ${max} and would land on fret ${high}. Frets stay between ${MIN_FRET} and ${MAX_FRET}.`,
+    )
+  }
+
+  for (const note of list) note.fret += step
+  return applied({ noteCount: count })
+}
+
+// 7c. One note's fret, which DOES change the pitch by that many semitones.
 // `realValue` is a getter over `stringTuning + fret`, so it follows this
 // immediately, with no finish() and no render (verified).
 export function setNoteFret(note, fret) {

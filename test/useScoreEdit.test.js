@@ -51,11 +51,16 @@ const host = {
   onScoreCleared: null,
   midiStale: false,
   previews: [],
+  beatPreviews: [],
   markMidiStale() {
     host.midiStale = true
   },
   previewNote(note) {
     host.previews.push(note)
+    return true
+  },
+  previewBeat(beat) {
+    host.beatPreviews.push(beat)
     return true
   },
   markDirty() {
@@ -91,7 +96,8 @@ vi.mock('@/utils/exportScore', () => ({
 
 const { useScoreEdit } = await import('@/composables/useScoreEdit')
 const { loadFixture } = await import('./helpers')
-const { stringedNotes, RETUNE_KEEP_PITCH, RETUNE_REASSIGN } = await import('@/utils/scoreEdits')
+const { stringedNotes, MAX_FRET, RETUNE_KEEP_PITCH, RETUNE_REASSIGN } =
+  await import('@/utils/scoreEdits')
 
 const LEAD = 0
 const RHYTHM = 1
@@ -124,6 +130,7 @@ function fakeApi() {
   return {
     noteMouseDown: emitter(),
     beatMouseDown: emitter(),
+    playbackRangeHighlightChanged: emitter(),
     scoreLoaded: emitter(),
     postRenderFinished: emitter(),
     settings: { core: { includeNoteBounds: true }, player: { enableUserInteraction: true } },
@@ -140,6 +147,27 @@ function clickAt(hitNote) {
   if (hitNote) host.api.noteMouseDown.emit(hitNote)
 }
 
+// Reproduce a click-and-drag range. alphaTab normalises the order itself and
+// fires EMPTY args for a plain click, which is what `dragOver(null)` stands for.
+function dragOver(startBeat, endBeat) {
+  if (!startBeat || !endBeat) {
+    host.api.playbackRangeHighlightChanged.emit({})
+    return
+  }
+  host.api.playbackRangeHighlightChanged.emit({ startBeat, endBeat })
+}
+
+// The beats of a track, in model order.
+function beatsOf(trackIndex) {
+  const beats = []
+  for (const staff of score.tracks[trackIndex].staves) {
+    for (const bar of staff.bars) {
+      for (const voice of bar.voices) beats.push(...voice.beats)
+    }
+  }
+  return beats
+}
+
 beforeEach(async () => {
   score = loadFixture()
   host.api = fakeApi()
@@ -154,6 +182,7 @@ beforeEach(async () => {
   // The flat descriptors the panel reads, in the shape usePlayer builds.
   host.midiStale = false
   host.previews = []
+  host.beatPreviews = []
   player.isPlaying.value = false
   player.isScoreLoaded.value = true
   player.tracks.value = score.tracks.map((track) => ({
@@ -560,6 +589,214 @@ describe('the selected note string (Alt + arrow)', () => {
     edit.clearSelection()
     expect(edit.nudgeSelectedString(1).ok).toBe(false)
     expect(host.renders).toEqual([])
+  })
+})
+
+describe('the dragged range', () => {
+  it('collects the notes of the beats it covers, on the track it started on', () => {
+    const beats = beatsOf(LEAD)
+    dragOver(beats[0], beats[3])
+
+    expect(edit.selectedRange.value).toMatchObject({
+      trackIndex: LEAD,
+      startBar: 0,
+      noteCount: 4, // the fixture's Lead track is one note per beat
+    })
+  })
+
+  it('is dropped by a plain click, which alphaTab reports as empty args', () => {
+    const beats = beatsOf(LEAD)
+    dragOver(beats[0], beats[3])
+    expect(edit.selectedRange.value).not.toBeNull()
+
+    dragOver(null)
+    expect(edit.selectedRange.value).toBeNull()
+  })
+
+  it('and a single-note selection exclude each other', () => {
+    const note = [...stringedNotes(score.tracks[LEAD].staves[0])][0]
+    const beats = beatsOf(LEAD)
+
+    host.api.noteMouseDown.emit(note)
+    expect(edit.selectedNote.value).not.toBeNull()
+
+    dragOver(beats[0], beats[3])
+    expect(edit.selectedNote.value).toBeNull() // the range won
+    // The rings did not go away, they changed owner: they now mark every note
+    // the batch will touch, which is the same marker meaning the same thing.
+    expect(edit.selectedNoteRects.value).toHaveLength(8)
+
+    host.api.noteMouseDown.emit(note)
+    expect(edit.selectedRange.value).toBeNull() // the click won it back
+  })
+
+  it('points the panel at the track the drag started on', () => {
+    const beats = beatsOf(BASS)
+    dragOver(beats[0], beats[2])
+    expect(edit.selectedTrackIndex.value).toBe(BASS)
+  })
+
+  it('is cleared by a new score and by closing one', () => {
+    const beats = beatsOf(LEAD)
+    dragOver(beats[0], beats[3])
+    host.api.scoreLoaded.emit(score)
+    expect(edit.selectedRange.value).toBeNull()
+
+    dragOver(beats[0], beats[3])
+    host.onScoreCleared()
+    expect(edit.selectedRange.value).toBeNull()
+  })
+})
+
+describe('the range wears the same marker as a single note', () => {
+  it('rings every note it will edit, not just the band alphaTab paints', () => {
+    const beats = beatsOf(LEAD)
+    dragOver(beats[0], beats[3])
+
+    // The fixture's Lead track renders score AND tab, so each of the 4 notes is
+    // drawn twice: 8 rectangles.
+    expect(edit.selectedRange.value.noteCount).toBe(4)
+    expect(edit.selectedNoteRects.value).toHaveLength(8)
+  })
+
+  it('rings exactly the selected notes, not the whole beat range', () => {
+    const beats = beatsOf(LEAD)
+    dragOver(beats[0], beats[1])
+    expect(edit.selectedNoteRects.value).toHaveLength(4) // 2 notes x 2 staves
+  })
+
+  it('drops the rings when the range goes', () => {
+    const beats = beatsOf(LEAD)
+    dragOver(beats[0], beats[3])
+    expect(edit.selectedNoteRects.value.length).toBeGreaterThan(0)
+    dragOver(null)
+    expect(edit.selectedNoteRects.value).toEqual([])
+  })
+
+  it('hands the rings back to the single note when one is clicked', () => {
+    const beats = beatsOf(LEAD)
+    const note = [...stringedNotes(score.tracks[LEAD].staves[0])][0]
+
+    dragOver(beats[0], beats[3])
+    expect(edit.selectedNoteRects.value).toHaveLength(8)
+
+    host.api.noteMouseDown.emit(note)
+    // Just the one note now, on its two staves.
+    expect(edit.selectedNoteRects.value).toHaveLength(2)
+  })
+
+  it('re-reads the rings after a render, like the single note does', () => {
+    const beats = beatsOf(LEAD)
+    dragOver(beats[0], beats[3])
+
+    host.api.boundsLookup = {
+      findBeats: (beat) => [{ notes: beat.notes.map((note) => ({
+        note, noteHeadBounds: { x: 5, y: 6, w: 7, h: 8 },
+      })) }],
+    }
+    host.api.postRenderFinished.emit()
+
+    expect(edit.selectedNoteRects.value).toHaveLength(4) // 4 notes, 1 staff now
+    expect(edit.selectedNoteRects.value[0]).toEqual({ x: 5, y: 6, w: 7, h: 8 })
+  })
+
+  it('looks a beat up once per beat, not once per note of a chord', () => {
+    // A chord: several notes sharing one beat must not repeat the lookup.
+    let calls = 0
+    const beats = beatsOf(LEAD)
+    const inner = host.api.boundsLookup.findBeats.bind(host.api.boundsLookup)
+    host.api.boundsLookup = {
+      findBeats: (beat) => {
+        calls += 1
+        return inner(beat)
+      },
+    }
+    dragOver(beats[0], beats[3])
+    expect(calls).toBe(4) // four beats, not four notes-times-staves
+  })
+})
+
+describe('batch editing a dragged range', () => {
+  function selectRange(trackIndex, from, to) {
+    const beats = beatsOf(trackIndex)
+    dragOver(beats[from], beats[to])
+    return beats.slice(from, to + 1).flatMap((b) => b.notes.filter((n) => n.isStringed))
+  }
+
+  it('Alt + Shift + arrow moves every fret in the range by a semitone', () => {
+    const notes = selectRange(LEAD, 0, 3)
+    const before = notes.map((n) => n.fret)
+
+    expect(edit.nudgeSelectedFret(1).ok).toBe(true)
+
+    expect(notes.map((n) => n.fret)).toEqual(before.map((f) => f + 1))
+    expect(host.renders).toEqual([{ reuseViewport: true, firstChangedMasterBar: 0 }])
+    expect(host.midiStale).toBe(true)
+  })
+
+  it('Alt + arrow moves every note a string, keeping every pitch', () => {
+    // A window with enough fret room to move up a string.
+    const notes = selectRange(LEAD, 4, 7)
+    const pitches = notes.map((n) => n.realValue)
+    const strings = notes.map((n) => n.string)
+
+    const result = edit.nudgeSelectedString(1)
+    if (!result.ok) {
+      // Legitimate if the window has a note too low on the neck; then it must
+      // have written nothing at all.
+      expect(notes.map((n) => n.string)).toEqual(strings)
+      return
+    }
+    expect(notes.map((n) => n.realValue)).toEqual(pitches)
+    expect(notes.map((n) => n.string)).toEqual(strings.map((s) => s + 1))
+  })
+
+  it('sounds the first beat rather than every note of the range', () => {
+    const notes = selectRange(LEAD, 0, 3)
+    edit.nudgeSelectedFret(1)
+    // One beat preview, not one per note.
+    expect(host.beatPreviews).toHaveLength(1)
+    expect(host.beatPreviews[0]).toBe(notes[0].beat)
+    expect(host.previews).toEqual([])
+  })
+
+  it('refuses the WHOLE range rather than moving part of it', () => {
+    // Bars 1-3 of the Rhythm track span fret 0 to fret 24, so neither direction
+    // fits: +1 runs past 24 and -1 runs below 0.
+    const notes = selectRange(RHYTHM, 0, 11)
+    expect(Math.min(...notes.map((n) => n.fret))).toBe(0)
+    expect(Math.max(...notes.map((n) => n.fret))).toBe(MAX_FRET)
+    const before = notes.map((n) => ({ string: n.string, fret: n.fret }))
+
+    const result = edit.nudgeSelectedFret(1)
+    expect(result.ok).toBe(false)
+    expect(result.reason).toMatch(/Frets stay between/)
+    expect(notes.map((n) => ({ string: n.string, fret: n.fret }))).toEqual(before)
+    expect(host.renders).toEqual([])
+    expect(host.midiStale).toBe(false)
+  })
+
+  it('EXPLAINS a range refusal, unlike the silent single-note one', () => {
+    selectRange(RHYTHM, 0, 11)
+    expect(edit.nudgeSelectedFret(1).ok).toBe(false)
+    // With twelve notes selected there is no guessing which one blocked it.
+    expect(edit.editMessage.value).toMatchObject({ kind: 'error' })
+  })
+
+  it('refuses a range containing natural harmonics', () => {
+    selectRange(HARM, 0, 3)
+    const result = edit.nudgeSelectedFret(1)
+    expect(result.ok).toBe(false)
+    expect(result.reason).toMatch(/natural harmonic/)
+  })
+
+  it('is blocked by playback like every other edit', () => {
+    const notes = selectRange(LEAD, 0, 3)
+    const before = notes.map((n) => n.fret)
+    player.isPlaying.value = true
+    expect(edit.nudgeSelectedFret(1).ok).toBe(false)
+    expect(edit.nudgeSelectedString(1).ok).toBe(false)
+    expect(notes.map((n) => n.fret)).toEqual(before)
   })
 })
 

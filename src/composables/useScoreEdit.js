@@ -9,8 +9,11 @@ import {
   describeNote,
   renameTrack,
   retuneTrack,
+  notesInTickRange,
   setNoteFret,
   shiftNoteString,
+  shiftNotesFret,
+  shiftNotesString,
   tempoInfo,
   transposeTrackByFrets,
   transposeTrackByTuning,
@@ -73,6 +76,19 @@ const selectedNote = shallowRef(null)
 const editMessage = shallowRef(null)
 
 const isExporting = ref(false)
+
+// The notes covered by a click-and-drag range, in a PLAIN array for the same
+// reason `selected` is a plain variable: these are model objects.
+//
+// alphaTab already builds and DRAWS this selection for its loop range, and
+// exposes it through `playbackRangeHighlightChanged` with the start and end
+// beats. So the range costs no new interaction code and no new marker - the
+// highlight blocks alphaTab paints are the marker.
+let rangeNotes = []
+
+// Flat description of that range, for the panel: which track, how many notes,
+// which bars. Null when there is no range.
+const selectedRange = shallowRef(null)
 
 // Where to draw the selection marker, as plain rectangles in the coordinate
 // space of alphaTab's host element: [{ x, y, w, h }].
@@ -161,6 +177,7 @@ function bind() {
   // handler is never called. See the comment at that setting.
   api.noteMouseDown.on((note) => {
     missedNote = false
+    clearRange()
     selected = note
     selectedNote.value = describeNote(note)
     // Selecting a note is also how the user says which track they are working
@@ -176,6 +193,56 @@ function bind() {
   // a bars-per-row change.
   api.postRenderFinished.on(() => {
     refreshSelectionRects()
+  })
+
+  // The click-and-drag range, straight from alphaTab's own loop selection.
+  //
+  // A plain click fires this with EMPTY args: `_cursorSelectRange` triggers `{}`
+  // when the start and end beats are the same, which is exactly what
+  // distinguishes a click from a drag. alphaTab also normalises the order
+  // itself, so `startBeat` is always the earlier one.
+  //
+  // The range is taken as a TICK WINDOW on the track the drag STARTED on. A drag
+  // that wanders onto another staff still edits the track it began on, which is
+  // the track the user was looking at - and it keeps every operation
+  // single-track, like the transposition and the retuning.
+  api.playbackRangeHighlightChanged.on((args) => {
+    const { startBeat, endBeat } = args ?? {}
+    if (!startBeat || !endBeat) {
+      clearRange()
+      return
+    }
+    const track = startBeat.voice?.bar?.staff?.track ?? null
+    if (!track) {
+      clearRange()
+      return
+    }
+
+    const startTick = startBeat.absolutePlaybackStart
+    const endTick = endBeat.absolutePlaybackStart + endBeat.playbackDuration
+    rangeNotes = notesInTickRange(track, startTick, endTick)
+
+    if (rangeNotes.length === 0) {
+      clearRange()
+      return
+    }
+
+    // A range and a single note are two different things to act on, so having
+    // both would make Alt+arrow ambiguous. The range wins, since it is the more
+    // deliberate gesture.
+    clearSelection()
+    selectedTrackIndex.value = track.index
+    selectedRange.value = {
+      trackIndex: track.index,
+      trackName: track.name?.trim() || `Track ${track.index + 1}`,
+      noteCount: rangeNotes.length,
+      startBar: startBeat.voice.bar.masterBar.index,
+      endBar: endBeat.voice.bar.masterBar.index,
+    }
+    // Ring every note the batch will touch, with the same marker the single
+    // selection uses.
+    refreshSelectionRects()
+    message(null, null)
   })
 
   // A click that landed on a beat but not on a note head DESELECTS.
@@ -205,6 +272,7 @@ function bind() {
   // Dropping the selection is what lets the old score graph be collected.
   scoreEditHost.onScoreCleared = () => {
     clearSelection()
+    clearRange()
     selectedTrackIndex.value = 0
     message(null, null)
   }
@@ -214,6 +282,7 @@ function bind() {
   // original bytes.
   api.scoreLoaded.on(() => {
     clearSelection()
+    clearRange()
     selectedTrackIndex.value = 0
     message(null, null)
   })
@@ -226,23 +295,52 @@ function clearSelection() {
   missedNote = false
 }
 
-// Re-read the selected note's rectangles from the bounds lookup.
+function clearRange() {
+  rangeNotes = []
+  selectedRange.value = null
+  // The rings went with it, unless a single note is selected.
+  refreshSelectionRects()
+}
+
+// Re-read the rectangles for everything currently selected, single note or
+// dragged range, from the bounds lookup.
 //
-// Called on selection and after every render, because a render rebuilds the
-// lookup and the old coordinates are then meaningless. `includeNoteBounds` in
-// usePlayer's settings is what makes `beatBounds.notes` non-empty at all.
+// ONE marker for both, deliberately. alphaTab's own selection band cannot do
+// this job: it spans the full bar height across every displayed staff, while a
+// batch edit touches exactly one track, so as edit feedback it says "all tracks"
+// about a single-track operation. It also cannot express the range rule ("beats
+// that START inside the selection") - a beat straddling the edge looks included
+// when it is not.
+//
+// So the two visuals keep two distinct jobs: the band is the time span, which is
+// also alphaTab's loop range (mouseUp calls `applyPlaybackRangeFromHighlight`),
+// and a ring means "this note will be edited". The single note is then just the
+// N=1 case.
+//
+// Called on every selection change and after every render, because a render
+// rebuilds the lookup and the old coordinates are then meaningless.
+// `includeNoteBounds` in usePlayer's settings is what makes `beatBounds.notes`
+// non-empty at all.
 function refreshSelectionRects() {
   const lookup = scoreEditHost.api?.boundsLookup ?? null
-  if (!selected || !lookup) {
+  const notes = selected ? [selected] : rangeNotes
+  if (notes.length === 0 || !lookup) {
     selectedNoteRects.value = []
     return
   }
+
+  // Grouped by beat rather than looked up per note: `findBeats` returns the
+  // bounds for a whole beat, so a chord of six notes would otherwise repeat the
+  // same lookup six times.
+  const wanted = new Set(notes)
   const rects = []
-  for (const beatBounds of lookup.findBeats(selected.beat) ?? []) {
-    for (const noteBounds of beatBounds.notes ?? []) {
-      if (noteBounds.note !== selected) continue
-      const b = noteBounds.noteHeadBounds
-      rects.push({ x: b.x, y: b.y, w: b.w, h: b.h })
+  for (const beat of new Set(notes.map((note) => note.beat))) {
+    for (const beatBounds of lookup.findBeats(beat) ?? []) {
+      for (const noteBounds of beatBounds.notes ?? []) {
+        if (!wanted.has(noteBounds.note)) continue
+        const b = noteBounds.noteHeadBounds
+        rects.push({ x: b.x, y: b.y, w: b.w, h: b.h })
+      }
     }
   }
   selectedNoteRects.value = rects
@@ -412,6 +510,11 @@ export function useScoreEdit() {
   // the neck, a natural harmonic - is explained, because those are surprising.
   function nudgeSelectedString(delta) {
     if (!canEdit.value) return refusePlayback()
+
+    // A dragged range takes precedence: it is the more deliberate gesture, and
+    // selecting one excludes the other.
+    if (rangeNotes.length > 0) return nudgeRangeString(delta)
+
     if (!selected) return { ok: false, changed: false, reason: 'No note selected.' }
 
     const bar = selectedNote.value?.barIndex ?? null
@@ -441,11 +544,45 @@ export function useScoreEdit() {
     })
   }
 
+  // The same two operations over a dragged range. All or nothing, so a refusal
+  // is loud rather than silent: with twelve notes selected there is no way to
+  // guess which one hit the end of the neck, and a repeated key is not going to
+  // walk out of it the way a single note does.
+  function nudgeRangeString(delta) {
+    const result = shiftNotesString(rangeNotes, delta)
+    if (result.changed) {
+      scoreEditHost.syncTrack(selectedRange.value?.trackIndex)
+      refreshSelectionRects()
+    }
+    return propagate(result, {
+      render: true,
+      midi: 'onPlay',
+      firstChangedBar: selectedRange.value?.startBar ?? null,
+    })
+  }
+
+  function nudgeRangeFret(delta) {
+    const result = shiftNotesFret(rangeNotes, delta)
+    if (result.changed) {
+      scoreEditHost.syncTrack(selectedRange.value?.trackIndex)
+      refreshSelectionRects()
+      // Sound the chord the range starts on rather than all of it: playing forty
+      // notes at once would be noise, and the first beat says what changed.
+      scoreEditHost.previewBeat(rangeNotes[0]?.beat)
+    }
+    return propagate(result, {
+      render: true,
+      midi: 'onPlay',
+      firstChangedBar: selectedRange.value?.startBar ?? null,
+    })
+  }
+
   // Alt + SHIFT + arrow. A refusal at the bounds is left SILENT on purpose: this
   // is a repeatable key, and a message per press would be noise. The reason is
   // still returned, so a caller that wants it can show it.
   function nudgeSelectedFret(delta) {
     if (!canEdit.value) return refusePlayback()
+    if (rangeNotes.length > 0) return nudgeRangeFret(delta)
     if (!selected) return { ok: false, changed: false, reason: 'No note selected.' }
     const target = selected.fret + delta
     if (target < MIN_FRET || target > MAX_FRET) {
@@ -506,6 +643,8 @@ export function useScoreEdit() {
     selectedTrackIndex,
     selectedNote,
     selectedNoteRects,
+    selectedRange,
+    clearRange,
     editedTrack,
     selectTrack,
     clearSelection,

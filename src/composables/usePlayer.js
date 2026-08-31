@@ -711,6 +711,14 @@ export const scoreEditHost = {
     api.playNote(note)
     return true
   },
+  // Same, for a whole beat. Used to preview a range edit: playing every note of
+  // a forty-note selection would be noise, but sounding the chord the selection
+  // starts on says what changed.
+  previewBeat(beat) {
+    if (!api || !beat || !isPlayerReady.value) return false
+    api.playBeat(beat)
+    return true
+  },
   // Set by useScoreEdit. Called by clearScore(), which has no alphaTab event to
   // hang off.
   onScoreCleared: null,

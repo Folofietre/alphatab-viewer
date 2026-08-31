@@ -126,11 +126,22 @@ the score selects its track too):
 | Transpose, keep the fingering (`Detune`) | `staff.stringTuning` |
 | Transpose, keep the tuning (`Move frets`) | `note.fret` on every note |
 | Retune, `Keep pitches` / `Keep frets` | `staff.stringTuning`, and the frets in the first mode |
-| One note across the strings | `note.string` + `note.fret`, via the buttons or `Alt` + up/down |
-| One note by a semitone | `note.fret`, via the buttons or `Alt` + `Shift` + up/down |
+| Notes across the strings | `note.string` + `note.fret`, via the buttons or `Alt` + up/down |
+| Notes by a semitone | `note.fret`, via the buttons or `Alt` + `Shift` + up/down |
 
 Then `Save .gp` downloads the result, and `Revert` reloads the file exactly as it
 was opened.
+
+Those two note-level moves work on **one note or a whole passage**. Click and
+drag across the score - the same gesture that sets alphaTab's loop range - and
+Alt+arrow acts on every note in it. The two selections exclude each other: a drag
+drops the single note, a click drops the range.
+
+A batch is **all or nothing**. If one note of twelve would run off the neck, the
+whole selection is refused with the numbers, because a passage where nine notes
+moved and three stayed is not a re-fingering of anything. And unlike the
+single-note case the refusal is loud: with twelve notes selected there is no
+guessing which one blocked it, and a repeated key will not walk out of it.
 
 The two note-level moves are deliberately different things, and the keyboard says
 which is which:
@@ -147,14 +158,16 @@ because a message per press on a repeatable key is noise. Every other refusal (a
 occupied string, a fret that would land off the neck, a natural harmonic) is
 explained in the panel.
 
-The selected note is **ringed on the score**, once per staff it is drawn on (the
-note head on the standard staff and the fret number on the tablature), so there
-is never a doubt about whether a click landed. Clicking a bar rather than a note
-clears it. See the note on how, below.
+Whatever is selected is **ringed on the score**, once per staff it is drawn on
+(the note head on the standard staff and the fret number on the tablature), so
+there is never a doubt about what an edit will touch. One rule: **a ring means
+this note will be edited**. Clicking a bar rather than a note clears it. See the
+note on how, below.
 
 Changing the pitch also **sounds the note**, so a semitone nudge can be checked
-by ear. The string move stays silent, and that asymmetry is the point: it keeps
-the pitch, so there would be nothing new to hear.
+by ear - for a range, the beat it starts on, since playing forty notes at once
+would be noise. The string move stays silent, and that asymmetry is the point: it
+keeps the pitch, so there would be nothing new to hear.
 
 **Editing is only allowed while paused.** Rather than making every operation
 survive being applied mid-playback (a moving playhead, a midi rebuild that stops
@@ -402,6 +415,62 @@ so a stale midi still maps a scrub position correctly. And the rebuild itself is
 cheap - measured at 0-1ms on a 4-bar score, 5-15ms at 77 bars, 16-39ms at 118 -
 so paying for it at the moment audio starts is imperceptible, while paying per
 keystroke was waste.
+
+### Selecting a passage costs no new interaction code
+
+alphaTab already builds and draws a click-and-drag selection for its loop range.
+`playbackRangeHighlightChanged` hands it over as it happens, with `startBeat` and
+`endBeat` as real `Beat` objects, so the range needs no mouse handling at all.
+
+Three details make it usable:
+
+- A plain click fires the event with **empty args**. `_cursorSelectRange`
+  triggers `{}` when the start and end beats are the same, which is exactly what
+  distinguishes a click from a drag.
+- alphaTab **normalises the order** itself, so `startBeat` is always the earlier
+  one and a right-to-left drag needs no special case.
+- The range is turned into a **tick window** on the track the drag STARTED on,
+  using `beat.absolutePlaybackStart`. That field is model-absolute, so it ignores
+  repeats and is comparable across staves and voices, which the per-voice
+  `beat.index` is not. A drag that wanders onto another staff still edits the
+  track it began on, which keeps every operation single-track like the
+  transposition and the retuning.
+
+The rule for what is in the range is "beats that **start** inside it", not "beats
+that overlap it": a user can predict the first, while the second would silently
+pull in a note they never dragged over.
+
+One trap in the batch write. Moving a chord up one string means the note leaving
+string 4 and the note arriving on string 4 are both in the batch, so writing them
+one at a time lets the departing note's `delete` erase the arriving note's entry
+in `Beat.noteStringLookup` (pitfall 5), or the reverse, depending on order.
+`applyNoteStringMoves()` therefore drops **every** mover from its lookup first
+and only then writes, which makes the result independent of order.
+
+### Two selection visuals, two jobs
+
+The drag leaves alphaTab's translucent band over the passage AND the ring on each
+selected note. That is deliberate, not a leftover: they mean different things, and
+neither can do the other's job.
+
+**The band is the time span, and the loop range.** On mouseUp alphaTab calls
+`applyPlaybackRangeFromHighlight()`, so a drag also sets `api.playbackRange`.
+Suppressing it (`clearPlaybackRangeHighlight()` exists) would break
+select-then-loop.
+
+**The band is wrong as edit feedback, in two ways.** It spans the full bar height
+across every displayed staff, while a batch edit touches exactly one track - the
+one the drag started on - so it says "all tracks" about a single-track operation.
+And it cannot express the range rule: a beat straddling the edge of the band looks
+included when "beats that START inside" excludes it.
+
+So the ring is the edit marker in both cases, and a single note is just the N=1
+case of it. One rule for the reader: a band is where you are, a ring is what will
+change.
+
+The rects are looked up **per beat**, not per note: `findBeats(beat)` returns the
+bounds for a whole beat, so a six-note chord would otherwise repeat the same
+lookup six times.
 
 ### Marking the selected note
 

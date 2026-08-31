@@ -162,12 +162,62 @@
 
       <hr />
 
-      <!-- The selected note. Ringed on the score itself, so this is the numbers
-           behind that marker plus the two ways to move it. -->
+      <!-- A dragged range, or a single note: two selections, one at a time, the
+           same two operations either way, and the same ring on the score marking
+           every note that will change. alphaTab's own band stays underneath as
+           what it actually is - the time span, and the loop range. -->
       <div class="field">
-        <label>Selected note</label>
-        <p v-if="!selectedNote" class="hint">
-          Click a note head in the score to select it.
+        <label>{{ selectedRange ? 'Selection' : 'Selected note' }}</label>
+
+        <template v-if="selectedRange">
+          <p class="inspector">
+            <span class="badge">{{ selectedRange.noteCount }}</span>
+            {{ selectedRange.noteCount === 1 ? 'note' : 'notes' }},
+            bars {{ selectedRange.startBar + 1 }}-{{ selectedRange.endBar + 1 }}
+          </p>
+
+          <div class="row">
+            <button
+              type="button"
+              :disabled="!canEdit"
+              title="Move every note in the selection up one string, keeping the pitches"
+              @click="nudgeSelectedString(1)"
+            >String &uarr;</button>
+            <button
+              type="button"
+              :disabled="!canEdit"
+              title="Move every note in the selection down one string, keeping the pitches"
+              @click="nudgeSelectedString(-1)"
+            >String &darr;</button>
+            <kbd>Alt + &uarr;&darr;</kbd>
+          </div>
+
+          <div class="row">
+            <button
+              type="button"
+              :disabled="!canEdit"
+              title="Move every note in the selection up a semitone"
+              @click="nudgeSelectedFret(1)"
+            >Pitch +1</button>
+            <button
+              type="button"
+              :disabled="!canEdit"
+              title="Move every note in the selection down a semitone"
+              @click="nudgeSelectedFret(-1)"
+            >Pitch -1</button>
+            <kbd>Alt + &#8679; + &uarr;&darr;</kbd>
+          </div>
+
+          <p class="hint">
+            Applied to <strong>every</strong> note at once, or to none: if one
+            would run off the neck, the whole selection is refused. Drag on the
+            score to change the range, or click a note to leave it.
+          </p>
+        </template>
+
+        <p v-else-if="!selectedNote" class="hint">
+          Click a note head to select one, or drag across the score to select a
+          passage.
         </p>
         <template v-else>
           <p class="inspector">
@@ -231,6 +281,7 @@ const { tracks } = usePlayer()
 const {
   editedTrack,
   selectedNote,
+  selectedRange,
   selectTrack,
   tuningOptions,
   canEdit,
