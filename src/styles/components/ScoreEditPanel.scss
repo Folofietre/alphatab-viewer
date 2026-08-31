@@ -71,6 +71,22 @@ input[type='number'] {
   @include edit-hint;
 }
 
+// Keyboard hints inside a legend, matching the ones in the track panel.
+kbd {
+  @include tabular;
+  font-size: 0.62rem;
+  padding: 0.08rem 0.28rem;
+  border: 1px solid var(--chrome-divider);
+  border-radius: $radius-control;
+  color: var(--chrome-text);
+}
+
+code {
+  font-family: var(--mono);
+  font-size: 0.64rem;
+  color: var(--chrome-text);
+}
+
 // A read-out rather than a control: the document's own name.
 .inspector {
   font-size: 0.8rem;

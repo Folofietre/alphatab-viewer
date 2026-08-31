@@ -129,8 +129,9 @@ the score selects its track too):
 | Notes across the strings | `note.string` + `note.fret`, via the buttons or `Alt` + up/down |
 | Notes by a semitone | `note.fret`, via the buttons or `Alt` + `Shift` + up/down |
 
-Then `Save .gp` downloads the result, and `Revert` reloads the file exactly as it
-was opened.
+Then `Save .gp` downloads the result - or **`Ctrl+S`** / **`Cmd+S`**, which
+deliberately takes the key from the browser's "Save page as" - and `Revert`
+reloads the file exactly as it was opened.
 
 Those two note-level moves work on **one note or a whole passage**. Click and
 drag across the score - the same gesture that sets alphaTab's loop range - and
@@ -534,9 +535,22 @@ match - which is also what keeps `Alt` + up from resolving to two bindings at
 once. A test asserts exactly one binding matches each of the four combinations.
 
 Auto-repeat is also per binding. The arrow bindings repeat, because holding the
-key to walk a note across the neck is the point; the midi rebuild they trigger is
-debounced by 250ms so a held key does not queue one rebuild per repeat.
-Everything else swallows repeats.
+key to walk a note across the neck is the point. Everything else swallows
+repeats, `Ctrl+S` included.
+
+`appliesTo(element, player)` takes the player as a second argument for one
+binding only: `Ctrl+S` stands down when no score is open, so the browser's own
+Save-page still works on the empty page rather than being swallowed for nothing.
+`Ctrl+Shift+S` is left alone too - that is Firefox's responsive design mode, and
+swallowing a devtools key to do the same thing as `Ctrl+S` is a bad trade.
+
+One subtlety in the save shortcut: it **blurs the focused element first**. The
+edit panels commit their text and number fields on `change`, which fires on blur,
+so typing a new track name and hitting `Ctrl+S` without leaving the field would
+otherwise export the old name. `change` is dispatched synchronously by `blur()`,
+so the commit and the render it triggers are done before the export reads the
+model. Clicking the `Save .gp` button needs none of this, because the click moves
+focus out of the field on its way.
 
 ---
 

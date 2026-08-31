@@ -60,11 +60,27 @@ function isCheckbox(el) {
   return el?.tagName === 'INPUT' && (el.type || '').toLowerCase() === 'checkbox'
 }
 
+// Save the score, taking the browser's Save-page shortcut for it.
+//
+// The blur is load-bearing, not tidiness. The edit panels commit their text and
+// number fields on `change`, which fires on blur - so typing a new track name
+// and hitting Ctrl+S without leaving the field would export the OLD name.
+// Clicking the Save button does not need this, because the click moves focus out
+// of the field and commits on the way.
+//
+// `change` is dispatched synchronously by blur(), so the commit (and the render
+// it triggers) is done before the export reads the model.
+function saveScore(_player, _event, edit) {
+  document.activeElement?.blur?.()
+  edit.download()
+}
+
 // One entry per shortcut. `code` is KeyboardEvent.code, which is keyboard-layout
 // independent (unlike `key`), so this works the same on AZERTY and QWERTY.
 //
-// `appliesTo` decides whether the binding acts on the focused element; when it
-// returns false the key is left entirely alone.
+// `appliesTo(element, player)` decides whether the binding acts; when it returns
+// false the key is left entirely alone. Most bindings only care about the focused
+// element, but the save shortcut also needs to know whether a score is open.
 //
 // `modifiers` declares which of Alt, Ctrl and Meta the binding WANTS, and is
 // matched exactly. Declaring it per binding rather than excluding modifiers
@@ -102,6 +118,34 @@ export const BINDINGS = [
   //
   // Both declare `shift` explicitly, which is what makes it significant here
   // while Space keeps ignoring it. See matchesModifiers.
+  // Ctrl+S and Cmd+S, as two entries rather than one "primary modifier" concept:
+  // the modifier match is exact, and being explicit is what keeps Ctrl+Space and
+  // friends from resolving to anything. Both are claimed on every platform,
+  // since neither combination means anything else here.
+  //
+  // This deliberately overrides the browser's "Save page as", which is what the
+  // key means in a document app.
+  {
+    code: 'KeyS',
+    label: 'Save the score as .gp',
+    // `shift: false` on purpose: Ctrl+Shift+S is Firefox's responsive design
+    // mode, and swallowing a devtools key to do the same thing as Ctrl+S is a
+    // bad trade.
+    modifiers: { ctrl: true, shift: false },
+    // Applies with focus anywhere, including a text field: saving is a document
+    // action, and no field owns Ctrl+S. But it stands down with no score open,
+    // so the browser's own Save-page still works on the empty page rather than
+    // being swallowed for nothing.
+    appliesTo: (_el, player) => player.isScoreLoaded.value,
+    run: saveScore,
+  },
+  {
+    code: 'KeyS',
+    label: 'Save the score as .gp',
+    modifiers: { meta: true, shift: false },
+    appliesTo: (_el, player) => player.isScoreLoaded.value,
+    run: saveScore,
+  },
   {
     code: 'ArrowUp',
     label: 'Selected note: up one string, same pitch',
@@ -168,7 +212,7 @@ export function useShortcuts() {
       (b) => b.code === event.code && matchesModifiers(b, event),
     )
     if (!binding) return
-    if (!binding.appliesTo(event.target)) return
+    if (!binding.appliesTo(event.target, player)) return
 
     // Swallow the key so it neither scrolls the page nor triggers a focused
     // button, then drop auto-repeat unless the binding asked for it.

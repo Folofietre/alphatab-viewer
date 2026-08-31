@@ -6,7 +6,7 @@
         <button
           type="button"
           :disabled="isExporting"
-          title="Download this score as a .gp file"
+          title="Download this score as a .gp file (Ctrl+S)"
           @click="download"
         >{{ isExporting ? 'Saving...' : 'Save .gp' }}</button>
         <button
@@ -68,6 +68,11 @@
     </div>
 
     <hr />
+
+    <p class="legend">
+      <kbd>Ctrl</kbd> + <kbd>S</kbd> saves the <code>.gp</code> file rather than
+      the web page.
+    </p>
 
     <p class="legend">
       Names, instruments, tunings and transposition belong to a single track, and

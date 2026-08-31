@@ -1,9 +1,13 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 
 // usePlayer reads the stored master volume at MODULE scope, and useShortcuts
 // imports it, so the import fails outright in a Node environment. A two-method
 // stub is cheaper and more honest than pulling jsdom in for a suite that only
-// inspects plain objects - nothing here touches a DOM.
+// inspects plain objects.
+//
+// `document` is deliberately NOT stubbed here: Vue's runtime-dom probes
+// `document.createElement` at import time, so a partial global document breaks
+// the import outright. The one test that needs a document stubs it locally.
 globalThis.localStorage ??= {
   getItem: () => null,
   setItem: () => {},
@@ -74,7 +78,84 @@ describe('binding resolution', () => {
   })
 })
 
+describe('Ctrl+S saves the score', () => {
+  const save = (mods) => resolve(key('KeyS', mods))
+
+  it('claims Ctrl+S and Cmd+S, taking them from the browser', () => {
+    expect(save({ ctrl: true })?.label).toMatch(/Save the score/)
+    expect(save({ meta: true })?.label).toMatch(/Save the score/)
+  })
+
+  it('leaves a bare S alone, so it can still be typed', () => {
+    expect(save({})).toBeNull()
+  })
+
+  it('leaves Ctrl+Shift+S alone: that is Firefox responsive design mode', () => {
+    expect(save({ ctrl: true, shift: true })).toBeNull()
+    expect(save({ meta: true, shift: true })).toBeNull()
+  })
+
+  it('does not resolve with both Ctrl and Meta held', () => {
+    expect(save({ ctrl: true, meta: true })).toBeNull()
+  })
+
+  it('applies with focus in a text field: no field owns Ctrl+S', () => {
+    const binding = save({ ctrl: true })
+    const player = { isScoreLoaded: { value: true } }
+    for (const el of [
+      { tagName: 'INPUT', type: 'text' },
+      { tagName: 'INPUT', type: 'number' },
+      { tagName: 'SELECT' },
+      { tagName: 'BUTTON' },
+      null,
+    ]) {
+      expect(binding.appliesTo(el, player)).toBe(true)
+    }
+  })
+
+  it('stands down with no score open, leaving Save-page to the browser', () => {
+    const binding = save({ ctrl: true })
+    expect(binding.appliesTo(null, { isScoreLoaded: { value: false } })).toBe(false)
+  })
+
+  it('BLURS the focused field first, so a half-typed name is committed', () => {
+    // The edit panels commit text and number fields on `change`, which fires on
+    // blur. Without this, typing a new track name and hitting Ctrl+S would
+    // export the old one. `change` is dispatched synchronously by blur(), so the
+    // order below is the whole guarantee.
+    const order = []
+    vi.stubGlobal('document', {
+      activeElement: { blur: () => order.push('blur') },
+    })
+    try {
+      save({ ctrl: true }).run({}, {}, { download: () => order.push('download') })
+      expect(order).toEqual(['blur', 'download'])
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('saves even with nothing focused', () => {
+    let saved = 0
+    vi.stubGlobal('document', { activeElement: null })
+    try {
+      save({ ctrl: true }).run({}, {}, { download: () => (saved += 1) })
+      expect(saved).toBe(1)
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+})
+
 describe('binding options', () => {
+  it('the save bindings are the only ones that consult the player', () => {
+    // appliesTo(element, player): most bindings only look at the focused
+    // element, so they must not break when the second argument is absent.
+    for (const binding of BINDINGS.filter((b) => b.code !== 'KeyS')) {
+      expect(() => binding.appliesTo({ tagName: 'BUTTON' })).not.toThrow()
+    }
+  })
+
   it('only the note nudges repeat on a held key', () => {
     for (const binding of BINDINGS) {
       const shouldRepeat = binding.code === 'ArrowUp' || binding.code === 'ArrowDown'
