@@ -76,7 +76,7 @@ scope each one acts on. `Mixer` rather than `Tracks`, because "Tracks" next to
 Tabs rather than a stack: the sidebar is 290px wide and the track list is
 arbitrarily long, so a panel below it would be unreachable on a nine-track score.
 The tab strip also owns the collapse control, since it acts on the container all
-three panels sit in. The tabs are toggle buttons with `aria-pressed`, not
+three panels sit in. Undo is deliberately not there: see above. The tabs are toggle buttons with `aria-pressed`, not
 `role="tab"`: a real tablist promises arrow-key navigation and an `aria-controls`
 / `role="tabpanel"` pairing, and a half-implemented one is worse for a screen
 reader than an honest set of toggles. The panel slides out of the way and
@@ -204,7 +204,10 @@ for one note, and a threshold on the count would be arbitrary. `Ctrl+Z` takes it
 back, and `isDirty` warns before the score is replaced or closed.
 
 **`Ctrl+Z` / `Cmd+Z` undoes the last edit**, up to 30 steps back, and the
-sidebar's tab strip carries an `Undo` button showing how many are left. Every one
+action bar carries an icon-only undo button whose tooltip names what would go
+and how many steps are left. It sits there rather than in a sidebar panel because
+it reaches edits made from either of them, and the bar stays visible with the
+sidebar collapsed. Every one
 of the ten operations can be taken back, the delete included.
 
 Redo is **not** implemented, and `Ctrl+Shift+Z` is deliberately left to the

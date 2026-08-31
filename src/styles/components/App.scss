@@ -52,6 +52,23 @@
   opacity: 0.7;
 }
 
+// Undo. Icon only, and the same square geometry as the other bar controls: the
+// whole state (what would go, how many steps remain) lives in the tooltip rather
+// than on the face, because the bar is dense and the keyboard is the primary way
+// in anyway.
+.bar-undo {
+  @include button-chrome;
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.6rem;
+  height: 1.5rem;
+  padding: 0;
+  font-size: 0.95rem;
+  line-height: 1;
+}
+
 // The help button. Round and the same size as the other chrome controls, so it
 // reads as a control rather than as a decoration - and it is the one thing in the
 // bar that is present with no score open.
@@ -212,34 +229,6 @@
     border-bottom-color: var(--accent-soft);
     color: var(--chrome-text);
   }
-}
-
-.panel-actions {
-  display: flex;
-  align-items: center;
-  gap: $gap-xs;
-}
-
-// Undo. In the strip rather than in a panel, because it reaches edits from both
-// of them and the strip is the only chrome present whichever panel is open.
-.panel-undo {
-  @include button-chrome;
-  display: flex;
-  align-items: center;
-  gap: 0.25rem;
-  align-self: center;
-  padding: 0.14rem 0.36rem;
-  font-size: 0.66rem;
-}
-.panel-undo-label {
-  @include section-label;
-  font-size: 0.6rem;
-}
-// How many steps are left, so the bound is visible rather than a surprise.
-.panel-undo-count {
-  @include tabular;
-  font-size: 0.58rem;
-  opacity: 0.7;
 }
 
 // Collapse the sidebar. Lives here rather than in either panel, since it acts on

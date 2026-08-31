@@ -9,6 +9,22 @@
           variant="compact"
           @file="openFile"
         >Open</FileDropzone>
+
+        <!-- Icon only, so the whole state goes in the tooltip: what would be
+             taken back, and how many steps are left before the 30-step bound.
+             In the action bar rather than in a sidebar panel because it reaches
+             edits made from either of them. -->
+        <button
+          v-if="isScoreLoaded"
+          type="button"
+          class="bar-undo"
+          :disabled="!canUndo"
+          :title="undoLabel
+            ? `Undo: ${undoLabel} (Ctrl+Z), ${undoDepth} step${undoDepth === 1 ? '' : 's'} available`
+            : 'Nothing to undo (Ctrl+Z)'"
+          aria-label="Undo the last edit"
+          @click="undo"
+        >&#8630;</button>
       </div>
 
       <TransportBar v-if="isScoreLoaded" />
@@ -75,7 +91,9 @@
              Tabs rather than a stack: the sidebar is 290px wide and the track
              list is arbitrarily long, so a panel below it would be unreachable
              on a nine-track score. The strip also owns the collapse control,
-             which is why TrackList no longer has one of its own. -->
+             which is why TrackList no longer has one of its own. Undo is NOT
+             here: it reaches edits from both panels, so it belongs in the action
+             bar with the other document controls. -->
         <div class="panel-tabs">
           <!-- Toggle buttons with aria-pressed rather than role="tab": a real
                tablist promises arrow-key navigation between tabs and an
@@ -96,28 +114,13 @@
           <!-- Undo lives in the strip rather than in a panel: it reaches
                edits from both of them, and the strip is the only chrome that is
                present whichever panel is open. -->
-          <div class="panel-actions">
-            <button
-              type="button"
-              class="panel-undo"
-              :disabled="!canUndo"
-              :title="undoLabel
-                ? `Undo: ${undoLabel} (Ctrl+Z), ${undoDepth} step${undoDepth === 1 ? '' : 's'} available`
-                : 'Nothing to undo (Ctrl+Z)'"
-              @click="undo"
-            >
-              <span aria-hidden="true">&#8630;</span>
-              <span class="panel-undo-label">Undo</span>
-              <span v-if="undoDepth > 0" class="panel-undo-count">{{ undoDepth }}</span>
-            </button>
-            <button
-              type="button"
-              class="panel-collapse"
-              title="Hide this panel"
-              aria-label="Hide the sidebar panel"
-              @click="isTracksOpen = false"
-            >&laquo;</button>
-          </div>
+          <button
+            type="button"
+            class="panel-collapse"
+            title="Hide this panel"
+            aria-label="Hide the sidebar panel"
+            @click="isTracksOpen = false"
+          >&laquo;</button>
         </div>
 
         <!-- v-show, not v-if: switching tabs must not throw away the panels'
@@ -166,8 +169,9 @@ import HelpDialog from '@/components/HelpDialog.vue'
 const { loadFile, clearScore, isScoreLoaded, isDirty, scoreInfo, fileName, loadError } =
   usePlayer()
 
-// The undo control sits in the sidebar's tab strip, so it is reachable from
-// whichever panel is open.
+// The undo control sits in the action bar, not in a sidebar panel: it reaches
+// edits made from either of them, and the bar is visible even with the sidebar
+// collapsed.
 const { undo, canUndo, undoLabel, undoDepth } = useScoreEdit()
 
 // The shortcut help. Driven from here and from the "?" key, which is why the
