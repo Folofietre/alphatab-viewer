@@ -1,0 +1,210 @@
+@use '@/styles/mixins' as *;
+
+// Like the track panel, this sits on the dark chrome supplied by .sidebar, so it
+// paints no surface of its own and every colour comes from the --chrome-* family.
+.edit-panel {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+// Same sticky section header as the track panel, so the two tabs read as the
+// same kind of thing.
+header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: $gap-sm;
+  padding: 0.5rem $gap-sm;
+  background: var(--chrome-raised);
+  border-bottom: 1px solid var(--chrome-border);
+
+  h2 {
+    @include section-label;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    color: var(--chrome-text-muted);
+  }
+}
+
+// The unsaved marker. A word rather than a dot: a dot next to a heading is
+// ambiguous, and there is room for four characters.
+.dirty {
+  @include section-label;
+  padding: 0.06rem 0.3rem;
+  font-size: 0.58rem;
+  letter-spacing: 0.06em;
+  background: var(--warn-bg);
+  border: 1px solid var(--warn-border);
+  border-radius: $radius-control;
+  color: var(--warn-text-chrome);
+}
+
+.bulk {
+  display: flex;
+  align-items: center;
+  gap: $gap-xs;
+
+  button {
+    @include button-chrome;
+    padding: 0.16rem 0.42rem;
+    font-size: 0.68rem;
+  }
+}
+
+// The result of the last edit. Refusals carry numbers and are the main way the
+// panel explains itself, so this is a real block rather than a tooltip.
+.message {
+  @include hint-text;
+  padding: 0.4rem $gap-sm;
+  font-size: 0.72rem;
+  border-bottom: 1px solid var(--chrome-divider);
+
+  &.error {
+    background: var(--warn-bg);
+    border-bottom-color: var(--warn-border);
+    // The chrome variant: --warn-text is a dark red meant for the light zone
+    // and would be unreadable on this surface.
+    color: var(--warn-text-chrome);
+  }
+  &.ok {
+    color: var(--accent-soft);
+  }
+  // A miss rather than a refusal: it tells the user how to aim, so it stays
+  // quiet rather than taking the warning surface.
+  &.info {
+    color: var(--chrome-text-muted);
+  }
+}
+
+.legend {
+  @include hint-text;
+  padding: $gap-sm;
+  font-size: 0.72rem;
+  color: var(--chrome-text-muted);
+}
+
+// One labelled control group per edit. Square and divider-separated, like the
+// track rows, so the panel reads as one delimited block.
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  padding: 0.5rem $gap-sm;
+  min-width: 0;
+
+  > label {
+    @include section-label;
+    font-size: 0.6rem;
+    color: var(--chrome-text-muted);
+  }
+}
+
+// Separates the five edit groups without the weight of a border on each one.
+hr {
+  height: 0;
+  margin: 0;
+  border: none;
+  border-top: 1px solid var(--chrome-divider);
+}
+
+// Controls sitting side by side: a value and the buttons that act on it.
+.row {
+  display: flex;
+  align-items: center;
+  gap: $gap-xs;
+  min-width: 0;
+  flex-wrap: wrap;
+
+  input[type='number'] {
+    width: 4.5rem;
+    flex: none;
+  }
+  button {
+    @include button-chrome;
+    padding: 0.2rem 0.45rem;
+    font-size: 0.7rem;
+  }
+}
+
+// Text and number entry, and the two <select>s. Same geometry as the track
+// panel's program picker so the whole sidebar has one control style.
+input[type='text'],
+input[type='number'],
+select {
+  font: inherit;
+  font-size: 0.76rem;
+  width: 100%;
+  min-width: 0;
+  padding: 0.22rem 0.3rem;
+  color: var(--chrome-text);
+  background: var(--chrome-raised);
+  border: 1px solid var(--chrome-border);
+  border-radius: $radius-control;
+
+  &:hover:not(:disabled) {
+    border-color: var(--accent);
+  }
+  &:disabled {
+    cursor: not-allowed;
+    opacity: 0.45;
+  }
+}
+select {
+  cursor: pointer;
+
+  option {
+    background: var(--chrome-raised);
+    color: var(--chrome-text);
+  }
+  // `background-color` alone is dropped by some Chromium builds; declaring the
+  // same colour as a gradient makes it a background-image, which is honoured.
+  option:checked {
+    background: var(--accent) linear-gradient(0deg, var(--accent), var(--accent));
+    color: var(--text-inverse);
+    font-weight: 700;
+  }
+}
+
+.hint {
+  @include hint-text;
+  font-size: 0.66rem;
+  color: var(--chrome-text-muted);
+
+  strong {
+    color: var(--chrome-text);
+    font-weight: 700;
+  }
+}
+
+// The selected note's read-out. Tabular so the numbers do not jitter as the
+// selection moves.
+.inspector {
+  @include tabular;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+  font-size: 0.7rem;
+  color: var(--chrome-text);
+}
+.badge {
+  padding: 0.06rem 0.3rem;
+  font-weight: 700;
+  background: var(--accent);
+  border-radius: $radius-control;
+  color: var(--text-inverse);
+}
+
+kbd {
+  @include tabular;
+  font-size: 0.62rem;
+  padding: 0.12rem 0.32rem;
+  border: 1px solid var(--chrome-divider);
+  border-radius: $radius-control;
+  color: var(--chrome-text-muted);
+}

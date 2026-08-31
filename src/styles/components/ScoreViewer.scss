@@ -38,6 +38,38 @@
   }
 }
 
+// Shares its origin with the alphaTab host, so a marker at
+// `translate(bounds.x, bounds.y)` lands exactly where alphaTab drew the note.
+.alphatab-stack {
+  position: relative;
+}
+
+// The selected note.
+//
+// z-index has to beat 1000: alphaTab puts `z-index: 1000` on its cursor wrapper
+// inside the host, and the host is not a stacking context, so that value escapes
+// into .alphatab-scroll alongside this marker. See the note on `isolation`
+// above - this is the same escaping-z-index behaviour, seen from the other side.
+//
+// Rounded, unlike the structural surfaces around it: this is a transient
+// annotation on the score, closer to a control than to a delimiter.
+.note-marker {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 1001;
+  // Never eat a click meant for the note underneath.
+  pointer-events: none;
+  box-sizing: border-box;
+  border: 2px solid var(--accent);
+  border-radius: $radius-control;
+  background: var(--accent-bg);
+  // Lifts the ring off a busy staff without hiding the glyph inside it.
+  box-shadow: 0 0 0 1px var(--bg-surface);
+  transform-origin: top left;
+  will-change: transform;
+}
+
 .alphatab-host {
   // alphaTab draws the notation in this element's `color`.
   color: var(--score-ink);

@@ -45,14 +45,6 @@ header {
   }
 }
 
-// Collapse the panel. Sits at the far edge of the header, pointing the way it
-// will move.
-.collapse {
-  font-size: 0.8rem;
-  line-height: 1;
-  padding: 0.1rem 0.34rem;
-}
-
 .legend {
   @include hint-text;
   padding: $gap-sm;

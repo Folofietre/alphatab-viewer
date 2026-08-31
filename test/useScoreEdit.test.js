@@ -1,0 +1,651 @@
+import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { ref, shallowRef, nextTick } from 'vue'
+
+// A recording stand-in for usePlayer.
+//
+// This suite is about the PROPAGATION MATRIX - which edits re-render, which
+// regenerate the midi, which do both, and with what RenderHints - and about the
+// selection. That is the part of the design most likely to be got quietly wrong
+// (too little propagation shows a stale score, too much re-lays out the whole
+// thing on every keystroke) and the part a Node test can actually pin down.
+//
+// What is NOT covered here, and needs a browser: whether the incremental render
+// is visibly faster, and how a held arrow key feels.
+
+function emitter() {
+  const handlers = []
+  return {
+    on: (fn) => handlers.push(fn),
+    emit: (value) => handlers.forEach((fn) => fn(value)),
+    get count() {
+      return handlers.length
+    },
+  }
+}
+
+const host = {
+  api: null,
+  score: null,
+  renders: [],
+  midiReloads: 0,
+  syncedTracks: [],
+  syncedScoreInfo: 0,
+  dirty: false,
+  tracksById: new Map(),
+
+  trackAt(index) {
+    return host.tracksById.get(index) ?? null
+  },
+  syncTrack(index) {
+    host.syncedTracks.push(index)
+  },
+  syncScoreInfo() {
+    host.syncedScoreInfo += 1
+    // Mirror the real one: it replaces scoreInfo, which is what re-triggers the
+    // `tempo` computed.
+    player.scoreInfo.value = { tempo: host.score?.tempo ?? null }
+  },
+  reloadMidi() {
+    host.midiReloads += 1
+  },
+  onScoreCleared: null,
+  midiStale: false,
+  previews: [],
+  markMidiStale() {
+    host.midiStale = true
+  },
+  previewNote(note) {
+    host.previews.push(note)
+    return true
+  },
+  markDirty() {
+    host.dirty = true
+  },
+  clearDirty() {
+    host.dirty = false
+  },
+}
+
+const player = {
+  isScoreLoaded: ref(true),
+  isPlaying: ref(false),
+  tracks: ref([]),
+  scoreInfo: shallowRef(null),
+  fileName: ref('fixture.gp'),
+  isDirty: ref(false),
+  revertToOriginal: vi.fn(() => true),
+  // A ref, like the real one, so the Revert control can react to it.
+  canRevert: ref(true),
+}
+
+vi.mock('@/composables/usePlayer', () => ({
+  usePlayer: () => player,
+  scoreEditHost: host,
+}))
+
+const download = vi.fn(() => ({ fileName: 'Edit Fixture (edited).gp', byteLength: 42 }))
+vi.mock('@/utils/exportScore', () => ({
+  downloadScoreAsGp: (...args) => download(...args),
+}))
+
+const { useScoreEdit } = await import('@/composables/useScoreEdit')
+const { loadFixture } = await import('./helpers')
+const { stringedNotes, RETUNE_KEEP_PITCH, RETUNE_REASSIGN } = await import('@/utils/scoreEdits')
+
+const LEAD = 0
+const RHYTHM = 1
+const HARM = 3
+const DRUMS = 4
+
+let edit
+let score
+
+// A stand-in bounds lookup shaped like alphaTab's: `findBeats` returns one
+// BeatBounds per staff (standard notation and tablature), each carrying a
+// NoteBounds per note. The x offset per staff makes the two rectangles
+// distinguishable.
+function fakeBoundsLookup() {
+  return {
+    findBeats(beat) {
+      if (!beat) return null
+      return [0, 1].map((staff) => ({
+        notes: beat.notes.map((note, i) => ({
+          note,
+          noteHeadBounds: { x: 100 + staff * 1000 + i, y: 50 + staff * 40, w: 11, h: 9 },
+        })),
+      }))
+    },
+  }
+}
+
+function fakeApi() {
+  return {
+    noteMouseDown: emitter(),
+    beatMouseDown: emitter(),
+    scoreLoaded: emitter(),
+    postRenderFinished: emitter(),
+    settings: { core: { includeNoteBounds: true }, player: { enableUserInteraction: true } },
+    boundsLookup: fakeBoundsLookup(),
+    render: (hints) => host.renders.push(hints ?? null),
+  }
+}
+
+// Reproduce alphaTab's click sequence: beatMouseDown, then noteMouseDown in the
+// SAME synchronous handler if the hit-test found a note head. `hitNote` of null
+// is a click that landed on a beat but between the note heads.
+function clickAt(hitNote) {
+  host.api.beatMouseDown.emit(null)
+  if (hitNote) host.api.noteMouseDown.emit(hitNote)
+}
+
+beforeEach(async () => {
+  score = loadFixture()
+  host.api = fakeApi()
+  host.score = score
+  host.renders = []
+  host.midiReloads = 0
+  host.syncedTracks = []
+  host.syncedScoreInfo = 0
+  host.dirty = false
+  host.tracksById = new Map(score.tracks.map((track) => [track.index, track]))
+
+  // The flat descriptors the panel reads, in the shape usePlayer builds.
+  host.midiStale = false
+  host.previews = []
+  player.isPlaying.value = false
+  player.isScoreLoaded.value = true
+  player.tracks.value = score.tracks.map((track) => ({
+    index: track.index,
+    name: track.name,
+    isStringed: track.staves.some((s) => s.isStringed),
+  }))
+  player.scoreInfo.value = { tempo: score.tempo }
+  player.isDirty.value = false
+  player.revertToOriginal.mockClear()
+  download.mockClear()
+
+  edit = useScoreEdit()
+  // The api only exists from beforeEach onwards, so binding happens here.
+  edit.bindSelection()
+  edit.selectTrack(LEAD)
+  edit.clearSelection()
+  await nextTick()
+})
+
+describe('the propagation matrix', () => {
+  it('rename: renders, does NOT touch the midi', () => {
+    expect(edit.rename('New Name').ok).toBe(true)
+    expect(host.renders).toEqual([{ reuseViewport: true }])
+    expect(host.midiReloads).toBe(0)
+    expect(host.syncedTracks).toEqual([LEAD])
+    expect(host.dirty).toBe(true)
+  })
+
+  it('tempo: renders AND rebuilds the midi NOW, because it changes timing', () => {
+    expect(edit.setTempo(200).ok).toBe(true)
+    expect(host.renders).toEqual([{ reuseViewport: true }])
+    // Immediate, not deferred: the loaded midi is what maps a scrub position to
+    // a tick, so a stale one would make the transport disagree with the score.
+    expect(host.midiReloads).toBe(1)
+    expect(host.midiStale).toBe(false)
+    expect(host.syncedScoreInfo).toBe(1)
+  })
+
+  it('transpose by tuning: renders and marks the midi stale for the next play', () => {
+    expect(edit.transposeByTuning(-2).ok).toBe(true)
+    expect(host.renders).toEqual([{ reuseViewport: true }])
+    expect(host.midiReloads).toBe(0)
+    expect(host.midiStale).toBe(true)
+    expect(host.syncedTracks).toEqual([LEAD])
+  })
+
+  it('transpose by frets: renders and marks the midi stale for the next play', () => {
+    expect(edit.transposeByFrets(2).ok).toBe(true)
+    expect(host.renders).toEqual([{ reuseViewport: true }])
+    expect(host.midiReloads).toBe(0)
+    expect(host.midiStale).toBe(true)
+  })
+
+  it('retune: renders and marks the midi stale', () => {
+    const target = score.tracks[LEAD].staves[0].tuning.map((v) => v - 2)
+    expect(edit.retune(target, RETUNE_REASSIGN).ok).toBe(true)
+    expect(host.renders.length).toBe(1)
+    expect(host.midiReloads).toBe(0)
+    expect(host.midiStale).toBe(true)
+  })
+
+  it('a refused edit propagates NOTHING and surfaces the reason', () => {
+    edit.selectTrack(RHYTHM) // frets already at 0 and 24
+    const result = edit.transposeByFrets(1)
+    expect(result.ok).toBe(false)
+    expect(host.renders).toEqual([])
+    expect(host.midiReloads).toBe(0)
+    expect(host.midiStale).toBe(false)
+    expect(host.dirty).toBe(false)
+    expect(edit.editMessage.value).toMatchObject({ kind: 'error' })
+    expect(edit.editMessage.value.text).toContain('fret 24')
+  })
+
+  it('a no-op edit propagates nothing and does not mark the score dirty', () => {
+    expect(edit.rename(score.tracks[LEAD].name)).toMatchObject({ ok: true, changed: false })
+    expect(host.renders).toEqual([])
+    expect(host.midiReloads).toBe(0)
+    expect(host.dirty).toBe(false)
+  })
+
+  it('clears a previous error once an edit succeeds', () => {
+    edit.selectTrack(RHYTHM)
+    edit.transposeByFrets(1)
+    expect(edit.editMessage.value.kind).toBe('error')
+    expect(edit.transposeByTuning(1).ok).toBe(true)
+    expect(edit.editMessage.value).toBeNull()
+  })
+})
+
+describe('selection', () => {
+  it('a note click stores a flat descriptor and follows the track', () => {
+    const note = [...stringedNotes(score.tracks[HARM].staves[0])][0]
+    host.api.noteMouseDown.emit(note)
+
+    expect(edit.selectedNote.value).toMatchObject({
+      trackIndex: HARM,
+      string: note.string,
+      fret: note.fret,
+    })
+    // Clicking a note is also how the user says which track they are editing.
+    expect(edit.selectedTrackIndex.value).toBe(HARM)
+    // Nothing that would drag the cyclic model graph into a reactive ref.
+    expect(JSON.parse(JSON.stringify(edit.selectedNote.value))).toEqual(edit.selectedNote.value)
+  })
+
+  it('a new score clears the selection, since the old Note points at a dead graph', () => {
+    host.api.noteMouseDown.emit([...stringedNotes(score.tracks[LEAD].staves[0])][0])
+    expect(edit.selectedNote.value).not.toBeNull()
+
+    host.api.scoreLoaded.emit(score)
+    expect(edit.selectedNote.value).toBeNull()
+    expect(edit.selectedTrackIndex.value).toBe(0)
+  })
+
+  it('a click that misses every note head says how to aim', async () => {
+    // alphaTab's note hit-test is a strict rectangle over the note head, so
+    // this is a real and easy failure - and a silent one without this message.
+    clickAt(null)
+    await Promise.resolve()
+    expect(edit.selectedNote.value).toBeNull()
+    expect(edit.editMessage.value).toMatchObject({ kind: 'info' })
+    expect(edit.editMessage.value.text).toMatch(/note head/)
+  })
+
+  it('a click that hits a note head does NOT produce the miss message', async () => {
+    clickAt([...stringedNotes(score.tracks[LEAD].staves[0])][0])
+    await Promise.resolve()
+    expect(edit.selectedNote.value).not.toBeNull()
+    expect(edit.editMessage.value).toBeNull()
+  })
+
+  it('closing the score drops the selection, so its graph can be collected', () => {
+    // A held Note reaches the whole score through its back-references, and
+    // clearScore() has no alphaTab event to hang off, so usePlayer calls the
+    // hook below directly.
+    host.api.noteMouseDown.emit([...stringedNotes(score.tracks[LEAD].staves[0])][0])
+    expect(edit.selectedNote.value).not.toBeNull()
+
+    expect(typeof host.onScoreCleared).toBe('function')
+    host.onScoreCleared()
+
+    expect(edit.selectedNote.value).toBeNull()
+    expect(edit.selectedNoteRects.value).toEqual([])
+  })
+
+  it('binds its handlers exactly once, however many times it is used', () => {
+    const before = host.api.noteMouseDown.count
+    useScoreEdit()
+    edit.bindSelection()
+    useScoreEdit().bindSelection()
+    expect(host.api.noteMouseDown.count).toBe(before)
+  })
+})
+
+describe('the selected note fret', () => {
+  function selectFirstNote(trackIndex = LEAD) {
+    const note = [...stringedNotes(score.tracks[trackIndex].staves[0])][0]
+    host.api.noteMouseDown.emit(note)
+    return note
+  }
+
+  it('renders incrementally from the bar that changed', () => {
+    const note = selectFirstNote()
+    const bar = note.beat.voice.bar.masterBar.index
+    expect(edit.setSelectedFret(note.fret + 1).ok).toBe(true)
+    expect(host.renders).toEqual([{ reuseViewport: true, firstChangedMasterBar: bar }])
+  })
+
+  it('never rebuilds the midi while editing: it is left for the next play', () => {
+    const note = selectFirstNote()
+    for (let i = 1; i <= 5; i += 1) edit.nudgeSelectedFret(1)
+
+    // Five renders, so the notation followed every press...
+    expect(host.renders.length).toBe(5)
+    // ...and no rebuild at all. usePlayer pays for it when playback starts,
+    // which is also what stops loadMidiForScore()'s internal stop() from
+    // cutting the preview note short.
+    expect(host.midiReloads).toBe(0)
+    expect(host.midiStale).toBe(true)
+    expect(note.fret).toBe(3 + 5)
+  })
+
+  it('SOUNDS the new pitch, once per press', () => {
+    const note = selectFirstNote()
+    expect(host.previews).toEqual([])
+
+    edit.nudgeSelectedFret(1)
+    expect(host.previews).toEqual([note])
+
+    edit.nudgeSelectedFret(1)
+    expect(host.previews).toEqual([note, note])
+  })
+
+  it('does not sound anything when the edit was refused or changed nothing', () => {
+    const note = selectFirstNote()
+    note.fret = 0
+    edit.nudgeSelectedFret(-1) // out of range
+    expect(host.previews).toEqual([])
+
+    edit.setSelectedFret(note.fret) // already that fret
+    expect(host.previews).toEqual([])
+  })
+
+  it('updates the flat descriptor so the inspector shows the new fret', () => {
+    const note = selectFirstNote()
+    const before = edit.selectedNote.value.fret
+    edit.setSelectedFret(before + 1)
+    expect(edit.selectedNote.value.fret).toBe(before + 1)
+    expect(edit.selectedNote.value.midiKey).toBe(note.realValue)
+  })
+
+  it('refuses SILENTLY at the bounds: a repeatable key must not shout', () => {
+    const note = selectFirstNote()
+    note.fret = 0
+    const result = edit.nudgeSelectedFret(-1)
+    expect(result.ok).toBe(false)
+    expect(edit.editMessage.value).toBeNull()
+    expect(host.renders).toEqual([])
+    expect(note.fret).toBe(0)
+  })
+
+  it('still explains a refusal that is NOT about the bounds', () => {
+    const natural = [...stringedNotes(score.tracks[HARM].staves[0])].find(
+      (note) => note.harmonicType === 1,
+    )
+    host.api.noteMouseDown.emit(natural)
+    const result = edit.nudgeSelectedFret(1)
+    expect(result.ok).toBe(false)
+    expect(edit.editMessage.value?.text).toMatch(/natural harmonic/)
+  })
+
+  it('asks for a selection rather than acting on nothing', () => {
+    edit.clearSelection()
+    expect(edit.setSelectedFret(5).ok).toBe(false)
+    expect(edit.editMessage.value?.text).toMatch(/Click a note/)
+    expect(edit.nudgeSelectedFret(1).ok).toBe(false)
+    expect(host.renders).toEqual([])
+  })
+})
+
+describe('the selection marker', () => {
+  it('is one rectangle per staff the note is drawn on', () => {
+    const note = [...stringedNotes(score.tracks[LEAD].staves[0])][0]
+    host.api.noteMouseDown.emit(note)
+
+    // Standard notation head and tablature fret number: the marker goes on both.
+    expect(edit.selectedNoteRects.value).toHaveLength(2)
+    for (const rect of edit.selectedNoteRects.value) {
+      expect(rect).toMatchObject({ w: 11, h: 9 })
+      expect(Number.isFinite(rect.x)).toBe(true)
+      expect(Number.isFinite(rect.y)).toBe(true)
+    }
+    // Plain data, nothing from the model graph.
+    expect(JSON.parse(JSON.stringify(edit.selectedNoteRects.value))).toEqual(
+      edit.selectedNoteRects.value,
+    )
+  })
+
+  it('is empty with nothing selected', () => {
+    expect(edit.selectedNoteRects.value).toEqual([])
+    host.api.noteMouseDown.emit([...stringedNotes(score.tracks[LEAD].staves[0])][0])
+    expect(edit.selectedNoteRects.value.length).toBeGreaterThan(0)
+    edit.clearSelection()
+    expect(edit.selectedNoteRects.value).toEqual([])
+  })
+
+  it('is re-read after every render, because a render rebuilds the lookup', () => {
+    host.api.noteMouseDown.emit([...stringedNotes(score.tracks[LEAD].staves[0])][0])
+    const before = edit.selectedNoteRects.value
+
+    // A new lookup with different coordinates, as a re-layout would produce.
+    host.api.boundsLookup = {
+      findBeats: (beat) => [{ notes: beat.notes.map((note) => ({
+        note, noteHeadBounds: { x: 777, y: 888, w: 12, h: 10 },
+      })) }],
+    }
+    host.api.postRenderFinished.emit()
+
+    expect(edit.selectedNoteRects.value).not.toBe(before)
+    expect(edit.selectedNoteRects.value).toEqual([{ x: 777, y: 888, w: 12, h: 10 }])
+  })
+
+  it('follows the note when the edit moves it, via the render hook', () => {
+    const note = [...stringedNotes(score.tracks[LEAD].staves[0])][0]
+    host.api.noteMouseDown.emit(note)
+    expect(edit.selectedNoteRects.value.length).toBe(2)
+    edit.setSelectedFret(note.fret + 1)
+    host.api.postRenderFinished.emit()
+    expect(edit.selectedNoteRects.value.length).toBe(2)
+  })
+
+  it('survives a lookup that is not there yet', () => {
+    host.api.noteMouseDown.emit([...stringedNotes(score.tracks[LEAD].staves[0])][0])
+    host.api.boundsLookup = null
+    host.api.postRenderFinished.emit()
+    expect(edit.selectedNoteRects.value).toEqual([])
+  })
+})
+
+describe('the selected note string (Alt + arrow)', () => {
+  // Picked by criteria: moving up a string needs 4-5 frets of room.
+  function selectMovable() {
+    const staff = score.tracks[LEAD].staves[0]
+    const note = [...stringedNotes(staff)].find(
+      (n) => n.string < staff.tuning.length && n.fret >= 5,
+    )
+    expect(note).toBeDefined()
+    host.api.noteMouseDown.emit(note)
+    return note
+  }
+
+  it('keeps the pitch, renders incrementally and leaves the midi for next play', () => {
+    const note = selectMovable()
+    const pitch = note.realValue
+    const bar = note.beat.voice.bar.masterBar.index
+
+    expect(edit.nudgeSelectedString(1).ok).toBe(true)
+
+    expect(note.realValue).toBe(pitch)
+    expect(host.renders).toEqual([{ reuseViewport: true, firstChangedMasterBar: bar }])
+    // Still marked stale even though the pitch did not move: the midi generator
+    // reads beat.hasNoteOnString() for let-ring durations.
+    expect(host.midiReloads).toBe(0)
+    expect(host.midiStale).toBe(true)
+  })
+
+  it('stays SILENT, because the pitch has not changed', () => {
+    // The silence is what separates this from the semitone nudge.
+    selectMovable()
+    expect(edit.nudgeSelectedString(1).ok).toBe(true)
+    expect(host.previews).toEqual([])
+  })
+
+  it('updates the flat descriptor so the inspector shows the new string', () => {
+    const note = selectMovable()
+    const before = { string: edit.selectedNote.value.string, fret: edit.selectedNote.value.fret }
+    edit.nudgeSelectedString(1)
+    expect(edit.selectedNote.value.string).toBe(before.string + 1)
+    expect(edit.selectedNote.value.fret).toBeLessThan(before.fret)
+    expect(edit.selectedNote.value.midiKey).toBe(note.realValue)
+  })
+
+  it('refuses SILENTLY at the edge of the fretboard', () => {
+    const staff = score.tracks[LEAD].staves[0]
+    const top = [...stringedNotes(staff)].find((n) => n.string === staff.tuning.length)
+    if (!top) return
+    host.api.noteMouseDown.emit(top)
+    const result = edit.nudgeSelectedString(1)
+    expect(result.ok).toBe(false)
+    expect(edit.editMessage.value).toBeNull()
+    expect(host.renders).toEqual([])
+  })
+
+  it('EXPLAINS a refusal that is not about the edge', () => {
+    const note = selectMovable()
+    note.fret = 24
+    const result = edit.nudgeSelectedString(-1)
+    expect(result.ok).toBe(false)
+    expect(edit.editMessage.value?.text).toMatch(/outside the 0-24 range/)
+  })
+
+  it('asks for a selection rather than acting on nothing', () => {
+    edit.clearSelection()
+    expect(edit.nudgeSelectedString(1).ok).toBe(false)
+    expect(host.renders).toEqual([])
+  })
+})
+
+describe('editing only while paused', () => {
+  const EDITS = [
+    ['rename', () => edit.rename('Nope')],
+    ['setTempo', () => edit.setTempo(200)],
+    ['transposeByTuning', () => edit.transposeByTuning(1)],
+    ['transposeByFrets', () => edit.transposeByFrets(1)],
+    ['retune', () => edit.retune([64, 59, 55, 50, 45, 38], RETUNE_REASSIGN)],
+    ['setSelectedFret', () => edit.setSelectedFret(7)],
+    ['nudgeSelectedFret', () => edit.nudgeSelectedFret(1)],
+    ['nudgeSelectedString', () => edit.nudgeSelectedString(1)],
+  ]
+
+  it('canEdit follows the player, and a note preview does NOT clear it', () => {
+    expect(edit.canEdit.value).toBe(true)
+    player.isPlaying.value = true
+    expect(edit.canEdit.value).toBe(false)
+    player.isPlaying.value = false
+    expect(edit.canEdit.value).toBe(true)
+    player.isScoreLoaded.value = false
+    expect(edit.canEdit.value).toBe(false)
+  })
+
+  it('refuses every edit while playing, and writes nothing', () => {
+    const note = [...stringedNotes(score.tracks[LEAD].staves[0])][0]
+    host.api.noteMouseDown.emit(note)
+    const before = { name: score.tracks[LEAD].name, tempo: score.tempo, fret: note.fret }
+
+    player.isPlaying.value = true
+    for (const [label, run] of EDITS) {
+      const result = run()
+      expect(result.ok, label).toBe(false)
+      expect(result.reason, label).toMatch(/Pause playback/)
+    }
+
+    expect(host.renders).toEqual([])
+    expect(host.midiReloads).toBe(0)
+    expect(host.midiStale).toBe(false)
+    expect(host.previews).toEqual([])
+    expect(host.dirty).toBe(false)
+    expect({ name: score.tracks[LEAD].name, tempo: score.tempo, fret: note.fret }).toEqual(before)
+  })
+
+  it('says why, rather than letting a click do nothing', () => {
+    player.isPlaying.value = true
+    edit.rename('Nope')
+    expect(edit.editMessage.value).toMatchObject({ kind: 'error' })
+    expect(edit.editMessage.value.text).toMatch(/Pause playback/)
+  })
+
+  it('lets everything through again once paused', () => {
+    player.isPlaying.value = true
+    expect(edit.rename('Nope').ok).toBe(false)
+    player.isPlaying.value = false
+    expect(edit.rename('Allowed').ok).toBe(true)
+    expect(score.tracks[LEAD].name).toBe('Allowed')
+  })
+
+  it('still allows SELECTING a note while playing: it writes nothing', () => {
+    player.isPlaying.value = true
+    const note = [...stringedNotes(score.tracks[LEAD].staves[0])][0]
+    host.api.noteMouseDown.emit(note)
+    expect(edit.selectedNote.value).not.toBeNull()
+  })
+})
+
+describe('reads for the panel', () => {
+  it('exposes the tempo and how many automations the field is moving', () => {
+    expect(edit.tempo.value).toMatchObject({ tempo: 120, automationCount: 3 })
+  })
+
+  it('re-reads the tempo after an edit', () => {
+    edit.setTempo(240)
+    expect(edit.tempo.value.tempo).toBe(240)
+  })
+
+  it('offers tuning choices for a stringed track and none for percussion', () => {
+    expect(edit.tuningOptions.value.length).toBeGreaterThan(0)
+    expect(edit.tuningOptions.value.filter((o) => o.isCurrent)).toHaveLength(1)
+    edit.selectTrack(DRUMS)
+    expect(edit.tuningOptions.value).toEqual([])
+  })
+
+  it('re-reads the tuning choices after a retuning', () => {
+    const target = score.tracks[LEAD].staves[0].tuning.map((v) => v - 2)
+    edit.retune(target, RETUNE_KEEP_PITCH)
+    const current = edit.tuningOptions.value.find((o) => o.isCurrent)
+    expect(current.tunings).toEqual(target)
+  })
+
+  it('ignores a request to edit a track that is not there', () => {
+    edit.selectTrack(99)
+    expect(edit.editedTrack.value.index).toBe(LEAD)
+  })
+})
+
+describe('saving and reverting', () => {
+  it('download hands the score to the exporter and clears the dirty flag', () => {
+    edit.rename('Dirty Now')
+    expect(host.dirty).toBe(true)
+
+    const saved = edit.download()
+    // The api's settings go through to the exporter untouched.
+    expect(download).toHaveBeenCalledWith(score, host.api.settings, 'fixture.gp')
+    expect(saved.fileName).toBe('Edit Fixture (edited).gp')
+    expect(host.dirty).toBe(false)
+    expect(edit.editMessage.value).toMatchObject({ kind: 'ok' })
+  })
+
+  it('download reports a failure instead of throwing at the caller', () => {
+    download.mockImplementationOnce(() => {
+      throw new Error('disk on fire')
+    })
+    expect(edit.download()).toBeNull()
+    expect(edit.editMessage.value).toMatchObject({ kind: 'error', text: 'disk on fire' })
+    expect(edit.isExporting.value).toBe(false)
+  })
+
+  it('revert goes through usePlayer, which owns the original bytes', () => {
+    expect(edit.revert()).toBe(true)
+    expect(player.revertToOriginal).toHaveBeenCalled()
+  })
+
+  it('revert says so when there is nothing to go back to', () => {
+    player.revertToOriginal.mockReturnValueOnce(false)
+    expect(edit.revert()).toBe(false)
+    expect(edit.editMessage.value).toMatchObject({ kind: 'error' })
+  })
+})

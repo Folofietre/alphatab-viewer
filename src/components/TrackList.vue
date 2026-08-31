@@ -5,13 +5,6 @@
       <div class="bulk">
         <button type="button" title="Render every track" @click="showAllTracks">All</button>
         <button type="button" title="Reset volume, mute and solo" @click="resetMixer">Reset mix</button>
-        <button
-          type="button"
-          class="collapse"
-          title="Hide this panel"
-          aria-label="Hide the track panel"
-          @click="$emit('close')"
-        >&laquo;</button>
       </div>
     </header>
 
@@ -126,8 +119,6 @@ import { computed } from 'vue'
 import { usePlayer } from '@/composables/usePlayer'
 import { GM_GROUPS } from '@/utils/gmPrograms'
 import { formatBalance } from '@/utils/format'
-
-defineEmits(['close'])
 
 const {
   tracks,

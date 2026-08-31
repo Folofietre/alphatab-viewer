@@ -149,6 +149,66 @@
   }
 }
 
+// The sidebar's tab strip. Sticky above both panels' own sticky headers, so the
+// way back to the other panel never scrolls away.
+//
+// Square, like every other structural surface: this is a delimiter, not a
+// control, even though it contains controls.
+.panel-tabs {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: stretch;
+  justify-content: space-between;
+  gap: $gap-sm;
+  padding: 0 $gap-sm;
+  background: var(--chrome);
+  border-bottom: 1px solid var(--chrome-border);
+}
+.tabs {
+  display: flex;
+  min-width: 0;
+}
+
+// A tab is marked by an underline on the active one rather than by a filled
+// pill: it reads as "you are here in this structure" instead of as a button
+// that is currently pressed.
+.tab {
+  @include section-label;
+  padding: 0.42rem 0.55rem;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  border-radius: $radius-block;
+  color: var(--chrome-text-muted);
+  cursor: pointer;
+  transition: color $transition-fast, border-color $transition-fast;
+
+  // Beats `button:hover:not(:disabled)` from main.scss on specificity, so the
+  // inherited background and border never appear.
+  &:hover:not(:disabled) {
+    background: none;
+    border-bottom-color: var(--chrome-divider);
+    color: var(--chrome-text);
+  }
+  &.on,
+  &.on:hover:not(:disabled) {
+    border-bottom-color: var(--accent-soft);
+    color: var(--chrome-text);
+  }
+}
+
+// Collapse the sidebar. Lives here rather than in either panel, since it acts on
+// the container both of them sit in. Points the way the panel will move.
+.panel-collapse {
+  @include button-chrome;
+  align-self: center;
+  padding: 0.1rem 0.34rem;
+  font-size: 0.8rem;
+  line-height: 1;
+}
+
 .stage {
   position: relative;
   flex: 1;

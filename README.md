@@ -1,11 +1,14 @@
 # AlphaTab Viewer
 
-A minimal, fully client-side score viewer and player built on [alphaTab](https://alphatab.net/).
-Drop a Guitar Pro or MusicXML file, choose which tracks are displayed, and change
-the MIDI instrument each track is played with.
+A minimal, fully client-side score viewer, player and light editor built on
+[alphaTab](https://alphatab.net/). Drop a Guitar Pro or MusicXML file, choose
+which tracks are displayed, change the MIDI instrument each track is played
+with, and make a handful of targeted edits - rename, retune, transpose, tempo,
+one note's fret - then save the result as a `.gp` file.
 
-No backend, no account, no game layer. The only thing persisted is the master
-volume (`localStorage`).
+No backend, no account, no game layer. Nothing is uploaded and nothing is
+written to your files: the edited score is handed back as a download. The only
+thing persisted is the master volume (`localStorage`).
 
 Extracted from the `alphatabrpg` project: the design system (`src/styles/`), the
 Bravura font and the SONiVOX SoundFont come from there; the player logic is new.
@@ -24,6 +27,8 @@ npm install
 npm run dev      # http://localhost:5173
 npm run build     # -> dist/
 npm run preview
+npm test          # vitest, Node only, no browser
+npm run test:watch
 ```
 
 > Stay on Vite 7. Vite 8 (rolldown) breaks `@coderline/alphatab-vite@1.8` with a
@@ -63,15 +68,97 @@ Solo, mute and volume use alphaTab's live setters (`changeTrackSolo`,
 live setter, so it goes through the data model and a midi rebuild; the slider
 previews while dragging and commits once on release. See the gotcha below.
 
-**Collapsible track panel** - the panel slides out of the way and collapses to a
-30px rail carrying the reopen control, so it never disappears without a way
-back. The slide animates the panel's `transform` only; see the note below on why
-the layout itself must not be animated.
+**Collapsible sidebar, two tabs** - `Tracks` and `Edit`. Tabs rather than a
+stack: the sidebar is 290px wide and the track list is arbitrarily long, so an
+edit panel below it would be unreachable on a nine-track score. The tab strip
+also owns the collapse control, since it acts on the container both panels sit
+in. The two tabs are toggle buttons with `aria-pressed`, not `role="tab"`: a real
+tablist promises arrow-key navigation and an `aria-controls` / `role="tabpanel"`
+pairing, and a half-implemented one is worse for a screen reader than an honest
+pair of toggles. The panel slides out of the way and collapses to a 30px rail carrying the
+reopen control, so it never disappears without a way back. The slide animates
+the panel's `transform` only; see the note below on why the layout itself must
+not be animated.
+
+The two panels are toggled with `v-show`, not `v-if`: switching tabs must not
+throw away a half-typed name or a chosen tuning, and neither panel is expensive
+enough to unmount.
 
 **Transport** - play/pause, stop, scrub bar, playback speed (0.25x-2x), master
 volume, loop, metronome, all in the top action bar. Space is play/pause from
 anywhere on the page. Clicking a beat in the score seeks to it
 (`enableUserInteraction`).
+
+**Editing** - the sidebar's second tab. Seven operations, all on the track
+selected in the panel (clicking a note in the score selects its track too):
+
+| Operation | What it writes |
+| --- | --- |
+| Rename a track | `track.name` and `track.shortName` |
+| Instrument | `playbackInfo.program` + the `Instrument` automations (in the Tracks tab) |
+| Tempo | every `masterBar.tempoAutomations[].value`, proportionally |
+| Transpose, keep the fingering (`Detune`) | `staff.stringTuning` |
+| Transpose, keep the tuning (`Move frets`) | `note.fret` on every note |
+| Retune, `Keep pitches` / `Keep frets` | `staff.stringTuning`, and the frets in the first mode |
+| One note across the strings | `note.string` + `note.fret`, via the buttons or `Alt` + up/down |
+| One note by a semitone | `note.fret`, via the buttons or `Alt` + `Shift` + up/down |
+
+Then `Save .gp` downloads the result, and `Revert` reloads the file exactly as it
+was opened.
+
+The two note-level moves are deliberately different things, and the keyboard says
+which is which:
+
+- **`Alt` + up/down** moves the note to the **adjacent string**, keeping the
+  pitch: the fret changes to compensate, so the score sounds identical and only
+  the fingering moves. Up goes to the higher-pitched string, which is also the
+  higher line on the tablature, so the note moves the way the key points.
+- **`Alt` + `Shift` + up/down** is the one that **changes the pitch**, by a
+  semitone, on the same string.
+
+Both repeat when held, and both refuse silently at the edge of the fretboard,
+because a message per press on a repeatable key is noise. Every other refusal (an
+occupied string, a fret that would land off the neck, a natural harmonic) is
+explained in the panel.
+
+The selected note is **ringed on the score**, once per staff it is drawn on (the
+note head on the standard staff and the fret number on the tablature), so there
+is never a doubt about whether a click landed. See the note on how, below.
+
+Changing the pitch also **sounds the note**, so a semitone nudge can be checked
+by ear. The string move stays silent, and that asymmetry is the point: it keeps
+the pitch, so there would be nothing new to hear.
+
+**Editing is only allowed while paused.** Rather than making every operation
+survive being applied mid-playback (a moving playhead, a midi rebuild that stops
+the sound, a preview note fighting the score), the whole panel stands down and
+says why. Selecting a note still works while playing, since it writes nothing.
+
+Two design rules run through all of it:
+
+**An operation that cannot be applied is refused, with numbers, never clamped.**
+Moving frets down by one when the lowest note already sits on fret 0 does not
+quietly leave those notes at 0 - it refuses and says so. A transposition that
+clamps some of its notes is not a transposition, and there is no undo to get back
+from one.
+
+**No component writes to the alphaTab model.** Every write lives in
+[src/utils/scoreEdits.js](src/utils/scoreEdits.js) as a pure named function that
+takes the model and returns what happened; `useScoreEdit` decides what the write
+invalidates; the panel renders flat reactive data. That is also what keeps an
+undo stack possible later without touching the UI - each function is already a
+command and would only need its inverse.
+
+**Deliberately out of scope for this tier:** entering notes, adding or removing
+bars, undo, changing the number of strings, and any validation of note durations.
+
+### What is NOT saved with the score
+
+The transport's **playback speed** and the **master volume** are listening
+preferences and are never written to the model. The **tempo** field in the edit
+panel is the opposite: it changes the score and goes out with the file. Mixer
+**volume**, **mute** and **solo** are session state, but **panning** is
+model-side and does get saved - see the mixer gotcha below.
 
 ---
 
@@ -80,15 +167,18 @@ anywhere on the page. Clicking a beat in the score seeks to it
 ```
 src/
   main.js                    app entry, imports styles/main.scss
-  App.vue                    layout: sidebar (tracks) + stage (score, transport)
+  App.vue                    layout: sidebar (Tracks | Edit tabs) + stage
   composables/
     usePlayer.js             the single alphaTab instance + all app state
-    useShortcuts.js          page-wide keys (Space = play/pause)
+    useScoreEdit.js          selection, isDirty, the render/midi propagation
+    useShortcuts.js          page-wide keys (Space, Alt + up/down)
   components/
     ScoreViewer.vue          owns the alphaTab host + scroll wrapper, calls init()
     ScoreHeader.vue          document strip: title / artist / tempo / bars + close
     TrackList.vue            display checkboxes, GM program select, mixer
+    EditPanel.vue            name, tempo, transpose, tuning, note inspector, save
     TransportBar.vue         play, stop, scrub, speed, volume, loop, click (in the action bar)
+    BarsPerRow.vue           force a fixed number of bars per system
     FileDropzone.vue         window-wide drag & drop + file picker
   styles/
     main.scss                :root custom properties + element resets (global)
@@ -98,8 +188,48 @@ src/
   utils/
     gmPrograms.js            the 128 GM programs and their 16 families
     trackSound.js            applyTrackProgram() - see the gotcha below
+    scoreEdits.js            every model write for the editing features
+    exportScore.js           Gp7Exporter -> Blob -> download
     format.js                formatTime()
+test/
+  fixtures/make-sample.mjs   regenerates sample.gp; the readable source of truth
+  fixtures/sample.gp         5 tracks chosen to make every refusal fire
+  helpers.js                 load / round-trip / snapshot a score in Node
+  scoreEdits.test.js         the model writes, against the fixture
+  noteSelection.test.js      why selection needs core.includeNoteBounds
+  useShortcuts.test.js       which key combination resolves to which action
+  exportScore.test.js        filenames and the .gp round trip
+  useScoreEdit.test.js       the propagation matrix and the selection
+  realScores.test.js         invariants against your own files (opt-in)
 ```
+
+### Tests
+
+`npm test` runs entirely in Node - no browser, no `AlphaTabApi`, just the
+importer, the model and the exporter. Every edit is asserted through an export to
+`.gp` and a re-import, because an edit that does not survive a save is not an
+edit.
+
+The committed fixture is generated, not hand-picked, so what is in it is readable
+rather than binary: see the header of
+[test/fixtures/make-sample.mjs](test/fixtures/make-sample.mjs). Its five tracks
+exist to make every refusal fire - a 7-string track whose frets are already
+against both bounds, a 4-string bass with a different string count, a track
+carrying natural harmonics, and a percussion track.
+
+To check the same invariants against real scores, without committing anyone's
+music to the repo:
+
+```bash
+ALPHATAB_SCORES="/path/to/a.gp:/path/to/b.gpx" npm test
+ALPHATAB_SCORES="/path/to/a/folder" npm test
+```
+
+That suite makes no assumption about track order, string counts or fret windows.
+It is skipped, not failed, when the variable is unset.
+
+Not covered by any test, and needing a browser: whether the incremental render is
+visibly faster on a large score, and how a held `Alt`+arrow feels.
 
 ### Styling rules
 
@@ -157,11 +287,152 @@ reads the same refs. `ScoreViewer` stays mounted even before a file is dropped,
 because `loadFile` needs a live api and alphaTab needs a laid-out host element
 to measure against. The empty-state dropzone is an overlay on top of it.
 
-**The alphaTab `Score` / `Track` objects are never put into a reactive ref.**
-They are large cyclic graphs (score -> tracks -> staves -> bars -> voices ->
-beats -> notes, with parent back-references); deep-proxying them would be slow
-and would risk breaking alphaTab internals. They live in plain variables, and
-the UI reads a flat `tracks` array of descriptors instead.
+**The alphaTab `Score` / `Track` / `Note` objects are never put into a reactive
+ref.** They are large cyclic graphs (score -> tracks -> staves -> bars -> voices
+-> beats -> notes, with parent back-references); deep-proxying them would be slow
+and would risk breaking alphaTab internals. They live in plain variables, and the
+UI reads flat descriptors instead - `tracks` for the panels, `selectedNote` for
+the note inspector.
+
+`useScoreEdit` needs three things `usePlayer` keeps module-private: the api, the
+raw `Track` objects, and the `pendingRestore` dance that puts the playhead back
+after a midi rebuild. They are reached through one explicit named export,
+`scoreEditHost`, rather than by duplicating the restore logic in a second
+composable or widening the public `usePlayer()` surface with model internals no
+component may touch.
+
+The note-selection handlers are keyed on the **api instance**, not on a boolean
+latch: `ScoreViewer` calls `destroy()` on unmount and `init()` on mount, so a new
+`AlphaTabApi` is a real possibility (a hot reload is enough), and a latch would
+leave the selection silently dead against an api nobody is listening to.
+
+### Note selection needs `core.includeNoteBounds`, which defaults to false
+
+`api.noteMouseDown` is gated on it:
+
+```js
+if (this.settings.core.includeNoteBounds) {
+  const note = boundsLookup?.getNoteAtPos(beat, relX, relY)
+  if (note) this._onNoteMouseDown(e, note)
+}
+```
+
+With it off, the renderer builds **no** note bounding boxes at all - measured
+headlessly on the same score: 0 boxes off, 984 boxes on - so the hit-test has
+nothing to find and the event never fires. `enableUserInteraction` is a different
+setting entirely: it governs click-to-seek and drag-to-select-a-range. Conflating
+the two costs you a feature that looks like a broken keyboard shortcut, with no
+error anywhere.
+
+The settings live in an exported `playerSettings()` rather than inline in
+`init()`, so a test can assert this without needing an `AlphaTabApi` and a DOM.
+
+Two consequences of how the hit-test works:
+
+- It is a **strict rectangle** over `note.noteHeadBounds`, with no tolerance
+  (11x9 to 22x14 CSS px on a default render). Clicking a hair off a fret digit
+  selects nothing, so the panel says "click directly on a note head" rather than
+  staying silent - detected by watching whether `noteMouseDown` follows
+  `beatMouseDown` in the same synchronous handler.
+- alphaTab calls `preventDefault()` on its mousedown, which **suppresses the
+  focus change**. Clicking a note does not move focus out of whatever field the
+  user last typed in, which is why the arrow bindings stand down only for
+  `<select>` (it owns Alt+Down) and not for text fields. No text field owns
+  Alt+Up/Down anyway: word-wise caret movement is Alt+Left/Right.
+
+### Sounding a note, and when the midi gets rebuilt
+
+`api.playNote(note)` generates a **one-note** midi file from the current model
+and plays it as a one-time file (measured at 0.1ms), so it reflects an edit
+immediately and needs no rebuild of the score midi.
+
+It does not disturb `isPlaying`, which is what lets "edit only while paused" use
+that flag without a preview locking the panel against itself:
+`playOneTimeMidiFile` sets the synth's `state` field directly, and `state` is a
+**plain field with no setter and no event**, so no `playerStateChanged` fires
+either when the preview starts or when it ends.
+
+That interacts with the midi rebuild, and the interaction is why the rebuild
+moved off a timer. `loadMidiForScore()` calls `stop()` internally, and a preview
+is one quarter note (960 ticks, ~500ms at 120bpm), so any debounce short enough
+to feel responsive would have truncated it. So edits declare one of two flavours:
+
+| Flavour | Used by | Why |
+| --- | --- | --- |
+| `now` | tempo | It changes **timing**, and the loaded midi is what maps a scrub position to a tick. A stale one would make the transport disagree with the score. |
+| `onPlay` | frets, strings, transposition, retuning | Marked stale, rebuilt when playback starts. Costs nothing while editing, and never cuts a preview. |
+
+Nothing is lost by deferring: pitch and fingering changes do not move any tick,
+so a stale midi still maps a scrub position correctly. And the rebuild itself is
+cheap - measured at 0-1ms on a 4-bar score, 5-15ms at 77 bars, 16-39ms at 118 -
+so paying for it at the moment audio starts is imperceptible, while paying per
+keystroke was waste.
+
+### Marking the selected note
+
+Three routes exist, and the one used is the cheapest of them.
+
+**Not CSS.** With `enableElementHighlighting`, alphaTab's SVG groups elements per
+**beat** (`<g class="b80">`), not per note, so a stylesheet cannot isolate one
+note of a chord.
+
+**Not `note.style`.** alphaTab *can* colour a note natively: `NoteStyle` extends
+`ElementStyle<NoteSubElement>` with a `colors` map, and
+`NoteSubElement.StandardNotationNoteHead` / `.GuitarTabFretNumber` are exactly
+the right targets. Verified: the renderer honours it (the colour appears in the
+SVG output), and it does **not** leak into an exported `.gp` - `note.style` comes
+back `undefined` after a round trip. But a style change only shows after
+`api.render()`, so highlighting on click would re-lay out the score on every
+click. Rejected on cost, not on capability, and worth remembering if a
+non-transient marker is ever wanted.
+
+**An overlay div, which is what alphaTab does for its own cursor.** With
+`core.includeNoteBounds` already on for selection, `boundsLookup` carries a
+rectangle per note head. The reverse lookup has no dedicated API, but it exists:
+`findBeats(beat)` returns one `BeatBounds` per staff, each with a `NoteBounds`
+per note carrying a `.note` back-reference and a `.noteHeadBounds`.
+
+The coordinates need **no scroll maths**. alphaTab positions its own playback
+cursor as an absolutely positioned child of the host moved with
+`transform: translate(bounds.x, bounds.y)`; being inside the scrolled content, it
+follows the score for free. The marker copies that exactly, from a
+`position: relative` wrapper that shares the host's origin.
+
+Two details that bite:
+
+- The marker needs `z-index: 1001`. alphaTab puts `z-index: 1000` on its cursor
+  wrapper inside the host, and the host is not a stacking context, so that value
+  escapes into `.alphatab-scroll` alongside the marker - the same escaping-z-index
+  behaviour documented above, seen from the other side.
+- A render **rebuilds** the bounds lookup, so the rectangles have to be re-read
+  from it afterwards. One `postRenderFinished` handler covers every path at once:
+  an edit, a track change, a resize, a bars-per-row change.
+
+A test pins the whole reverse path against a real headless render: two rectangles
+for a note on a score+tab staff, at two different vertical positions, and
+clicking the centre of each finds the same `Note` back.
+
+### Keyboard shortcuts declare their own modifiers
+
+`useShortcuts` used to drop **every** modifier combination globally
+(`if (event.ctrlKey || event.metaKey || event.altKey) return`), which was right
+while Space was the only binding but makes `Alt` + arrow impossible. The
+exclusion is now per binding: each entry declares which of Alt, Ctrl and Meta it
+wants, matched exactly. Space still refuses to fire under Ctrl or Alt, because it
+declares none - lifting the restriction for one binding does not open the others
+to combinations that belong to the browser or the OS.
+
+Shift is **opt-in** rather than always matched: it is a shifting modifier rather
+than a command one, and requiring its absence everywhere would silently break
+Shift+Space for no benefit. But the two arrow pairs genuinely mean different
+things with and without it, so they declare `shift` explicitly and get an exact
+match - which is also what keeps `Alt` + up from resolving to two bindings at
+once. A test asserts exactly one binding matches each of the four combinations.
+
+Auto-repeat is also per binding. The arrow bindings repeat, because holding the
+key to walk a note across the neck is the point; the midi rebuild they trigger is
+debounced by 250ms so a held key does not queue one rebuild per repeat.
+Everything else swallows repeats.
 
 ---
 
@@ -232,6 +503,164 @@ Two consequences worth knowing:
   effect after `api.loadMidiForScore()`. That call **stops playback** by design,
   so `usePlayer` records the tick position and the playing state first and
   restores both in the `midiLoaded` handler.
+
+---
+
+## Five alphaTab gotchas the editor had to be built around
+
+All five were found by running code against alphaTab **1.8.4** in Node, not by
+reading the docs, and each one silently corrupts an edit if you do the obvious
+thing. They are the reason
+[src/utils/scoreEdits.js](src/utils/scoreEdits.js) exists as its own module.
+
+### 1. `score.tempo` is read-only
+
+```js
+score.tempo = 200
+// TypeError: Cannot set property tempo of #<Score> which has only a getter
+```
+
+The getter is derived:
+
+```js
+get tempo() {
+  return this.masterBars.length && this.masterBars[0].tempoAutomations.length > 0
+    ? this.masterBars[0].tempoAutomations[0].value : 120
+}
+```
+
+The tempo really lives in `masterBar.tempoAutomations`, and **a score can carry
+many of them**. A real `.gpx` test file held five, two of them in the same bar.
+So "change the tempo" is ambiguous, and the answer this app picked is to scale
+them all by the ratio the user asked for on the initial tempo, preserving the
+author's tempo map. The first automation is then forced to the exact typed value,
+because that is the one the getter reads.
+
+Values are rounded to **two decimals, not to integers**: files really do carry
+fractional tempi (119.97 in one file) and multiplying produces float noise like
+`179.94899999999998`. Rounding to integers would quietly rewrite the author's map
+on every edit.
+
+`score.finish()` guarantees `masterBars[0]` has a `Tempo` automation at ratio
+position 0, so there is always something to write.
+
+### 2. String numbering is inverted relative to storage
+
+```js
+static getStringTuning(staff, noteString) {
+  if (staff.tuning.length > 0)
+    return staff.tuning[staff.tuning.length - (noteString - 1) - 1]
+  return 0
+}
+```
+
+`staff.tuning` is stored **highest string first** (`[62,57,53,48,43,38]`) while
+`note.string` counts **up from the lowest string**. Verified on a real 7-string
+file: string 1 -> 38, string 7 -> 62.
+
+This is exactly the kind of inversion that produces a semitone-scrambled score
+rather than an error, so every read in `scoreEdits.js` goes through one
+`tuningForString()` helper, and a test asserts it agrees with alphaTab's own
+`Note.getStringTuning()` on every string of every stringed staff.
+
+Related: `Tuning.getPresetsFor()` returns **shared static instances**, so a new
+`Tuning` object is always constructed rather than writing into
+`staff.stringTuning.tunings`, which could corrupt the global preset table for the
+rest of the session. And the preset lists thin out fast - 31 presets for 6
+strings, 11 for 4, 6 for 5, exactly **one** for 7 and **none** for 8 - while
+`Tuning.findTuning()` returned `null` for both test files' guitar tunings. The
+tuning dropdown therefore always injects the staff's current tuning when no
+preset matches, or a 7-string track would show a list the user cannot get back
+to.
+
+### 3. Tempo is exempt from the automation-overwrite gotcha
+
+The mixer gotcha above (setting `playbackInfo.program` is not enough, because the
+file's `Instrument` automation wins) does **not** apply to tempo. `Beat.finish()`
+strips Tempo automations out of `beat.automations` altogether:
+
+```js
+if (automation.type !== AutomationType.Tempo) validBeatAutomations.push(automation)
+```
+
+and the midi generator reads the tempo only from `masterBar.tempoAutomations`. So
+unlike the program, tempo has exactly one write site.
+
+### 4. A natural harmonic's pitch does not come from its fret
+
+`realValue` is normally `fret + stringTuning - transpositionPitch`. But for
+`HarmonicType.Natural`:
+
+```js
+if (this.harmonicType === HarmonicType.Natural)
+  realValue = this.harmonicPitch + this.stringTuning - transpositionPitch
+```
+
+The fret is **absent from the formula**. Measured on a real file: `note.fret += 2`
+left the note sounding at midi 55, while shifting the tuning by 2 moved it to 57.
+
+Two consequences, and both would have shipped as silent corruption:
+
+- **Moving frets is not a transposition** on a score with natural harmonics: every
+  other note moves and they stay put.
+- **Retuning while keeping the pitches cannot keep theirs**, because their pitch
+  follows the tuning and no fret compensation reaches it.
+
+Both fret-based operations therefore count them and refuse, pointing at the
+tuning-based transposition, which handles them correctly. Artificial, pinch, tap
+and semi harmonics are fine - `harmonicPitch` is simply added, so a fret shift
+moves them by the same amount (all 37 harmonics in one `.gpx` were artificial and
+behaved correctly). `staff.transpositionPitch` is likewise harmless: it is
+subtracted from every note on the staff, so it cancels out of every delta.
+
+### 5. `note.string` has a cached index beside it
+
+`Beat` keeps a `noteStringLookup` Map of string -> note, filled by `addNote()`
+and rebuilt only by `finish()`. Assigning `note.string` in place leaves it
+pointing at the old string, and it is not decorative:
+
+- `MidiFileGenerator` reads `beat.hasNoteOnString()` to decide where a let-ring
+  stops;
+- tie, hammer-on and slide resolution all go through `getNoteOnString()`.
+
+Measured on the test fixture: moving 30 notes to another string with the naive
+write left **all 30** unfindable on their own string. So `writeNoteString()`
+updates the Map alongside every string write, and a test asserts the generated
+midi note-ons come out **byte-identical** after moving every movable note across
+the strings, on the fixture and on every real score handed to the opt-in suite.
+
+Remove-and-re-add is **not** the fix: `addNote()` sets
+`note.index = notes.length` and pushes, while `removeNote()` does not renumber
+what is left, so a round trip through them corrupts `note.index` and reorders the
+chord.
+
+The sibling `noteValueLookup` (keyed on `realValue`) does go stale on a fret
+change, but it is only consulted by `findTieOrigin` for notes that are **not**
+stringed, and every operation here is on stringed notes.
+
+### And one non-gotcha: `finish()` is not needed after these edits
+
+`score.finish()` is idempotent - measured on a 118-bar score at 16ms, then 9.5ms,
+then 6.2ms, with beat and note counts unchanged - but all it recomputes is
+structure and durations, and none of the seven operations changes either. So
+nothing in `scoreEdits.js` calls it. Adding or removing beats or bars **would**
+need it.
+
+### Why there is no undo
+
+`JsonConverter` on an 85-bar score:
+
+```
+scoreToJson : 108 ms, 4431 KB
+jsonToScore :  52 ms
+a 100-deep undo stack:  ~433 MB
+```
+
+A stack of snapshots is not viable. If undo arrives it will need invertible
+commands, which is why every model write is already a named function with a
+result. In the meantime the safety net is: range operations refuse rather than
+clamp, the download is available before anything risky, and `Revert` reloads the
+bytes of the file as it was opened (kept in memory, since they were read anyway).
 
 ---
 

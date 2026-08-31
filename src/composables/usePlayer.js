@@ -2,6 +2,7 @@ import { ref, shallowRef, watch } from 'vue'
 import * as alphaTab from '@coderline/alphatab'
 import { familyOf, programName } from '@/utils/gmPrograms'
 import { applyTrackProgram, applyTrackBalance } from '@/utils/trackSound'
+import { countNaturalHarmonics, describeTuning, fretRange } from '@/utils/scoreEdits'
 
 // Single shared alphaTab instance for the whole app.
 //
@@ -22,6 +23,24 @@ let scoreTracks = [] // raw alphaTab Track objects, indexed by track.index
 // Set right before loadMidiForScore() so the midiLoaded handler can put the
 // playhead back where it was and resume if we were playing.
 let pendingRestore = null
+
+// The bytes of the file that was opened, kept so an edit session always has a
+// way back. There is no undo stack - a stack of score snapshots is not viable,
+// `JsonConverter` costs 108ms and 4.4MB per snapshot on an 85-bar score - so
+// this one buffer covers the worst case for the price of a reference to data
+// that was read anyway.
+//
+// The buffer itself is a plain variable (it is data, not UI state) with a
+// reactive companion flag, because the Revert button's enabled state has to
+// follow it and a getter function would never re-evaluate.
+let originalBytes = null
+const canRevert = ref(false)
+
+// True as soon as any edit has been applied to the model, false again after an
+// export or after (re)loading a file. Lives here rather than in useScoreEdit
+// because it is score-lifecycle state: `scoreLoaded` is what has to clear it,
+// and that handler is here.
+const isDirty = ref(false)
 
 const isScoreLoaded = ref(false) // a score is loaded and rendered
 const isPlayerReady = ref(false) // soundfont + midi loaded, playback possible
@@ -54,11 +73,24 @@ if (Number.isFinite(storedVolume)) {
   masterVolume.value = Math.min(1, Math.max(0, storedVolume))
 }
 
-function trackDescriptor(track, renderedIndexes) {
+// The MODEL-DERIVED half of a track descriptor: everything read straight off
+// the Track, and therefore everything an edit can invalidate. Split out from
+// the mixer half so `syncTrackFields()` can refresh it after an edit without
+// resetting volume, mute, solo or what is displayed - those are app state, not
+// file state.
+//
+// The editing fields (tuning, fret range, harmonic count) are what let EditPanel
+// stay a pure reader of flat reactive data, per the rule that no component ever
+// touches the alphaTab model. They cost one walk of the track's notes, which is
+// sub-millisecond even on a 3700-note score.
+function trackModelFields(track) {
   const program = track.playbackInfo?.program ?? 0
+  const staff = (track.staves ?? []).find((s) => s.isStringed) ?? null
+  const frets = staff ? fretRange(staff) : { count: 0, min: 0, max: 0 }
   return {
     index: track.index,
     name: track.name?.trim() || `Track ${track.index + 1}`,
+    shortName: track.shortName ?? '',
     isPercussion: track.isPercussion,
     // Percussion is driven by the drum channel, not by a program number, so
     // the sound picker is meaningless there.
@@ -66,6 +98,24 @@ function trackDescriptor(track, renderedIndexes) {
     programLabel: track.isPercussion ? 'Percussion kit' : programName(program),
     family: track.isPercussion ? 'Drums' : familyOf(program),
     color: colorToCss(track.color),
+
+    // Editing fields. A track with no stringed staff (percussion) reports
+    // isStringed false, and every fret or tuning operation refuses it.
+    isStringed: !!staff,
+    stringCount: staff?.tuning.length ?? 0,
+    tuning: staff ? [...staff.tuning] : [],
+    tuningName: staff?.tuningName || '',
+    tuningLabel: staff ? describeTuning(staff.tuning) : '',
+    frets,
+    // Notes whose pitch does not follow their fret, which is what makes the
+    // fret-based operations refuse. See pitfall 4 in scoreEdits.js.
+    naturalHarmonics: staff ? countNaturalHarmonics(staff) : 0,
+  }
+}
+
+function trackDescriptor(track, renderedIndexes) {
+  return {
+    ...trackModelFields(track),
     rendered: renderedIndexes.has(track.index),
     volume: 1,
     // 0-16, 8 = centre. Seeded from the file, which usually pans tracks apart.
@@ -73,6 +123,59 @@ function trackDescriptor(track, renderedIndexes) {
     isMute: false,
     isSolo: false,
   }
+}
+
+// Re-read the model half of one descriptor after an edit. Mutates in place so
+// Vue sees a property-level change rather than a whole new array.
+function syncTrackFields(index) {
+  const track = scoreTracks.find((t) => t.index === index)
+  const descriptor = tracks.value.find((t) => t.index === index)
+  if (!track || !descriptor) return
+  Object.assign(descriptor, trackModelFields(track))
+}
+
+// Rebuild the midi from the data model.
+//
+// `loadMidiForScore()` STOPS playback by design, so the tick and the playing
+// state are recorded first and put back by the `midiLoaded` handler. Every
+// model-side change the synth cannot be told about directly goes through here
+// rather than reimplementing that dance: the midi program, the balance, and
+// every edit that changes what is played.
+//
+// Module scope rather than inside usePlayer(), because `scoreEditHost` below
+// needs it too and it only ever touches module state.
+function reloadMidi(wasPlaying = isPlaying.value) {
+  if (!api) return
+  midiStale = false
+  pendingRestore = { tick: api.tickPosition, wasPlaying }
+  api.loadMidiForScore()
+}
+
+// An edit has changed what would be PLAYED, but the midi has not been rebuilt.
+//
+// Note-level edits mark the midi stale rather than rebuilding it, and the
+// rebuild happens when playback actually starts. Two reasons, and the second is
+// the one that matters:
+//
+//  - It is free. Rebuilding costs 0-1ms on a 4-bar score, 5-15ms at 77 bars and
+//    16-39ms at 118 (measured), so paying it once at the moment audio starts is
+//    imperceptible, while paying it per keystroke is waste.
+//  - `loadMidiForScore()` calls `stop()` internally, which would CUT the note
+//    preview short. A preview is one quarter note (960 ticks, ~500ms at 120bpm),
+//    so any timer short enough to feel responsive would have truncated it.
+//
+// Edits that change TIMING (the tempo) still rebuild immediately: the loaded
+// midi is what maps a scrub position to a tick, so leaving it stale would make
+// the transport lie.
+let midiStale = false
+
+// Rebuild now if an edit left the midi stale. Returns true when it did, in which
+// case playback (if asked for) is resumed by the `midiLoaded` handler rather
+// than by the caller.
+function flushMidi(thenPlay) {
+  if (!midiStale || !api) return false
+  reloadMidi(thenPlay)
+  return true
 }
 
 function colorToCss(color) {
@@ -91,6 +194,56 @@ function readScoreInfo(loaded) {
     tempo: loaded?.tempo ?? null,
     barCount,
     trackCount: loaded?.tracks?.length ?? 0,
+  }
+}
+
+// The alphaTab settings this app runs on.
+//
+// Extracted from init() so it can be asserted without a DOM: `includeNoteBounds`
+// below is load-bearing for a whole feature and was already got wrong once, and
+// a test that needs an AlphaTabApi could never have caught it.
+export function playerSettings(scrollElement) {
+  return {
+    core: {
+      fontDirectory: `${import.meta.env.BASE_URL}font/`,
+      // REQUIRED for note selection, and not obvious: `api.noteMouseDown` is
+      // gated on this setting, which defaults to FALSE. alphaTab's click
+      // handler reads
+      //   if (this.settings.core.includeNoteBounds) {
+      //     const note = boundsLookup?.getNoteAtPos(beat, relX, relY)
+      //     if (note) this._onNoteMouseDown(e, note)
+      //   }
+      // and with it off the renderer builds NO note bounding boxes at all -
+      // measured headlessly: 0 boxes off, 984 boxes on, on the same score. So
+      // only `beatMouseDown` ever fires and the edit panel can never learn
+      // which note was clicked, which is exactly how "Alt + arrow does nothing"
+      // happens with no error anywhere.
+      //
+      // `enableUserInteraction` is a different setting entirely: it governs
+      // click-to-seek and drag-to-select-a-range.
+      //
+      // The cost is one note-level bounding box per note head, built during
+      // rendering, which is what makes note hit-testing possible at all.
+      includeNoteBounds: true,
+    },
+    player: {
+      enablePlayer: true,
+      enableCursor: true,
+      enableAnimatedBeatCursor: true,
+      enableElementHighlighting: true,
+      // A viewer wants click-to-seek and drag-to-select-a-range; the game
+      // deliberately disabled this, we deliberately enable it.
+      enableUserInteraction: true,
+      soundFont: `${import.meta.env.BASE_URL}soundfont/sonivox.sf2`,
+      scrollElement,
+      scrollMode: alphaTab.ScrollMode.Continuous,
+      // Land the system a little below the top edge instead of flush against
+      // it. Negative, because the target scroll position is barY + this.
+      scrollOffsetY: -12,
+    },
+    display: {
+      layoutMode: alphaTab.LayoutMode.Page,
+    },
   }
 }
 
@@ -114,29 +267,7 @@ export function usePlayer() {
   function init(element, scrollElement) {
     if (api || !element || !scrollElement) return
 
-    api = new alphaTab.AlphaTabApi(element, {
-      core: {
-        fontDirectory: `${import.meta.env.BASE_URL}font/`,
-      },
-      player: {
-        enablePlayer: true,
-        enableCursor: true,
-        enableAnimatedBeatCursor: true,
-        enableElementHighlighting: true,
-        // A viewer wants click-to-seek and drag-to-select-a-range; the game
-        // deliberately disabled this, we deliberately enable it.
-        enableUserInteraction: true,
-        soundFont: `${import.meta.env.BASE_URL}soundfont/sonivox.sf2`,
-        scrollElement,
-        scrollMode: alphaTab.ScrollMode.Continuous,
-        // Land the system a little below the top edge instead of flush against
-        // it. Negative, because the target scroll position is barY + this.
-        scrollOffsetY: -12,
-      },
-      display: {
-        layoutMode: alphaTab.LayoutMode.Page,
-      },
-    })
+    api = new alphaTab.AlphaTabApi(element, playerSettings(scrollElement))
 
     api.masterVolume = masterVolume.value
 
@@ -172,6 +303,11 @@ export function usePlayer() {
       api.changeTrackMute(scoreTracks, false)
       api.changeTrackSolo(scoreTracks, false)
       api.changeTrackVolume(scoreTracks, 1)
+
+      // A freshly loaded model has no edits in it, whether this was a new file
+      // or a revert to the bytes we kept.
+      isDirty.value = false
+      midiStale = false
 
       isScoreLoaded.value = true
       position.value = { currentTime: 0, endTime: 0, currentTick: 0, endTick: 0 }
@@ -215,6 +351,8 @@ export function usePlayer() {
     api?.destroy()
     api = null
     scoreTracks = []
+    originalBytes = null
+    canRevert.value = false
     tracks.value = []
     scoreInfo.value = null
     isScoreLoaded.value = false
@@ -231,6 +369,11 @@ export function usePlayer() {
     fileName.value = file.name
     const reader = new FileReader()
     reader.onload = (e) => {
+      // Keep the bytes so `revertToOriginal()` can put this exact file back.
+      // A copy, because alphaTab's importer reads from the buffer and we do not
+      // want to depend on it leaving it untouched.
+      originalBytes = e.target.result.slice(0)
+      canRevert.value = true
       // alphaTab reports parse failures through the `error` event, not by
       // throwing, so there is nothing to catch here.
       api.load(e.target.result)
@@ -245,10 +388,32 @@ export function usePlayer() {
     fileName.value = ''
     loadError.value = null
     isScoreLoaded.value = false
+    isDirty.value = false
     tracks.value = []
     scoreInfo.value = null
     scoreTracks = []
+    originalBytes = null
+    canRevert.value = false
+    // A held Note keeps its whole score graph alive through its back-references,
+    // so closing has to drop the selection or nothing is actually freed. There
+    // is no alphaTab event for "score closed" - `scoreLoaded` only fires on a
+    // LOAD - hence the explicit hook.
+    scoreEditHost.onScoreCleared?.()
+    midiStale = false
     api?.stop()
+  }
+
+  // Throw away every edit and reload the file exactly as it was opened.
+  //
+  // This is the whole safety net for this tier of editing: there is no undo, so
+  // the guarantees are that range operations refuse rather than clamp, that the
+  // download is available before anything risky, and that the file as loaded is
+  // always one click away.
+  function revertToOriginal() {
+    if (!api || !originalBytes) return false
+    // scoreLoaded clears isDirty and re-seeds every descriptor.
+    api.load(originalBytes.slice(0))
+    return true
   }
 
   // ---- track rendering ----------------------------------------------------
@@ -299,14 +464,14 @@ export function usePlayer() {
     if (track.playbackInfo.program === value) return
 
     if (!applyTrackProgram(track, value)) return
-    descriptor.program = value
-    descriptor.programLabel = programName(value)
-    descriptor.family = familyOf(value)
+    syncTrackFields(index)
 
     // The midi is generated from the data model, so a program change only takes
     // effect after the midi is rebuilt.
-    pendingRestore = { tick: api.tickPosition, wasPlaying: isPlaying.value }
-    api.loadMidiForScore()
+    reloadMidi()
+    // This writes the model, so it goes out with the exported file: it is an
+    // edit, not a listening preference like volume or master volume.
+    isDirty.value = true
   }
 
   // ---- mixer --------------------------------------------------------------
@@ -338,8 +503,9 @@ export function usePlayer() {
     if (!api || track.playbackInfo.balance === value) return
 
     applyTrackBalance(track, value)
-    pendingRestore = { tick: api.tickPosition, wasPlaying: isPlaying.value }
-    api.loadMidiForScore()
+    reloadMidi()
+    // Model-side, like the program: it is written into the exported file.
+    isDirty.value = true
   }
 
   function setTrackMute(index, muted) {
@@ -384,8 +550,8 @@ export function usePlayer() {
     }
 
     if (balanceChanged) {
-      pendingRestore = { tick: api.tickPosition, wasPlaying: isPlaying.value }
-      api.loadMidiForScore()
+      reloadMidi()
+      isDirty.value = true
     }
   }
 
@@ -431,7 +597,12 @@ export function usePlayer() {
   // ---- transport ----------------------------------------------------------
 
   function playPause() {
-    api?.playPause()
+    if (!api) return
+    // Starting playback is the moment a stale midi would be heard, so this is
+    // where the rebuild is paid for. `midiLoaded` starts the playback once the
+    // new midi is in, which is why there is no api.playPause() on this path.
+    if (!isPlaying.value && flushMidi(true)) return
+    api.playPause()
   }
 
   function stop() {
@@ -448,6 +619,7 @@ export function usePlayer() {
     destroy,
     loadFile,
     clearScore,
+    revertToOriginal,
 
     setTrackRendered,
     showOnlyTrack,
@@ -470,6 +642,10 @@ export function usePlayer() {
     isPlayerReady,
     isRendering,
     isPlaying,
+    isDirty,
+    // Reactive, so the Revert control can follow it: true once a file has been
+    // read, false again after clearScore().
+    canRevert,
     loadError,
     fileName,
     tracks,
@@ -482,6 +658,68 @@ export function usePlayer() {
     isLooping,
     metronome,
   }
+}
+
+// The seam `useScoreEdit` writes through.
+//
+// Editing needs three things that stay module-private on purpose: the api, the
+// raw alphaTab Track objects (never in a reactive ref - see the note at the top
+// of this file), and the pendingRestore dance that survives a midi rebuild.
+// Exposing them as an explicit named object beats either duplicating the
+// playhead-restore logic in a second composable or widening the public
+// `usePlayer()` surface with model internals that no component may touch.
+//
+// `useScoreEdit` is the only intended consumer.
+export const scoreEditHost = {
+  get api() {
+    return api
+  },
+  get score() {
+    return api?.score ?? null
+  },
+  trackAt(index) {
+    return scoreTracks.find((t) => t.index === index) ?? null
+  },
+  // Re-read the flat descriptor for one track after an edit wrote to it.
+  syncTrack(index) {
+    syncTrackFields(index)
+  },
+  // Re-read the document strip after an edit changed the tempo.
+  syncScoreInfo() {
+    if (api?.score) scoreInfo.value = readScoreInfo(api.score)
+  },
+  // Shorthand, not a method body: `reloadMidi() { reloadMidi() }` would shadow
+  // the module function with itself and recurse forever.
+  reloadMidi,
+  // Defer the rebuild to the moment playback starts. See `midiStale`.
+  markMidiStale() {
+    midiStale = true
+  },
+  // Sound one note, straight from the model.
+  //
+  // `api.playNote()` generates a ONE-NOTE midi file from the current model and
+  // plays it as a one-time file, so it needs no rebuild of the score midi and
+  // reflects an edit immediately (measured at 0.1ms).
+  //
+  // It does not disturb `isPlaying`: `playOneTimeMidiFile` sets the synth's
+  // `state` field directly, and `state` is a plain field with no setter and no
+  // event, so no `playerStateChanged` is fired either when the preview starts or
+  // when it ends. That is what lets "edit only while paused" use `isPlaying`
+  // without a preview locking the panel.
+  previewNote(note) {
+    if (!api || !note || !isPlayerReady.value) return false
+    api.playNote(note)
+    return true
+  },
+  // Set by useScoreEdit. Called by clearScore(), which has no alphaTab event to
+  // hang off.
+  onScoreCleared: null,
+  markDirty() {
+    isDirty.value = true
+  },
+  clearDirty() {
+    isDirty.value = false
+  },
 }
 
 // These four are plain user preferences: mirror them onto the api whenever they
