@@ -216,7 +216,7 @@
               title="Replace every note in the selection with silence of the same length"
               @click="deleteSelection"
             >Silence</button>
-            <kbd>Suppr</kbd>
+            <kbd>Delete</kbd>
           </div>
 
           <p class="hint">
@@ -281,7 +281,7 @@
               title="Replace this note with silence of the same length"
               @click="deleteSelection"
             >Silence</button>
-            <kbd>Suppr</kbd>
+            <kbd>Delete</kbd>
           </div>
 
           <p class="hint">

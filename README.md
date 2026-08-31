@@ -128,7 +128,7 @@ the score selects its track too):
 | Retune, `Keep pitches` / `Keep frets` | `staff.stringTuning`, and the frets in the first mode |
 | Notes across the strings | `note.string` + `note.fret`, via the buttons or `Alt` + up/down |
 | Notes by a semitone | `note.fret`, via the buttons or `Alt` + `Shift` + up/down |
-| Notes replaced by silence | removes them from their beats, via `Silence` or `Suppr` / `Delete` |
+| Notes replaced by silence | removes them from their beats, via `Silence` or `Delete` |
 
 Then `Save .gp` downloads the result - or **`Ctrl+S`** / **`Cmd+S`**, which
 deliberately takes the key from the browser's "Save page as" - and `Revert`
@@ -191,7 +191,7 @@ invalidates; the panel renders flat reactive data. That is also what keeps an
 undo stack possible later without touching the UI - each function is already a
 command and would only need its inverse.
 
-**`Suppr` / `Delete` replaces the selection with silence.** A note becomes
+**`Delete` (or `Backspace`) replaces the selection with silence.** A note becomes
 silence by being removed from its beat, and the duration takes care of itself:
 `Beat.isRest` is a getter over `notes.length === 0` and `beat.duration` is
 independent of its notes, so emptying a beat turns it into a rest of exactly the
@@ -236,13 +236,15 @@ src/
   composables/
     usePlayer.js             the single alphaTab instance + all app state
     useScoreEdit.js          selection, isDirty, the render/midi propagation
-    useShortcuts.js          page-wide keys (Space, Alt + up/down)
+    useShortcuts.js          the binding table, and the help derived from it
+    useHelp.js               whether the shortcut modal is showing
   components/
     ScoreViewer.vue          owns the alphaTab host + scroll wrapper, calls init()
     ScoreHeader.vue          document strip: title / artist / tempo / bars + close
     TrackList.vue            "Mixer": display checkboxes, solo/mute/volume/pan
     TrackEditPanel.vue       "Track": name, instrument, transpose, tuning, note
     ScoreEditPanel.vue       "Score": tempo, save, revert
+    HelpDialog.vue           the "?" modal: shortcuts, generated from BINDINGS
     TransportBar.vue         play, stop, scrub, speed, volume, loop, click (in the action bar)
     BarsPerRow.vue           force a fixed number of bars per system
     FileDropzone.vue         window-wide drag & drop + file picker
@@ -539,6 +541,35 @@ Two details that bite:
 A test pins the whole reverse path against a real headless render: two rectangles
 for a note on a score+tab staff, at two different vertical positions, and
 clicking the centre of each finds the same `Note` back.
+
+### The shortcut help is generated, not written
+
+The `?` button in the action bar opens a native `<dialog>` listing every
+shortcut, and the keyboard half of that list is **derived from `BINDINGS`**. A
+help table that is typed out by hand starts lying the first time someone adds a
+binding and forgets it; this one cannot.
+
+`describeBinding()` turns a binding into what to press - modifiers in a fixed
+order, then the key, with `code` mapped through a display table (`ArrowUp` to an
+arrow glyph) and a `key` upper-cased. It deliberately does **not** show a
+`shift: false`, which is an exclusion rather than a key to press.
+`shortcutHelp()` then groups by label, which is what folds `Ctrl+S` and `Cmd+S`
+into one row and `Delete` and `Backspace` into another. A test asserts every
+binding is accounted for, so a new one shows up in the help whether or not
+anyone remembers.
+
+The mouse half IS hand-written, because alphaTab owns the mouse and there is no
+table to generate it from.
+
+`<dialog>` with `showModal()` rather than a hand-rolled overlay: it brings the
+backdrop, the focus trap and Escape-to-close, and hand-rolling those is how
+half-accessible modals happen. Two things it does not bring, both handled: a
+backdrop click (the click reports the DIALOG as its target, since the backdrop is
+its pseudo element, which is exactly what separates outside from inside), and
+suppressing the page shortcuts. The keydown handler stands down while
+`document.querySelector('dialog[open]')` finds anything - asked of the DOM rather
+than of a flag, because `showModal()` is what makes a dialog modal, so that
+selector is the same truth the browser is using.
 
 ### `code` for positions, `key` for letters
 

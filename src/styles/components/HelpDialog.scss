@@ -1,0 +1,142 @@
+@use '@/styles/mixins' as *;
+
+// A native <dialog>: the element supplies the backdrop, the focus trap and
+// Escape-to-close, so there is nothing here but appearance.
+//
+// The default UA styling has to be undone deliberately - a dialog arrives with a
+// border, a padding and an auto width that fight everything else in this app.
+.help-dialog {
+  margin: auto;
+  padding: 0;
+  width: min(680px, calc(100vw - 2rem));
+  max-height: calc(100vh - 3rem);
+  border: 1px solid var(--chrome-border);
+  border-radius: $radius-block;
+  background: var(--chrome);
+  color: var(--chrome-text);
+  overflow: hidden;
+
+  &::backdrop {
+    // Dark enough to lift the sheet off a white score behind it.
+    background: rgba(11, 15, 22, 0.55);
+  }
+}
+
+.sheet {
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 3rem);
+  min-height: 0;
+}
+
+header {
+  @include edit-header;
+  // The dialog's own header, so it does not need to stick: the body scrolls
+  // under it and this element is outside that scroll.
+  position: static;
+
+  h2 {
+    @include section-label;
+    font-size: 0.74rem;
+    color: var(--chrome-text);
+  }
+}
+
+.close {
+  @include button-chrome;
+  padding: 0.05rem 0.4rem;
+  font-size: 1rem;
+  line-height: 1.2;
+}
+
+// The only scrolling region, so a long shortcut list never pushes the footer off
+// screen.
+.body {
+  overflow-y: auto;
+  min-height: 0;
+  padding: 0 $gap-sm;
+}
+
+section {
+  padding: $gap-md 0;
+
+  & + section {
+    border-top: 1px solid var(--chrome-divider);
+  }
+
+  h3 {
+    @include section-label;
+    margin-bottom: $gap-sm;
+    font-size: 0.62rem;
+    color: var(--chrome-text-muted);
+  }
+}
+
+// Keys on the left, what they do on the right. A grid rather than a table so it
+// collapses to one column on a narrow window without a horizontal scrollbar.
+dl {
+  display: grid;
+  grid-template-columns: minmax(7rem, max-content) minmax(0, 1fr);
+  gap: 0.35rem $gap-md;
+  align-items: baseline;
+  margin: 0;
+}
+
+dt {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+
+dd {
+  margin: 0;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  color: var(--chrome-text);
+}
+
+kbd {
+  @include tabular;
+  flex: none;
+  padding: 0.1rem 0.36rem;
+  font-size: 0.68rem;
+  white-space: nowrap;
+  background: var(--chrome-raised);
+  border: 1px solid var(--chrome-divider);
+  border-bottom-width: 2px;
+  border-radius: $radius-control;
+  color: var(--chrome-text);
+}
+
+// "or", between two combinations that do the same thing.
+.alt {
+  font-size: 0.62rem;
+  color: var(--chrome-text-muted);
+}
+
+// A mouse gesture reads as prose, not as a key, so it gets no keycap.
+.gesture {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--chrome-text);
+}
+
+footer {
+  @include edit-hint;
+  flex: none;
+  padding: $gap-sm;
+  font-size: 0.7rem;
+  background: var(--chrome-raised);
+  border-top: 1px solid var(--chrome-border);
+}
+
+@media (max-width: 560px) {
+  dl {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.1rem;
+  }
+  dd {
+    margin-bottom: 0.5rem;
+  }
+}

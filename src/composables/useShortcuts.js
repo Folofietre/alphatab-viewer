@@ -1,6 +1,7 @@
 import { onMounted, onBeforeUnmount } from 'vue'
 import { usePlayer } from '@/composables/usePlayer'
 import { useScoreEdit } from '@/composables/useScoreEdit'
+import { useHelp } from '@/composables/useHelp'
 
 // Page-wide keyboard shortcuts.
 //
@@ -159,6 +160,17 @@ export const BINDINGS = [
     appliesTo: (_el, player) => player.isScoreLoaded.value,
     run: saveScore,
   },
+  // The help itself. `?` needs Shift on most layouts and Shift is not declared,
+  // so it is ignored - matching the CHARACTER is what makes this work on any
+  // keyboard, whatever combination produces it there.
+  //
+  // Stands down in a text field, where "?" is a character someone is typing.
+  {
+    key: '?',
+    label: 'Show the keyboard shortcuts',
+    appliesTo: (el) => !ownsTypingKeys(el),
+    run: () => useHelp().toggleHelp(),
+  },
   // Ctrl+Z and Cmd+Z. Two entries for the same reason Ctrl+S has two, and
   // `shift: false` because Ctrl+Shift+Z is redo everywhere - a key this editor
   // does not implement, so it is left alone rather than aliased to undo.
@@ -200,7 +212,7 @@ export const BINDINGS = [
   },
   {
     code: 'ArrowUp',
-    label: 'Selected note: up one string, same pitch',
+    label: 'Move up one string, same pitch',
     modifiers: { alt: true, shift: false },
     // Repeats, unlike Space: holding the key to walk a note across the neck is
     // exactly the point. The midi rebuild is debounced downstream so a held key
@@ -211,7 +223,7 @@ export const BINDINGS = [
   },
   {
     code: 'ArrowDown',
-    label: 'Selected note: down one string, same pitch',
+    label: 'Move down one string, same pitch',
     modifiers: { alt: true, shift: false },
     allowRepeat: true,
     appliesTo: (el) => !ownsAltArrows(el),
@@ -219,7 +231,7 @@ export const BINDINGS = [
   },
   {
     code: 'ArrowUp',
-    label: 'Selected note: one semitone up',
+    label: 'Up one semitone',
     modifiers: { alt: true, shift: true },
     allowRepeat: true,
     appliesTo: (el) => !ownsAltArrows(el),
@@ -227,7 +239,7 @@ export const BINDINGS = [
   },
   {
     code: 'ArrowDown',
-    label: 'Selected note: one semitone down',
+    label: 'Down one semitone',
     modifiers: { alt: true, shift: true },
     allowRepeat: true,
     appliesTo: (el) => !ownsAltArrows(el),
@@ -259,6 +271,56 @@ export function matchesModifiers(binding, event) {
   )
 }
 
+// How a key reads on screen. Derived, never hand-written, so the help cannot
+// drift from what the handler actually does.
+const KEY_NAMES = {
+  Space: 'Space',
+  Enter: 'Enter',
+  Delete: 'Delete',
+  Backspace: 'Backspace',
+  ArrowUp: '\u2191',
+  ArrowDown: '\u2193',
+  ArrowLeft: '\u2190',
+  ArrowRight: '\u2192',
+}
+
+export function describeBinding(binding) {
+  const parts = []
+  const wanted = binding.modifiers ?? {}
+  if (wanted.ctrl) parts.push('Ctrl')
+  if (wanted.meta) parts.push('Cmd')
+  if (wanted.alt) parts.push('Alt')
+  // Only when the binding WANTS it. `shift: false` is an exclusion, not a key to
+  // show.
+  if (wanted.shift) parts.push('Shift')
+
+  if (binding.code) parts.push(KEY_NAMES[binding.code] ?? binding.code)
+  else if (binding.key) parts.push(binding.key.toUpperCase())
+
+  return parts.join(' + ')
+}
+
+// One row per distinct action, with every key combination that triggers it.
+//
+// Grouped by label, which is what folds Ctrl+S and Cmd+S into one row, and
+// Delete and Backspace into another. Order follows BINDINGS, so the table reads
+// in the order a maintainer sees them.
+export function shortcutHelp() {
+  const rows = []
+  const byLabel = new Map()
+  for (const binding of BINDINGS) {
+    const existing = byLabel.get(binding.label)
+    if (existing) {
+      existing.keys.push(describeBinding(binding))
+      continue
+    }
+    const row = { label: binding.label, keys: [describeBinding(binding)] }
+    byLabel.set(binding.label, row)
+    rows.push(row)
+  }
+  return rows
+}
+
 export function useShortcuts() {
   const player = usePlayer()
   const edit = useScoreEdit()
@@ -279,6 +341,14 @@ export function useShortcuts() {
         `| undo stack depth=${edit.undoDepth.value} canUndo=${edit.canUndo.value}`,
       )
     }
+
+    // A modal owns the keyboard while it is open, so Space must not reach
+    // play/pause from inside the help. Asked of the DOM rather than of a flag:
+    // `showModal()` is what makes a dialog modal, so `dialog[open]` is the same
+    // truth the browser is using, and it covers any future dialog for free.
+    //
+    // Escape and the focus trap are the dialog element's own job.
+    if (document.querySelector('dialog[open]')) return
 
     // Respect a handler that already acted.
     if (event.defaultPrevented) return

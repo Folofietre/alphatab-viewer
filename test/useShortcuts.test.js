@@ -13,7 +13,9 @@ globalThis.localStorage ??= {
   setItem: () => {},
 }
 
-const { BINDINGS, matchesKey, matchesModifiers } = await import('@/composables/useShortcuts')
+const { BINDINGS, describeBinding, matchesKey, matchesModifiers, shortcutHelp } = await import(
+  '@/composables/useShortcuts'
+)
 
 // The keyboard half of the fret nudge, on its own.
 //
@@ -51,8 +53,8 @@ describe('binding resolution', () => {
   })
 
   it('Alt + Shift + arrow is the one that changes the PITCH, by a semitone', () => {
-    expect(resolve(key('ArrowUp', { alt: true, shift: true }))?.label).toMatch(/semitone up/)
-    expect(resolve(key('ArrowDown', { alt: true, shift: true }))?.label).toMatch(/semitone down/)
+    expect(resolve(key('ArrowUp', { alt: true, shift: true }))?.label).toMatch(/Up one semitone/)
+    expect(resolve(key('ArrowDown', { alt: true, shift: true }))?.label).toMatch(/Down one semitone/)
   })
 
   it('Shift is what separates the two, so neither is ambiguous', () => {
@@ -250,15 +252,95 @@ describe('Ctrl+Z undoes', () => {
   })
 })
 
+describe('the generated help', () => {
+  it('names a plain key, a modifier combination and an arrow', () => {
+    expect(describeBinding({ code: 'Space' })).toBe('Space')
+    expect(describeBinding({ key: 's', modifiers: { ctrl: true } })).toBe('Ctrl + S')
+    expect(describeBinding({ key: 'z', modifiers: { meta: true } })).toBe('Cmd + Z')
+    expect(describeBinding({ code: 'ArrowUp', modifiers: { alt: true } })).toBe('Alt + \u2191')
+    expect(
+      describeBinding({ code: 'ArrowDown', modifiers: { alt: true, shift: true } }),
+    ).toBe('Alt + Shift + \u2193')
+  })
+
+  it('does not show a shift the binding merely EXCLUDES', () => {
+    // `shift: false` keeps Ctrl+Shift+S off the binding; it is not a key to press.
+    expect(describeBinding({ key: 's', modifiers: { ctrl: true, shift: false } })).toBe('Ctrl + S')
+  })
+
+  it('falls back to the raw code for a key with no display name', () => {
+    expect(describeBinding({ code: 'F7' })).toBe('F7')
+  })
+
+  it('covers every binding, with no empty cell', () => {
+    const rows = shortcutHelp()
+    for (const row of rows) {
+      expect(row.label.length, JSON.stringify(row)).toBeGreaterThan(0)
+      expect(row.keys.length).toBeGreaterThan(0)
+      for (const keys of row.keys) expect(keys.length).toBeGreaterThan(0)
+    }
+    // Every binding is accounted for, none dropped.
+    const total = rows.reduce((n, row) => n + row.keys.length, 0)
+    expect(total).toBe(BINDINGS.length)
+  })
+
+  it('folds the two ways of saying the same thing into one row', () => {
+    const rows = shortcutHelp()
+    const save = rows.find((r) => r.label.match(/Save the score/))
+    expect(save.keys).toEqual(['Ctrl + S', 'Cmd + S'])
+
+    const silence = rows.find((r) => r.label.match(/silence/))
+    expect(silence.keys).toEqual(['Delete', 'Backspace'])
+
+    const undoRow = rows.find((r) => r.label.match(/Undo/))
+    expect(undoRow.keys).toEqual(['Ctrl + Z', 'Cmd + Z'])
+  })
+
+  it('lists one row per distinct action', () => {
+    const rows = shortcutHelp()
+    expect(new Set(rows.map((r) => r.label)).size).toBe(rows.length)
+  })
+
+  it('includes the help key itself, so the modal explains how it opened', () => {
+    const rows = shortcutHelp()
+    expect(rows.find((r) => r.keys.includes('?'))).toBeDefined()
+  })
+})
+
+describe('the help modal takes the keyboard', () => {
+  it('the "?" binding stands down in a text field, where it is a character', () => {
+    const help = BINDINGS.find((b) => b.key === '?')
+    expect(help.appliesTo({ tagName: 'INPUT', type: 'text' })).toBe(false)
+    expect(help.appliesTo({ tagName: 'TEXTAREA' })).toBe(false)
+    expect(help.appliesTo({ tagName: 'BUTTON' })).toBe(true)
+  })
+
+  it('resolves whatever combination produces "?" on the layout', () => {
+    // Shift is not declared, so it is ignored: US Shift+/ and AZERTY Shift+,
+    // both arrive as key "?".
+    expect(resolve(key('Slash', { shift: true, types: '?' }))?.label).toMatch(/shortcuts/)
+    expect(resolve(key('Comma', { shift: true, types: '?' }))?.label).toMatch(/shortcuts/)
+  })
+
+  it('does not resolve under Ctrl, Alt or Meta', () => {
+    for (const mods of [{ ctrl: true }, { alt: true }, { meta: true }]) {
+      expect(resolve(key('Slash', { ...mods, shift: true, types: '?' }))).toBeNull()
+    }
+  })
+})
+
 describe('binding options', () => {
-  it('the letter shortcuts match the CHARACTER, not the QWERTY position', () => {
-    // The bug this guards: `code: 'KeyZ'` is the position QWERTY gives to Z,
-    // which on AZERTY is the key labelled W. Declared by code, Ctrl+Z would fire
-    // for Ctrl+W on a French keyboard and not for Ctrl+Z at all.
+  it('declares exactly one of code or key, never both and never neither', () => {
     for (const binding of BINDINGS) {
-      const isLetter = binding.label.match(/Save the score|Undo the last edit/)
-      if (isLetter) expect(binding.code, binding.label).toBeUndefined()
-      else expect(binding.key, binding.label).toBeUndefined()
+      expect(Boolean(binding.code) !== Boolean(binding.key), binding.label).toBe(true)
+    }
+  })
+
+  it('never declares a CHARACTER key by its QWERTY position', () => {
+    // The bug this guards, for any shortcut added later: `code: 'KeyZ'` is the
+    // position QWERTY gives to Z, which on AZERTY is the key labelled W.
+    for (const binding of BINDINGS.filter((b) => b.code)) {
+      expect(/^(Key[A-Z]|Digit\d)$/.test(binding.code), binding.label).toBe(false)
     }
   })
 

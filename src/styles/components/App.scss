@@ -52,6 +52,21 @@
   opacity: 0.7;
 }
 
+// The help button. Round and the same size as the other chrome controls, so it
+// reads as a control rather than as a decoration - and it is the one thing in the
+// bar that is present with no score open.
+.bar-help {
+  @include button-chrome;
+  flex: none;
+  width: 1.5rem;
+  height: 1.5rem;
+  padding: 0;
+  border-radius: $radius-pill;
+  font-size: 0.8rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
 // ---------------------------------------------------------------------------
 // Workspace
 // ---------------------------------------------------------------------------

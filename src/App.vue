@@ -16,7 +16,17 @@
 
       <div class="bar-side bar-side-end">
         <BarsPerRow v-if="isScoreLoaded" />
-        <kbd v-if="isScoreLoaded" class="bar-hint" title="Space toggles playback">Space</kbd>
+        <!-- Always present, score or not: the shortcuts are worth reading before
+             opening anything, and a help button that comes and goes is a help
+             button nobody finds. -->
+        <button
+          type="button"
+          class="bar-help"
+          :aria-expanded="isHelpOpen"
+          title="Keyboard and mouse shortcuts (?)"
+          aria-label="Show the keyboard and mouse shortcuts"
+          @click="toggleHelp"
+        >?</button>
       </div>
     </header>
 
@@ -131,6 +141,8 @@
         </div>
       </div>
     </div>
+
+    <HelpDialog />
   </div>
 </template>
 
@@ -139,6 +151,7 @@ import { computed, ref } from 'vue'
 import { usePlayer } from '@/composables/usePlayer'
 import { useScoreEdit } from '@/composables/useScoreEdit'
 import { useShortcuts } from '@/composables/useShortcuts'
+import { useHelp } from '@/composables/useHelp'
 import ScoreViewer from '@/components/ScoreViewer.vue'
 import ScoreHeader from '@/components/ScoreHeader.vue'
 import TrackList from '@/components/TrackList.vue'
@@ -147,6 +160,7 @@ import ScoreEditPanel from '@/components/ScoreEditPanel.vue'
 import TransportBar from '@/components/TransportBar.vue'
 import FileDropzone from '@/components/FileDropzone.vue'
 import BarsPerRow from '@/components/BarsPerRow.vue'
+import HelpDialog from '@/components/HelpDialog.vue'
 
 const { loadFile, clearScore, isScoreLoaded, isDirty, scoreInfo, fileName, loadError } =
   usePlayer()
@@ -154,6 +168,10 @@ const { loadFile, clearScore, isScoreLoaded, isDirty, scoreInfo, fileName, loadE
 // The undo control sits in the sidebar's tab strip, so it is reachable from
 // whichever panel is open.
 const { undo, canUndo, undoLabel, undoDepth } = useScoreEdit()
+
+// The shortcut help. Driven from here and from the "?" key, which is why the
+// state lives in its own composable rather than in either.
+const { isHelpOpen, toggleHelp } = useHelp()
 
 // Both ways out of a score go through a confirmation while there are unsaved
 // edits: the undo stack is bounded and is cleared with the score, so nothing
