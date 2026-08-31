@@ -326,22 +326,6 @@ export function useShortcuts() {
   const edit = useScoreEdit()
 
   function onKeyDown(event) {
-    // TEMPORARY DIAGNOSTIC - remove once Ctrl+Z is confirmed in a browser.
-    if (event.ctrlKey || event.metaKey) {
-      const hit = BINDINGS.find((b) => matchesKey(b, event) && matchesModifiers(b, event))
-      console.log(
-        '[key-debug]',
-        `code=${event.code}`,
-        `key=${JSON.stringify(event.key)}`,
-        `ctrl=${event.ctrlKey} meta=${event.metaKey} shift=${event.shiftKey} alt=${event.altKey}`,
-        `defaultPrevented=${event.defaultPrevented}`,
-        `target=${event.target?.tagName}`,
-        `-> binding=${hit ? hit.label : 'NONE'}`,
-        hit ? `appliesTo=${hit.appliesTo(event.target, player)}` : '',
-        `| undo stack depth=${edit.undoDepth.value} canUndo=${edit.canUndo.value}`,
-      )
-    }
-
     // A modal owns the keyboard while it is open, so Space must not reach
     // play/pause from inside the help. Asked of the DOM rather than of a flag:
     // `showModal()` is what makes a dialog modal, so `dialog[open]` is the same

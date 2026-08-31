@@ -76,6 +76,12 @@ const DOUBLE_CLICK_MS = 400
 let lastBeatDown = null
 let lastBeatDownAt = 0
 
+// Worth knowing when touching this: the two presses of a double click are two
+// separate TASKS in the browser, so the deselection microtask queued by the
+// first press runs before the second press arrives. Anything that resets the
+// state below must therefore not sit on that path. A test that emits both
+// presses synchronously will not notice.
+
 // Set by `beatMouseDown` and cleared by `noteMouseDown`. See the handlers below.
 let missedNote = false
 
@@ -323,6 +329,7 @@ function bind() {
   scoreEditHost.onScoreCleared = () => {
     clearSelection()
     clearRange()
+    forgetLastClick()
     forgetHistory()
     selectedTrackIndex.value = 0
     message(null, null)
@@ -334,12 +341,23 @@ function bind() {
   api.scoreLoaded.on(() => {
     clearSelection()
     clearRange()
+    forgetLastClick()
     // A new object graph: every record points at notes that are no longer in the
     // score, and holding them would pin the discarded one in memory.
     forgetHistory()
     selectedTrackIndex.value = 0
     message(null, null)
   })
+}
+
+// The double-click state, reset only when the score goes away.
+//
+// Deliberately NOT part of `clearRange()`: that runs on every click that misses
+// a note head, which is exactly what happens between the two presses of a double
+// click, so resetting it there stops any double click from ever being seen.
+function forgetLastClick() {
+  lastBeatDown = null
+  lastBeatDownAt = 0
 }
 
 function clearSelection() {
@@ -425,7 +443,6 @@ function selectBar(beat) {
 function clearRange() {
   rangeNotes = []
   selectedRange.value = null
-  lastBeatDown = null
   // The rings went with it, unless a single note is selected.
   refreshSelectionRects()
 }
