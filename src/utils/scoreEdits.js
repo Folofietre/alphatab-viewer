@@ -112,11 +112,17 @@ export const RETUNE_REASSIGN = 'reassign'
 // the write is what stops the two drifting apart. See scoreHistory.js for why
 // these are field-level captures rather than snapshots.
 //
+// `undo` IS A SWAP, not a one-way restore. Calling it exchanges the saved state
+// with the live one, so calling it a second time re-applies the edit. That is the
+// whole of redo: the history moves a record between two stacks and calls the same
+// function, with no second closure per operation and - crucially - no dependency
+// on the selection, which an undo has already cleared by the time a redo runs.
+//
 // Several operations need no captured state at all: the inverse of "every fret
-// +2" is "every fret -2", so their undo is a closure over the step and nothing
-// more. Note also that an undo NEVER re-validates. It restores a state the model
-// was already in, so running it through the forward checks could only refuse
-// something that is by definition legal.
+// +2" is "every fret -2", so their swap is a closure over a step it negates each
+// time. Note also that neither direction ever re-validates. Both restore a state
+// the model was already in, so running them through the forward checks could only
+// refuse something that is by definition legal.
 function applied(extra) {
   return { ok: true, changed: true, reason: null, ...extra }
 }
@@ -125,6 +131,33 @@ function noop(extra) {
 }
 function refused(reason, extra) {
   return { ok: false, changed: false, reason, ...extra }
+}
+
+// The swap behind most undo records: exchange each saved value with the live one.
+//
+// `{ target, key, value }` covers every value-based edit here - a track's name, a
+// tempo automation's value, a staff's Tuning object, a note's fret - and because
+// it writes the live value back into `value`, the same closure runs in both
+// directions.
+function makeSwap(entries) {
+  return () => {
+    for (const entry of entries) {
+      const live = entry.target[entry.key]
+      entry.target[entry.key] = entry.value
+      entry.value = live
+    }
+  }
+}
+
+// The swap for a CONSTANT shift. No captured state at all: the inverse of
+// "+2 on every fret" is "-2", and the inverse of that is "+2" again, so the
+// closure just negates its own step each time.
+function makeShiftSwap(notes, step) {
+  let delta = -step
+  return () => {
+    for (const note of notes) note.fret += delta
+    delta = -delta
+  }
 }
 
 function signed(value) {
@@ -369,15 +402,13 @@ export function renameTrack(track, name) {
   if (!value) return refused('A track name cannot be empty.')
   if (track.name === value && track.shortName === value) return noop()
 
-  const before = { name: track.name, shortName: track.shortName }
+  const undo = makeSwap([
+    { target: track, key: 'name', value: track.name },
+    { target: track, key: 'shortName', value: track.shortName },
+  ])
   track.name = value
   track.shortName = value
-  return applied({
-    undo: () => {
-      track.name = before.name
-      track.shortName = before.shortName
-    },
-  })
+  return applied({ undo })
 }
 
 // 2. Tempo, rewritten PROPORTIONALLY: every tempo automation is multiplied by
@@ -419,21 +450,16 @@ export function applyScoreTempo(score, bpm) {
   const ratio = target / current
   // One entry per automation. Captured rather than inverted by dividing: the
   // rounding is lossy, so multiplying back by 1/ratio would drift.
-  const before = []
+  const entries = []
   for (const masterBar of score.masterBars) {
     for (const automation of masterBar.tempoAutomations ?? []) {
-      before.push({ automation, value: automation.value })
+      entries.push({ target: automation, key: 'value', value: automation.value })
       automation.value = roundTempo(automation.value * ratio)
     }
   }
   anchor.value = roundTempo(target)
 
-  return applied({
-    automationCount: before.length,
-    undo: () => {
-      for (const entry of before) entry.automation.value = entry.value
-    },
-  })
+  return applied({ automationCount: entries.length, undo: makeSwap(entries) })
 }
 
 // 2 decimals: enough to keep a fractional tempo that came from a file, tight
@@ -469,19 +495,16 @@ export function transposeTrackByTuning(track, semitones) {
   // The original Tuning OBJECTS, not copies of their values: putting the object
   // back restores its `name` and `isStandard` too, which a fresh Tuning would
   // have to re-derive.
-  const before = staves.map((staff) => ({ staff, tuning: staff.stringTuning }))
+  const undo = makeSwap(
+    staves.map((staff) => ({ target: staff, key: 'stringTuning', value: staff.stringTuning })),
+  )
   for (const staff of staves) {
     writeTuning(
       staff,
       staff.tuning.map((value) => value + step),
     )
   }
-  return applied({
-    staffCount: staves.length,
-    undo: () => {
-      for (const entry of before) entry.staff.stringTuning = entry.tuning
-    },
-  })
+  return applied({ staffCount: staves.length, undo })
 }
 
 // 4b. Transpose while KEEPING THE TUNING: every fret moves by `semitones`.
@@ -522,14 +545,7 @@ export function transposeTrackByFrets(track, semitones) {
   }
 
   for (const note of all) note.fret += step
-  // A constant shift, so the inverse needs no captured state: just the note list
-  // and the step.
-  return applied({
-    noteCount: count,
-    undo: () => {
-      for (const note of all) note.fret -= step
-    },
-  })
+  return applied({ noteCount: count, undo: makeShiftSwap(all, step) })
 }
 
 // 4c. Retune a track to an explicit set of midi keys, in either mode.
@@ -557,14 +573,11 @@ export function retuneTrack(track, tunings, mode) {
   if (mode === RETUNE_REASSIGN) {
     // Frets unchanged, so the pitches move. Nothing can go out of range, and the
     // undo is just the original Tuning objects back.
-    const before = staves.map((staff) => ({ staff, tuning: staff.stringTuning }))
+    const undo = makeSwap(
+      staves.map((staff) => ({ target: staff, key: 'stringTuning', value: staff.stringTuning })),
+    )
     for (const staff of staves) writeTuning(staff, next)
-    return applied({
-      staffCount: staves.length,
-      undo: () => {
-        for (const entry of before) entry.staff.stringTuning = entry.tuning
-      },
-    })
+    return applied({ staffCount: staves.length, undo })
   }
   if (mode !== RETUNE_KEEP_PITCH) return refused(`Unknown retune mode "${mode}".`)
 
@@ -603,26 +616,22 @@ export function retuneTrack(track, tunings, mode) {
 
   // Every fret moves by its own string's delta, so the undo needs the frets
   // themselves: one number per note. Plus the original Tuning objects.
-  const undoTunings = staves.map((staff) => ({ staff, tuning: staff.stringTuning }))
-  const undoFrets = []
+  const entries = staves.map((staff) => ({
+    target: staff,
+    key: 'stringTuning',
+    value: staff.stringTuning,
+  }))
 
   for (const staff of staves) {
     // Captured before the write, so the loop order below cannot matter.
     const before = [...staff.tuning]
     for (const note of stringedNotes(staff)) {
-      undoFrets.push({ note, fret: note.fret })
+      entries.push({ target: note, key: 'fret', value: note.fret })
       note.fret += tuningForString(before, note.string) - tuningForString(next, note.string)
     }
     writeTuning(staff, next)
   }
-  return applied({
-    noteCount: count,
-    staffCount: staves.length,
-    undo: () => {
-      for (const entry of undoFrets) entry.note.fret = entry.fret
-      for (const entry of undoTunings) entry.staff.stringTuning = entry.tuning
-    },
-  })
+  return applied({ noteCount: count, staffCount: staves.length, undo: makeSwap(entries) })
 }
 
 // Apply a set of `{ note, string, fret }` moves, keeping every
@@ -721,13 +730,22 @@ export function shiftNotesString(notes, delta) {
     return refused(naturalHarmonicRefusal(harmonics, 'moving to another string'))
   }
 
-  // Two numbers per note, and the same two-phase writer for the way back: an
-  // undo of a chord move has exactly the same ordering hazard as the move.
-  const back = moves.map(({ note }) => ({ note, string: note.string, fret: note.fret }))
+  // Two numbers per note in each direction, and the same two-phase writer both
+  // ways: undoing a chord move has exactly the same ordering hazard as the move.
+  //
+  // Two arrays and a pointer rather than a re-capture on every call, so the swap
+  // allocates nothing after the edit itself.
+  const from = moves.map(({ note }) => ({ note, string: note.string, fret: note.fret }))
+  const to = moves.map(({ note, string, fret }) => ({ note, string, fret }))
   applyNoteStringMoves(moves)
+
+  let next = from
   return applied({
     noteCount: moves.length,
-    undo: () => applyNoteStringMoves(back),
+    undo: () => {
+      applyNoteStringMoves(next)
+      next = next === from ? to : from
+    },
   })
 }
 
@@ -776,13 +794,7 @@ export function shiftNotesFret(notes, delta) {
   }
 
   for (const note of list) note.fret += step
-  // A constant shift again, so no captured state.
-  return applied({
-    noteCount: count,
-    undo: () => {
-      for (const note of list) note.fret -= step
-    },
-  })
+  return applied({ noteCount: count, undo: makeShiftSwap(list, step) })
 }
 
 // Every field on `Note` that points at another Note.
@@ -912,64 +924,72 @@ export function deleteNotes(notes, settings) {
     }
   }
 
-  for (const note of list) note.beat?.removeNote(note)
-
-  // 1. Renumber the survivors of every touched beat.
-  for (const beat of beats) {
-    beat.notes.forEach((note, index) => {
-      note.index = index
-    })
-  }
-
-  // 2. Drop every link that now points at nothing. A full sweep rather than
-  // following the victims' own back-references: several of these fields have no
-  // inverse (`bendOrigin` for one), so only walking the score is provably
-  // complete. Measured at 12ms over 7295 notes, which is nothing for a
-  // deliberate one-shot action.
-  //
-  for (const note of everyNote(score)) {
-    for (const field of NOTE_LINK_FIELDS) {
-      if (victims.has(note[field])) note[field] = null
+  function renumber() {
+    for (const beat of beats) {
+      beat.notes.forEach((note, index) => {
+        note.index = index
+      })
     }
   }
 
-  // 3. Rebuild what the removal invalidated.
-  score.finish(settings ?? null)
+  // Remove, renumber, cut the dangling links, rebuild. Named because the swap
+  // below runs it again for a redo, and a second copy of these three steps is
+  // exactly what would drift.
+  //
+  // The link sweep walks the whole score rather than following the victims' own
+  // back-references: several of those fields have no inverse (`bendOrigin` for
+  // one), so only walking everything is provably complete. Measured at 12ms over
+  // 7295 notes, which is nothing for a deliberate action.
+  function detach() {
+    for (const note of list) note.beat?.removeNote(note)
+    renumber()
+    for (const note of everyNote(score)) {
+      for (const field of NOTE_LINK_FIELDS) {
+        if (victims.has(note[field])) note[field] = null
+      }
+    }
+    score.finish(settings ?? null)
+  }
+
+  // The way back. The Note objects are still alive - only detached - so this is a
+  // re-attach, not a reconstruction. Ascending original index, so each splice
+  // lands in a slot the earlier ones have already made room for.
+  //
+  // The derived state goes back BEFORE finishing, not after: finish() would
+  // overwrite it, and its own caches (`noteValueLookup` is keyed on `realValue`,
+  // so on `fret`) have to be built from the restored values. Restoring the
+  // pre-delete state and finishing reproduces exactly the derivation the importer
+  // had already settled on.
+  function reattach() {
+    for (const entry of removed) {
+      const { note, beat, at } = entry
+      if (!beat) continue
+      const index = at >= 0 && at <= beat.notes.length ? at : beat.notes.length
+      beat.notes.splice(index, 0, note)
+      note.beat = beat
+      if (note.isStringed) beat.noteStringLookup.set(note.string, note)
+    }
+    renumber()
+    for (const entry of derived) Object.assign(entry.note, entry.state)
+    score.finish(settings ?? null)
+  }
+
+  detach()
 
   let restBeats = 0
   for (const beat of beats) if (beat.isRest) restBeats += 1
 
+  // The only swap that moves STRUCTURE rather than values, so it toggles between
+  // two named halves instead of exchanging fields.
+  let isDetached = true
   return applied({
     noteCount: list.length,
     beatCount: beats.size,
     restBeats,
-    // The one undo that rebuilds STRUCTURE rather than restoring values. The
-    // Note objects themselves are still alive - only detached - so this is a
-    // re-attach, not a reconstruction.
-    //
-    // Ascending original index, so each splice lands in a slot the earlier ones
-    // have already made room for.
     undo: () => {
-      for (const entry of removed) {
-        const { note, beat, at } = entry
-        if (!beat) continue
-        const index = at >= 0 && at <= beat.notes.length ? at : beat.notes.length
-        beat.notes.splice(index, 0, note)
-        note.beat = beat
-        if (note.isStringed) beat.noteStringLookup.set(note.string, note)
-      }
-      for (const beat of beats) {
-        beat.notes.forEach((note, index) => {
-          note.index = index
-        })
-      }
-      // Put the derived state back BEFORE finishing, not after: finish() would
-      // overwrite it, and its own caches (`noteValueLookup` is keyed on
-      // `realValue`, so on `fret`) have to be built from the restored values.
-      // Restoring the pre-delete state and finishing reproduces exactly the
-      // derivation the importer had already settled on.
-      for (const entry of derived) Object.assign(entry.note, entry.state)
-      score.finish(settings ?? null)
+      if (isDetached) reattach()
+      else detach()
+      isDetached = !isDetached
     },
   })
 }
@@ -995,11 +1015,7 @@ export function setNoteFret(note, fret) {
     return refused(`Fret ${value} is outside the ${MIN_FRET}-${MAX_FRET} range.`)
   }
   if (note.fret === value) return noop()
-  const before = note.fret
+  const undo = makeSwap([{ target: note, key: 'fret', value: note.fret }])
   note.fret = value
-  return applied({
-    undo: () => {
-      note.fret = before
-    },
-  })
+  return applied({ undo })
 }

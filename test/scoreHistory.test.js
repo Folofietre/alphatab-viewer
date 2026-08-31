@@ -92,6 +92,78 @@ describe('createHistory', () => {
     expect(h.undo()).toBe('good')
   })
 
+  it('moves an undone record to the redo side and back', () => {
+    const calls = []
+    const h = createHistory()
+    h.push('edit', () => calls.push('swap'))
+
+    expect(h.redoSize).toBe(0)
+    expect(h.undo()).toBe('edit')
+    expect(h.size).toBe(0)
+    expect(h.redoSize).toBe(1)
+    expect(h.nextRedoLabel).toBe('edit')
+
+    expect(h.redo()).toBe('edit')
+    expect(h.size).toBe(1)
+    expect(h.redoSize).toBe(0)
+    // The SAME swap ran both times: that is the whole of redo.
+    expect(calls).toEqual(['swap', 'swap'])
+  })
+
+  it('reports nothing to redo when nothing has been undone', () => {
+    const h = createHistory()
+    h.push('edit', () => {})
+    expect(h.redo()).toBeNull()
+    expect(h.nextRedoLabel).toBeNull()
+  })
+
+  it('a NEW edit throws away the redo branch', () => {
+    // The standard rule, and not cosmetic: a redone edit would be re-applied on
+    // top of a model it was never captured against.
+    const h = createHistory()
+    h.push('first', () => {})
+    h.undo()
+    expect(h.redoSize).toBe(1)
+
+    h.push('second', () => {})
+    expect(h.redoSize).toBe(0)
+    expect(h.redo()).toBeNull()
+  })
+
+  it('a redo does NOT throw away the branch it is walking', () => {
+    const h = createHistory()
+    h.push('a', () => {})
+    h.push('b', () => {})
+    h.undo()
+    h.undo()
+    expect(h.redoSize).toBe(2)
+
+    expect(h.redo()).toBe('a')
+    // Pushing back onto the undo side must not clear what is left to redo.
+    expect(h.redoSize).toBe(1)
+    expect(h.redo()).toBe('b')
+    expect(h.redoSize).toBe(0)
+  })
+
+  it('walks a whole stack down and back up in order', () => {
+    const order = []
+    const h = createHistory()
+    for (const label of ['a', 'b', 'c']) h.push(label, () => order.push(label))
+
+    expect([h.undo(), h.undo(), h.undo()]).toEqual(['c', 'b', 'a'])
+    expect([h.redo(), h.redo(), h.redo()]).toEqual(['a', 'b', 'c'])
+    expect(order).toEqual(['c', 'b', 'a', 'a', 'b', 'c'])
+  })
+
+  it('clear() empties both sides', () => {
+    const h = createHistory()
+    h.push('a', () => {})
+    h.undo()
+    h.clear()
+    expect(h.size).toBe(0)
+    expect(h.redoSize).toBe(0)
+  })
+
   it('defaults to a depth justified by the memory measurements', () => {
     expect(DEFAULT_DEPTH).toBe(30)
     const h = createHistory()

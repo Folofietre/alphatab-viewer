@@ -172,8 +172,7 @@ export const BINDINGS = [
     run: () => useHelp().toggleHelp(),
   },
   // Ctrl+Z and Cmd+Z. Two entries for the same reason Ctrl+S has two, and
-  // `shift: false` because Ctrl+Shift+Z is redo everywhere - a key this editor
-  // does not implement, so it is left alone rather than aliased to undo.
+  // `shift: false` so the combination stays distinct from Ctrl+Shift+Z below.
   //
   // Applies with focus anywhere, including a text field: a field's own undo is
   // not what someone pressing Ctrl+Z in a score editor is after, and the edit
@@ -191,6 +190,42 @@ export const BINDINGS = [
     modifiers: { meta: true, shift: false },
     appliesTo: (_el, player) => player.isScoreLoaded.value,
     run: (_player, _event, edit) => edit.undo(),
+  },
+  // Redo, under both keys people reach for: Ctrl+Y (Windows convention, and what
+  // was asked for) and Ctrl+Shift+Z (the near-universal alternative, and what
+  // Ctrl+Z's `shift: false` was already keeping free).
+  //
+  // Four entries rather than two, because the modifier match is exact and each
+  // platform pairing is spelled out. `key: 'y'` and `key: 'z'` rather than a
+  // code, for the AZERTY reason above - and it matters especially for Y, which on
+  // a German QWERTZ layout sits where QWERTY puts Z.
+  {
+    key: 'y',
+    label: 'Redo the last undone edit',
+    modifiers: { ctrl: true, shift: false },
+    appliesTo: (_el, player) => player.isScoreLoaded.value,
+    run: (_player, _event, edit) => edit.redo(),
+  },
+  {
+    key: 'y',
+    label: 'Redo the last undone edit',
+    modifiers: { meta: true, shift: false },
+    appliesTo: (_el, player) => player.isScoreLoaded.value,
+    run: (_player, _event, edit) => edit.redo(),
+  },
+  {
+    key: 'z',
+    label: 'Redo the last undone edit',
+    modifiers: { ctrl: true, shift: true },
+    appliesTo: (_el, player) => player.isScoreLoaded.value,
+    run: (_player, _event, edit) => edit.redo(),
+  },
+  {
+    key: 'z',
+    label: 'Redo the last undone edit',
+    modifiers: { meta: true, shift: true },
+    appliesTo: (_el, player) => player.isScoreLoaded.value,
+    run: (_player, _event, edit) => edit.redo(),
   },
   // Delete and Backspace both, since editors accept either and the user's
   // keyboard may label only one of them. They stand down for anything that owns
@@ -287,8 +322,9 @@ const KEY_NAMES = {
 export function describeBinding(binding) {
   const parts = []
   const wanted = binding.modifiers ?? {}
-  if (wanted.ctrl) parts.push('Ctrl')
-  if (wanted.meta) parts.push('Cmd')
+  // One token for both, because every Ctrl binding here has a Cmd twin - a test
+  // asserts that - so listing them separately doubled every row for nothing.
+  if (wanted.ctrl || wanted.meta) parts.push('Ctrl/Cmd')
   if (wanted.alt) parts.push('Alt')
   // Only when the binding WANTS it. `shift: false` is an exclusion, not a key to
   // show.
@@ -309,12 +345,14 @@ export function shortcutHelp() {
   const rows = []
   const byLabel = new Map()
   for (const binding of BINDINGS) {
+    const keys = describeBinding(binding)
     const existing = byLabel.get(binding.label)
     if (existing) {
-      existing.keys.push(describeBinding(binding))
+      // Deduped: the Ctrl and Cmd twins now render identically.
+      if (!existing.keys.includes(keys)) existing.keys.push(keys)
       continue
     }
-    const row = { label: binding.label, keys: [describeBinding(binding)] }
+    const row = { label: binding.label, keys: [keys] }
     byLabel.set(binding.label, row)
     rows.push(row)
   }

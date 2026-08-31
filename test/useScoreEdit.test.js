@@ -1159,6 +1159,120 @@ describe('undo', () => {
   })
 })
 
+describe('redo', () => {
+  it('is unavailable until something has been undone', () => {
+    expect(edit.canRedo.value).toBe(false)
+    expect(edit.redoDepth.value).toBe(0)
+    expect(edit.redoLabel.value).toBeNull()
+    expect(edit.redo().ok).toBe(false)
+  })
+
+  it('re-applies what undo took back, and names it', () => {
+    edit.rename('Renamed')
+    edit.undo()
+    expect(score.tracks[LEAD].name).toBe('Lead')
+    expect(edit.redoDepth.value).toBe(1)
+    expect(edit.redoLabel.value).toBe('Rename track')
+
+    expect(edit.redo()).toMatchObject({ ok: true, label: 'Rename track' })
+
+    expect(score.tracks[LEAD].name).toBe('Renamed')
+    expect(edit.redoDepth.value).toBe(0)
+    expect(edit.undoDepth.value).toBe(1)
+  })
+
+  it('walks a stack down and back up', () => {
+    edit.rename('One')
+    edit.setTempo(200)
+    edit.undo()
+    edit.undo()
+    expect(score.tracks[LEAD].name).toBe('Lead')
+    expect(score.tempo).toBe(120)
+
+    edit.redo()
+    expect(score.tracks[LEAD].name).toBe('One')
+    edit.redo()
+    expect(score.tempo).toBe(200)
+  })
+
+  it('makes the score dirty again', () => {
+    edit.rename('Renamed')
+    edit.undo()
+    expect(host.dirty).toBe(false)
+    edit.redo()
+    expect(host.dirty).toBe(true)
+  })
+
+  it('a NEW edit throws away the redo branch', () => {
+    edit.rename('One')
+    edit.undo()
+    expect(edit.canRedo.value).toBe(true)
+
+    edit.setTempo(200)
+    expect(edit.redoDepth.value).toBe(0)
+    expect(edit.redo().ok).toBe(false)
+  })
+
+  it('brings a silenced note back and silences it again', () => {
+    const note = [...stringedNotes(score.tracks[LEAD].staves[0])][0]
+    const beat = note.beat
+    host.api.noteMouseDown.emit(note)
+
+    edit.deleteSelection()
+    expect(beat.isRest).toBe(true)
+    edit.undo()
+    expect(beat.isRest).toBe(false)
+    edit.redo()
+    expect(beat.isRest).toBe(true)
+  })
+
+  it('re-applies a batch range edit in one step', () => {
+    const beats = beatsOf(LEAD)
+    dragOver(beats[0], beats[3])
+    const notes = beats.slice(0, 4).flatMap((b) => b.notes)
+    const before = notes.map((n) => n.fret)
+
+    edit.nudgeSelectedFret(1)
+    edit.undo()
+    expect(notes.map((n) => n.fret)).toEqual(before)
+
+    // The selection is gone by now, so a redo rebuilt from ambient state would
+    // refuse. The swap does not need it.
+    expect(edit.selectedRange.value).toBeNull()
+    edit.redo()
+    expect(notes.map((n) => n.fret)).toEqual(before.map((f) => f + 1))
+  })
+
+  it('re-renders and leaves the midi for the next play', () => {
+    edit.transposeByFrets(2)
+    edit.undo()
+    host.renders = []
+    host.midiStale = false
+
+    edit.redo()
+
+    expect(host.renders).toEqual([{ reuseViewport: true }])
+    expect(host.midiStale).toBe(true)
+  })
+
+  it('is blocked by playback like every other edit', () => {
+    edit.rename('Renamed')
+    edit.undo()
+    player.isPlaying.value = true
+    expect(edit.redo().ok).toBe(false)
+    expect(score.tracks[LEAD].name).toBe('Lead')
+    expect(edit.canRedo.value).toBe(false)
+  })
+
+  it('is forgotten with the score', () => {
+    edit.rename('Renamed')
+    edit.undo()
+    expect(edit.redoDepth.value).toBe(1)
+    host.api.scoreLoaded.emit(score)
+    expect(edit.redoDepth.value).toBe(0)
+  })
+})
+
 describe('editing only while paused', () => {
   const EDITS = [
     ['rename', () => edit.rename('Nope')],
@@ -1172,6 +1286,7 @@ describe('editing only while paused', () => {
     ['nudgeSelectedString', () => edit.nudgeSelectedString(1)],
     ['deleteSelection', () => edit.deleteSelection()],
     ['undo', () => edit.undo()],
+    ['redo', () => edit.redo()],
   ]
 
   it('canEdit follows the player, and a note preview does NOT clear it', () => {

@@ -1149,6 +1149,43 @@ describe('undo restores exactly', () => {
     expect(back.tracks.map(snapshotTrack)).toEqual(before.tracks)
   })
 
+  // `undo` is a SWAP, so calling it twice re-applies the edit. That is the whole
+  // of redo: the history calls the same function from the other stack.
+  for (const [name, apply] of CASES) {
+    it(`re-applies on a second call after: ${name}`, () => {
+      const score = loadFixture()
+      const clean = fullSnapshot(score)
+
+      const result = apply(score)
+      expect(result.changed, name).toBe(true)
+      const edited = fullSnapshot(score)
+      const editedMidi = midiNoteOns(score)
+      expect(edited, name).not.toEqual(clean)
+
+      result.undo()
+      expect(fullSnapshot(score), `${name}: undo`).toEqual(clean)
+
+      result.undo()
+      expect(fullSnapshot(score), `${name}: redo`).toEqual(edited)
+      expect(midiNoteOns(score), `${name}: redo midi`).toEqual(editedMidi)
+
+      result.undo()
+      expect(fullSnapshot(score), `${name}: undo again`).toEqual(clean)
+    })
+  }
+
+  it('toggles cleanly however many times it is called', () => {
+    const score = loadFixture()
+    const clean = fullSnapshot(score)
+    const result = transposeTrackByFrets(score.tracks[LEAD], 2)
+    const edited = fullSnapshot(score)
+
+    for (let i = 0; i < 7; i += 1) {
+      result.undo()
+      expect(fullSnapshot(score)).toEqual(i % 2 === 0 ? clean : edited)
+    }
+  })
+
   it('does not report an undo on a no-op', () => {
     const score = loadFixture()
     const same = renameTrack(score.tracks[LEAD], score.tracks[LEAD].name)

@@ -210,12 +210,11 @@ it reaches edits made from either of them, and the bar stays visible with the
 sidebar collapsed. Every one
 of the ten operations can be taken back, the delete included.
 
-Redo is **not** implemented, and `Ctrl+Shift+Z` is deliberately left to the
-browser rather than aliased to undo.
+**`Ctrl+Y` / `Cmd+Y` redoes**, and so does `Ctrl+Shift+Z` for people who reach
+for that instead. A new edit throws away the redo branch, as everywhere else.
 
 **Deliberately out of scope for this tier:** entering notes, adding or removing
-bars, redo, changing the number of strings, and any validation of note
-durations.
+bars, changing the number of strings, and any validation of note durations.
 
 ### What is NOT saved with the score
 
@@ -638,8 +637,11 @@ binding and forgets it; this one cannot.
 order, then the key, with `code` mapped through a display table (`ArrowUp` to an
 arrow glyph) and a `key` upper-cased. It deliberately does **not** show a
 `shift: false`, which is an exclusion rather than a key to press.
-`shortcutHelp()` then groups by label, which is what folds `Ctrl+S` and `Cmd+S`
-into one row and `Delete` and `Backspace` into another. A test asserts every
+`shortcutHelp()` then groups by label, which is what folds `Delete` and
+`Backspace` into one row. Ctrl and Cmd are shown as a single `Ctrl/Cmd` token
+rather than doubling every row - truthful only because every Ctrl binding has a
+Cmd twin, which a test asserts, so adding a Ctrl-only shortcut would fail rather
+than make the help lie. A test asserts every
 binding is accounted for, so a new one shows up in the help whether or not
 anyone remembers.
 
@@ -956,7 +958,7 @@ changes none of those. So `deleteNotes()` is the single caller in
 `scoreEdits.js`, for the reasons above. Adding or removing beats or bars would
 need it too.
 
-### How undo works, and why it is not snapshots
+### How undo and redo work, and why they are not snapshots
 
 A whole-score snapshot through `JsonConverter`, measured on the two real test
 scores:
@@ -982,9 +984,25 @@ at all, because they are a constant shift: the inverse of "every fret +2" is
 
 Each record is produced by the edit function itself, in `scoreEdits.js`: that is
 the only place that knows what a given operation touched, and keeping the capture
-next to the write is what stops the two drifting apart. An undo never
-re-validates - it restores a state the model was already in, so running it back
+next to the write is what stops the two drifting apart. Neither direction ever
+re-validates - both restore a state the model was already in, so running them back
 through the forward checks could only refuse something legal.
+
+**Redo costs almost nothing, because a record's restore is a SWAP.** Calling it
+exchanges the saved state with the live one, so calling it again re-applies the
+edit. Redo is therefore not a second closure per operation: it is the same record,
+moved to the other stack and called again. `makeSwap()` covers the value-based
+edits, `makeShiftSwap()` the constant fret shifts (which need no captured state at
+all, only a step it negates each time), and the delete toggles between a named
+`detach()` and `reattach()`.
+
+That also sidesteps the trap the obvious redo would hit. "Re-run the original
+operation" sounds simplest, but an undo has already cleared the selection, so
+every selection-based redo - a fret nudge, a range transposition, a delete - would
+refuse. A swap needs no ambient state.
+
+A **new** edit throws away the redo branch, which is not cosmetic: a redone edit
+would otherwise be re-applied on top of a model it was never captured against.
 
 **The delete's undo is the hard one**, and a test caught why. The Note objects
 are still alive, only detached, so re-attaching them is cheap - but `finish()`

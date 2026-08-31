@@ -10,10 +10,10 @@
           @file="openFile"
         >Open</FileDropzone>
 
-        <!-- Icon only, so the whole state goes in the tooltip: what would be
-             taken back, and how many steps are left before the 30-step bound.
-             In the action bar rather than in a sidebar panel because it reaches
-             edits made from either of them. -->
+        <!-- Undo and redo. Icon only, so the whole state goes in the tooltip:
+             what would move, and how many steps are left before the 30-step
+             bound. In the action bar rather than in a sidebar panel because they
+             reach edits made from either of them. -->
         <button
           v-if="isScoreLoaded"
           type="button"
@@ -25,6 +25,18 @@
           aria-label="Undo the last edit"
           @click="undo"
         >&#8630;</button>
+
+        <button
+          v-if="isScoreLoaded"
+          type="button"
+          class="bar-undo"
+          :disabled="!canRedo"
+          :title="redoLabel
+            ? `Redo: ${redoLabel} (Ctrl+Y), ${redoDepth} step${redoDepth === 1 ? '' : 's'} available`
+            : 'Nothing to redo (Ctrl+Y)'"
+          aria-label="Redo the last undone edit"
+          @click="redo"
+        >&#8631;</button>
       </div>
 
       <TransportBar v-if="isScoreLoaded" />
@@ -172,7 +184,8 @@ const { loadFile, clearScore, isScoreLoaded, isDirty, scoreInfo, fileName, loadE
 // The undo control sits in the action bar, not in a sidebar panel: it reaches
 // edits made from either of them, and the bar is visible even with the sidebar
 // collapsed.
-const { undo, canUndo, undoLabel, undoDepth } = useScoreEdit()
+const { undo, canUndo, undoLabel, undoDepth, redo, canRedo, redoLabel, redoDepth } =
+  useScoreEdit()
 
 // The shortcut help. Driven from here and from the "?" key, which is why the
 // state lives in its own composable rather than in either.

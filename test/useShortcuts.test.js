@@ -162,6 +162,54 @@ describe('Ctrl+S saves the score', () => {
   })
 })
 
+describe('redo', () => {
+  const redoKey = (mods) => resolve(key('KeyY', mods))
+
+  it('claims Ctrl+Y and Cmd+Y', () => {
+    expect(redoKey({ ctrl: true })?.label).toMatch(/Redo/)
+    expect(redoKey({ meta: true })?.label).toMatch(/Redo/)
+  })
+
+  it('also answers Ctrl+Shift+Z, the other convention', () => {
+    expect(resolve(key('KeyZ', { ctrl: true, shift: true }))?.label).toMatch(/Redo/)
+  })
+
+  it('leaves a bare Y alone', () => {
+    expect(redoKey({})).toBeNull()
+  })
+
+  it('matches the CHARACTER, which matters most for Y', () => {
+    // On a German QWERTZ layout the key labelled Y sits where QWERTY puts Z.
+    expect(resolve(key('KeyZ', { ctrl: true, types: 'y' }))?.label).toMatch(/Redo/)
+    // And the key labelled Z on that keyboard undoes, as it should.
+    expect(resolve(key('KeyY', { ctrl: true, types: 'z' }))?.label).toMatch(/Undo/)
+  })
+
+  it('never resolves to the same binding as undo', () => {
+    for (const shift of [false, true]) {
+      for (const char of ['y', 'z']) {
+        const matches = BINDINGS.filter(
+          (b) => matchesKey(b, key('KeyX', { ctrl: true, shift, types: char }))
+            && matchesModifiers(b, key('KeyX', { ctrl: true, shift, types: char })),
+        )
+        expect(matches.length, `${char} shift=${shift}`).toBeLessThanOrEqual(1)
+      }
+    }
+  })
+
+  it('does not repeat, so a held key cannot replay the whole stack', () => {
+    expect(!!redoKey({ ctrl: true }).allowRepeat).toBe(false)
+  })
+
+  it('calls redo and nothing else', () => {
+    const calls = []
+    const edit = { redo: () => calls.push('redo'), undo: () => calls.push('undo') }
+    redoKey({ ctrl: true }).run({}, {}, edit)
+    resolve(key('KeyZ', { ctrl: true, shift: true })).run({}, {}, edit)
+    expect(calls).toEqual(['redo', 'redo'])
+  })
+})
+
 describe('Delete replaces the selection with silence', () => {
   it('claims both Delete and Backspace', () => {
     expect(resolve(key('Delete'))?.label).toMatch(/silence/)
@@ -224,10 +272,11 @@ describe('Ctrl+Z undoes', () => {
     expect(undoKey({})).toBeNull()
   })
 
-  it('leaves Ctrl+Shift+Z alone, because redo is not implemented', () => {
-    // Aliasing redo to undo would be worse than not answering the key.
-    expect(undoKey({ ctrl: true, shift: true })).toBeNull()
-    expect(undoKey({ meta: true, shift: true })).toBeNull()
+  it('hands Ctrl+Shift+Z to REDO, not to undo', () => {
+    // Distinct actions, and `shift: false` on the undo entries is what keeps the
+    // two from both matching.
+    expect(undoKey({ ctrl: true, shift: true })?.label).toMatch(/Redo/)
+    expect(undoKey({ meta: true, shift: true })?.label).toMatch(/Redo/)
   })
 
   it('applies with focus in a text field', () => {
@@ -255,8 +304,8 @@ describe('Ctrl+Z undoes', () => {
 describe('the generated help', () => {
   it('names a plain key, a modifier combination and an arrow', () => {
     expect(describeBinding({ code: 'Space' })).toBe('Space')
-    expect(describeBinding({ key: 's', modifiers: { ctrl: true } })).toBe('Ctrl + S')
-    expect(describeBinding({ key: 'z', modifiers: { meta: true } })).toBe('Cmd + Z')
+    expect(describeBinding({ key: 's', modifiers: { ctrl: true } })).toBe('Ctrl/Cmd + S')
+    expect(describeBinding({ key: 'z', modifiers: { meta: true } })).toBe('Ctrl/Cmd + Z')
     expect(describeBinding({ code: 'ArrowUp', modifiers: { alt: true } })).toBe('Alt + \u2191')
     expect(
       describeBinding({ code: 'ArrowDown', modifiers: { alt: true, shift: true } }),
@@ -265,7 +314,9 @@ describe('the generated help', () => {
 
   it('does not show a shift the binding merely EXCLUDES', () => {
     // `shift: false` keeps Ctrl+Shift+S off the binding; it is not a key to press.
-    expect(describeBinding({ key: 's', modifiers: { ctrl: true, shift: false } })).toBe('Ctrl + S')
+    expect(describeBinding({ key: 's', modifiers: { ctrl: true, shift: false } })).toBe(
+      'Ctrl/Cmd + S',
+    )
   })
 
   it('falls back to the raw code for a key with no display name', () => {
@@ -279,21 +330,36 @@ describe('the generated help', () => {
       expect(row.keys.length).toBeGreaterThan(0)
       for (const keys of row.keys) expect(keys.length).toBeGreaterThan(0)
     }
-    // Every binding is accounted for, none dropped.
-    const total = rows.reduce((n, row) => n + row.keys.length, 0)
-    expect(total).toBe(BINDINGS.length)
+    // Every distinct action is listed exactly once.
+    expect(new Set(BINDINGS.map((b) => b.label)).size).toBe(rows.length)
   })
 
-  it('folds the two ways of saying the same thing into one row', () => {
+  it('shows Ctrl and Cmd as ONE token, since they always come in pairs', () => {
     const rows = shortcutHelp()
-    const save = rows.find((r) => r.label.match(/Save the score/))
-    expect(save.keys).toEqual(['Ctrl + S', 'Cmd + S'])
+    expect(rows.find((r) => r.label.match(/Save the score/)).keys).toEqual(['Ctrl/Cmd + S'])
+    expect(rows.find((r) => r.label.match(/Undo/)).keys).toEqual(['Ctrl/Cmd + Z'])
+    expect(rows.find((r) => r.label.match(/Redo/)).keys).toEqual([
+      'Ctrl/Cmd + Y',
+      'Ctrl/Cmd + Shift + Z',
+    ])
+    expect(rows.find((r) => r.label.match(/silence/)).keys).toEqual(['Delete', 'Backspace'])
+  })
 
-    const silence = rows.find((r) => r.label.match(/silence/))
-    expect(silence.keys).toEqual(['Delete', 'Backspace'])
+  it('and that token is only truthful because every Ctrl has a Cmd twin', () => {
+    // The display says both work, so both must exist. Without this, adding a
+    // Ctrl-only shortcut would make the help lie.
+    const sig = (b) => `${b.key ?? b.code}|${!!b.modifiers?.alt}|${!!b.modifiers?.shift}`
+    const ctrl = new Set(BINDINGS.filter((b) => b.modifiers?.ctrl).map(sig))
+    const meta = new Set(BINDINGS.filter((b) => b.modifiers?.meta).map(sig))
+    expect([...ctrl].sort()).toEqual([...meta].sort())
+    expect(ctrl.size).toBeGreaterThan(0)
+  })
 
-    const undoRow = rows.find((r) => r.label.match(/Undo/))
-    expect(undoRow.keys).toEqual(['Ctrl + Z', 'Cmd + Z'])
+  it('lists undo before redo, the order they are used in', () => {
+    const labels = shortcutHelp().map((r) => r.label)
+    expect(labels.findIndex((l) => l.match(/Undo/))).toBeLessThan(
+      labels.findIndex((l) => l.match(/Redo/)),
+    )
   })
 
   it('lists one row per distinct action', () => {
@@ -370,8 +436,8 @@ describe('binding options', () => {
     // appliesTo(element, player). Save and Undo stand down when no score is
     // open, so they need the player; every other binding only looks at the
     // focused element and must not break when the second argument is absent.
-    // Keyed on the character, since these two are the letter bindings.
-    const NEEDS_PLAYER = new Set(['s', 'z'])
+    // Keyed on the character: Save, Undo and Redo are the document-wide ones.
+    const NEEDS_PLAYER = new Set(['s', 'z', 'y'])
     for (const binding of BINDINGS) {
       const name = binding.code ?? binding.key
       const call = () => binding.appliesTo({ tagName: 'BUTTON' })

@@ -110,13 +110,17 @@ const isExporting = ref(false)
 // score in memory. Same reasoning as the selection.
 const history = createHistory()
 
-// Mirrors of the stack for the UI, since a plain object is not reactive.
+// Mirrors of the stacks for the UI, since a plain object is not reactive.
 const undoDepth = ref(0)
 const undoLabel = shallowRef(null)
+const redoDepth = ref(0)
+const redoLabel = shallowRef(null)
 
 function syncHistory() {
   undoDepth.value = history.size
   undoLabel.value = history.nextLabel
+  redoDepth.value = history.redoSize
+  redoLabel.value = history.nextRedoLabel
 }
 
 // Record an edit so it can be undone, and keep the dirty flag honest.
@@ -534,6 +538,7 @@ export function useScoreEdit() {
   const canEdit = computed(() => player.isScoreLoaded.value && !player.isPlaying.value)
 
   const canUndo = computed(() => canEdit.value && undoDepth.value > 0)
+  const canRedo = computed(() => canEdit.value && redoDepth.value > 0)
 
   function refused(reason) {
     message('error', reason)
@@ -814,9 +819,38 @@ export function useScoreEdit() {
   // The dirty flag follows the stack: once every edit has been undone the score
   // really is back to how it was loaded - unless the bound dropped a record, in
   // which case older edits are still applied and `isClean` says false.
-  function undo() {
+  // Undo and redo do the same work: they call one record's swap and then bring
+  // the whole app back in line with a model that changed underneath it. Only the
+  // stack and the wording differ, so they share this.
+  //
+  // The selection goes either way: an undone delete brings notes back, a redone
+  // string move puts them elsewhere, so whatever was selected may no longer be
+  // what the rings are drawn on.
+  function applyHistoryStep(step, verb) {
     if (!canEdit.value) return refusePlayback()
-    if (history.size === 0) {
+
+    const label = step()
+    if (label === null) return null
+    syncHistory()
+
+    clearSelection()
+    clearRange()
+    scoreEditHost.syncAllTracks()
+    scoreEditHost.syncScoreInfo()
+    // The dirty flag follows the UNDO stack: empty means every edit has been
+    // taken back, so a redo pushing one on makes it dirty again.
+    if (history.isClean) scoreEditHost.clearDirty()
+    else scoreEditHost.markDirty()
+
+    scoreEditHost.api?.render({ reuseViewport: true })
+    scoreEditHost.markMidiStale()
+
+    message('ok', `${verb}: ${label}.`)
+    return { ok: true, changed: true, reason: null, label }
+  }
+
+  function undo() {
+    if (canEdit.value && history.size === 0) {
       // Said out loud rather than failing silently. A key that does nothing and
       // explains nothing is indistinguishable from a key that never arrived.
       const reason = history.hasDropped
@@ -825,22 +859,30 @@ export function useScoreEdit() {
       message('info', reason)
       return { ok: false, changed: false, reason }
     }
+    return (
+      applyHistoryStep(() => history.undo(), 'Undone') ?? {
+        ok: false,
+        changed: false,
+        reason: 'Nothing to undo.',
+      }
+    )
+  }
 
-    const label = history.undo()
-    syncHistory()
-
-    clearSelection()
-    clearRange()
-    scoreEditHost.syncAllTracks()
-    scoreEditHost.syncScoreInfo()
-    if (history.isClean) scoreEditHost.clearDirty()
-
-    const api = scoreEditHost.api
-    api?.render({ reuseViewport: true })
-    scoreEditHost.markMidiStale()
-
-    message('ok', `Undone: ${label}.`)
-    return { ok: true, changed: true, reason: null, label }
+  // Re-apply what was just undone. The record's swap runs a second time, which is
+  // why there is no separate redo closure anywhere in scoreEdits.js.
+  function redo() {
+    if (canEdit.value && history.redoSize === 0) {
+      const reason = 'Nothing to redo.'
+      message('info', reason)
+      return { ok: false, changed: false, reason }
+    }
+    return (
+      applyHistoryStep(() => history.redo(), 'Redone') ?? {
+        ok: false,
+        changed: false,
+        reason: 'Nothing to redo.',
+      }
+    )
   }
 
   // ---- saving -------------------------------------------------------------
@@ -914,11 +956,15 @@ export function useScoreEdit() {
     nudgeSelectedString,
     deleteSelection,
 
-    // undo
+    // undo / redo
     undo,
     canUndo,
     undoLabel,
     undoDepth,
+    redo,
+    canRedo,
+    redoLabel,
+    redoDepth,
 
     // saving
     download,
