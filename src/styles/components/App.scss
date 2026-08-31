@@ -199,6 +199,34 @@
   }
 }
 
+.panel-actions {
+  display: flex;
+  align-items: center;
+  gap: $gap-xs;
+}
+
+// Undo. In the strip rather than in a panel, because it reaches edits from both
+// of them and the strip is the only chrome present whichever panel is open.
+.panel-undo {
+  @include button-chrome;
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  align-self: center;
+  padding: 0.14rem 0.36rem;
+  font-size: 0.66rem;
+}
+.panel-undo-label {
+  @include section-label;
+  font-size: 0.6rem;
+}
+// How many steps are left, so the bound is visible rather than a surprise.
+.panel-undo-count {
+  @include tabular;
+  font-size: 0.58rem;
+  opacity: 0.7;
+}
+
 // Collapse the sidebar. Lives here rather than in either panel, since it acts on
 // the container both of them sit in. Points the way the panel will move.
 .panel-collapse {

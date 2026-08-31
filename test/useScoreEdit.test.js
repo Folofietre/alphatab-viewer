@@ -30,6 +30,7 @@ const host = {
   midiReloads: 0,
   syncedTracks: [],
   syncedScoreInfo: 0,
+  syncedAllTracks: 0,
   dirty: false,
   tracksById: new Map(),
 
@@ -38,6 +39,9 @@ const host = {
   },
   syncTrack(index) {
     host.syncedTracks.push(index)
+  },
+  syncAllTracks() {
+    host.syncedAllTracks += 1
   },
   syncScoreInfo() {
     host.syncedScoreInfo += 1
@@ -184,6 +188,7 @@ beforeEach(async () => {
   host.midiReloads = 0
   host.syncedTracks = []
   host.syncedScoreInfo = 0
+  host.syncedAllTracks = 0
   host.dirty = false
   host.tracksById = new Map(score.tracks.map((track) => [track.index, track]))
 
@@ -209,8 +214,11 @@ beforeEach(async () => {
   edit = useScoreEdit()
   // The api only exists from beforeEach onwards, so binding happens here.
   edit.bindSelection()
+  // useScoreEdit keeps its selection, range and undo stack at MODULE scope - one
+  // score, one of each - so a fresh test needs them reset. `onScoreCleared` is
+  // the app's own "this score is gone" hook, which is exactly that reset.
+  host.onScoreCleared?.()
   edit.selectTrack(LEAD)
-  edit.clearSelection()
   await nextTick()
 })
 
@@ -874,6 +882,158 @@ describe('Delete replaces the selection with silence', () => {
   })
 })
 
+describe('undo', () => {
+  it('is unavailable until something has been edited', () => {
+    expect(edit.canUndo.value).toBe(false)
+    expect(edit.undoDepth.value).toBe(0)
+    expect(edit.undoLabel.value).toBeNull()
+    expect(edit.undo().ok).toBe(false)
+  })
+
+  it('takes back the last edit, and names it', () => {
+    const before = score.tracks[LEAD].name
+    edit.rename('Renamed')
+    expect(score.tracks[LEAD].name).toBe('Renamed')
+    expect(edit.undoDepth.value).toBe(1)
+    expect(edit.undoLabel.value).toBe('Rename track')
+
+    expect(edit.undo()).toMatchObject({ ok: true, label: 'Rename track' })
+
+    expect(score.tracks[LEAD].name).toBe(before)
+    expect(edit.undoDepth.value).toBe(0)
+    expect(edit.canUndo.value).toBe(false)
+  })
+
+  it('unwinds newest first', () => {
+    edit.rename('One')
+    edit.setTempo(200)
+    expect(edit.undoLabel.value).toBe('Tempo')
+
+    edit.undo()
+    expect(score.tempo).toBe(120)
+    expect(score.tracks[LEAD].name).toBe('One')
+
+    edit.undo()
+    expect(score.tracks[LEAD].name).toBe('Lead')
+  })
+
+  it('clears the dirty flag once every edit is taken back', () => {
+    edit.rename('Dirty')
+    expect(host.dirty).toBe(true)
+    edit.undo()
+    // The score really is back to how it was loaded, so nothing needs saving.
+    expect(host.dirty).toBe(false)
+  })
+
+  it('does NOT clear the dirty flag when the bound dropped older edits', () => {
+    // 31 edits with a depth of 30: the first one is gone from the stack but is
+    // still applied, so the score is not clean however many undos follow.
+    for (let i = 0; i < 31; i += 1) edit.rename(`Name ${i}`)
+    expect(edit.undoDepth.value).toBe(30)
+    for (let i = 0; i < 30; i += 1) edit.undo()
+
+    expect(edit.undoDepth.value).toBe(0)
+    expect(host.dirty).toBe(true)
+    // And the name is the one the dropped edit left, not the original.
+    expect(score.tracks[LEAD].name).not.toBe('Lead')
+  })
+
+  it('re-renders, re-reads every track, and leaves the midi for the next play', () => {
+    edit.transposeByFrets(2)
+    host.renders = []
+    host.midiStale = false
+    host.syncedAllTracks = 0
+
+    edit.undo()
+
+    expect(host.renders).toEqual([{ reuseViewport: true }])
+    expect(host.midiStale).toBe(true)
+    // An undo can reach any track and the stack does not record which.
+    expect(host.syncedAllTracks).toBe(1)
+  })
+
+  it('drops the selection, since what was selected may have moved', () => {
+    const note = [...stringedNotes(score.tracks[LEAD].staves[0])][0]
+    host.api.noteMouseDown.emit(note)
+    edit.setSelectedFret(note.fret + 1)
+    expect(edit.selectedNote.value).not.toBeNull()
+
+    edit.undo()
+
+    expect(edit.selectedNote.value).toBeNull()
+    expect(edit.selectedNoteRects.value).toEqual([])
+  })
+
+  it('brings silenced notes back', () => {
+    const note = [...stringedNotes(score.tracks[LEAD].staves[0])][0]
+    const beat = note.beat
+    const fret = note.fret
+    host.api.noteMouseDown.emit(note)
+
+    edit.deleteSelection()
+    expect(beat.isRest).toBe(true)
+
+    edit.undo()
+
+    expect(beat.isRest).toBe(false)
+    expect(beat.notes).toHaveLength(1)
+    expect(beat.notes[0].fret).toBe(fret)
+  })
+
+  it('undoes a batch range edit in one step', () => {
+    const beats = beatsOf(LEAD)
+    dragOver(beats[0], beats[3])
+    const notes = beats.slice(0, 4).flatMap((b) => b.notes)
+    const before = notes.map((n) => n.fret)
+
+    edit.nudgeSelectedFret(1)
+    expect(edit.undoDepth.value).toBe(1) // one record, not one per note
+    expect(edit.undoLabel.value).toBe('Transpose selection')
+
+    edit.undo()
+    expect(notes.map((n) => n.fret)).toEqual(before)
+  })
+
+  it('records nothing for a refused or no-op edit', () => {
+    edit.rename(score.tracks[LEAD].name) // no-op
+    expect(edit.undoDepth.value).toBe(0)
+    edit.selectTrack(RHYTHM)
+    edit.transposeByFrets(1) // refused
+    expect(edit.undoDepth.value).toBe(0)
+  })
+
+  it('is blocked by playback like every other edit', () => {
+    edit.rename('Renamed')
+    player.isPlaying.value = true
+    expect(edit.undo().ok).toBe(false)
+    expect(score.tracks[LEAD].name).toBe('Renamed')
+    expect(edit.canUndo.value).toBe(false)
+  })
+
+  it('is forgotten when the score is replaced or closed', () => {
+    edit.rename('Renamed')
+    expect(edit.undoDepth.value).toBe(1)
+
+    host.api.scoreLoaded.emit(score)
+    // The records point at notes of a graph that is no longer displayed, and
+    // holding them would pin the discarded score in memory.
+    expect(edit.undoDepth.value).toBe(0)
+
+    edit.rename('Again')
+    host.onScoreCleared()
+    expect(edit.undoDepth.value).toBe(0)
+  })
+
+  it('takes back an instrument change through usePlayer', () => {
+    const before = player.tracks.value[LEAD].program
+    edit.setInstrument(42)
+    expect(player.setTrackProgram).toHaveBeenLastCalledWith(LEAD, 42)
+
+    edit.undo()
+    expect(player.setTrackProgram).toHaveBeenLastCalledWith(LEAD, before)
+  })
+})
+
 describe('editing only while paused', () => {
   const EDITS = [
     ['rename', () => edit.rename('Nope')],
@@ -886,6 +1046,7 @@ describe('editing only while paused', () => {
     ['nudgeSelectedFret', () => edit.nudgeSelectedFret(1)],
     ['nudgeSelectedString', () => edit.nudgeSelectedString(1)],
     ['deleteSelection', () => edit.deleteSelection()],
+    ['undo', () => edit.undo()],
   ]
 
   it('canEdit follows the player, and a note preview does NOT clear it', () => {

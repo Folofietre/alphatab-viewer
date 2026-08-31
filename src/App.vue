@@ -83,13 +83,31 @@
               @click="panel = tab.id"
             >{{ tab.label }}</button>
           </div>
-          <button
-            type="button"
-            class="panel-collapse"
-            title="Hide this panel"
-            aria-label="Hide the sidebar panel"
-            @click="isTracksOpen = false"
-          >&laquo;</button>
+          <!-- Undo lives in the strip rather than in a panel: it reaches
+               edits from both of them, and the strip is the only chrome that is
+               present whichever panel is open. -->
+          <div class="panel-actions">
+            <button
+              type="button"
+              class="panel-undo"
+              :disabled="!canUndo"
+              :title="undoLabel
+                ? `Undo: ${undoLabel} (Ctrl+Z), ${undoDepth} step${undoDepth === 1 ? '' : 's'} available`
+                : 'Nothing to undo (Ctrl+Z)'"
+              @click="undo"
+            >
+              <span aria-hidden="true">&#8630;</span>
+              <span class="panel-undo-label">Undo</span>
+              <span v-if="undoDepth > 0" class="panel-undo-count">{{ undoDepth }}</span>
+            </button>
+            <button
+              type="button"
+              class="panel-collapse"
+              title="Hide this panel"
+              aria-label="Hide the sidebar panel"
+              @click="isTracksOpen = false"
+            >&laquo;</button>
+          </div>
         </div>
 
         <!-- v-show, not v-if: switching tabs must not throw away the panels'
@@ -119,6 +137,7 @@
 <script setup>
 import { computed, ref } from 'vue'
 import { usePlayer } from '@/composables/usePlayer'
+import { useScoreEdit } from '@/composables/useScoreEdit'
 import { useShortcuts } from '@/composables/useShortcuts'
 import ScoreViewer from '@/components/ScoreViewer.vue'
 import ScoreHeader from '@/components/ScoreHeader.vue'
@@ -132,9 +151,13 @@ import BarsPerRow from '@/components/BarsPerRow.vue'
 const { loadFile, clearScore, isScoreLoaded, isDirty, scoreInfo, fileName, loadError } =
   usePlayer()
 
+// The undo control sits in the sidebar's tab strip, so it is reachable from
+// whichever panel is open.
+const { undo, canUndo, undoLabel, undoDepth } = useScoreEdit()
+
 // Both ways out of a score go through a confirmation while there are unsaved
-// edits, because there is no undo and nothing else would stop the model being
-// replaced.
+// edits: the undo stack is bounded and is cleared with the score, so nothing
+// else would stop the model being replaced.
 //
 // Deliberately NOT a `beforeunload` handler: the browser shows its own
 // unskippable dialog for that, which is out of proportion for a viewer, and it

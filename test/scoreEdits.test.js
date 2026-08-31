@@ -17,6 +17,8 @@ import {
   deleteNotes,
   setNoteFret,
   shiftNoteString,
+  shiftNotesFret,
+  shiftNotesString,
   stringedNotes,
   tempoInfo,
   transposeTrackByFrets,
@@ -971,6 +973,187 @@ describe('deleteNotes', () => {
     const notes = beatsOf(score, LEAD).slice(0, 4).flatMap((b) => b.notes)
     expect(deleteNotes(notes, settings).ok).toBe(true)
     expect(snapshotTrack(score.tracks[BASS])).toEqual(untouched)
+  })
+})
+
+// Every operation carries its own `undo`, and every one of them has to put the
+// model back EXACTLY. Checked the only way that means anything: snapshot the
+// whole score, edit, undo, and compare - plus the generated midi, which catches
+// derived state a field-by-field comparison would miss.
+describe('undo restores exactly', () => {
+  function fullSnapshot(score) {
+    return {
+      tempo: tempoMap(score),
+      tracks: score.tracks.map(snapshotTrack),
+      // The link graph, as indexes rather than objects so it can be compared.
+      links: linkGraph(score),
+    }
+  }
+
+  function linkGraph(score) {
+    const FIELDS = [
+      'tieOrigin', 'tieDestination', 'hammerPullOrigin', 'hammerPullDestination',
+      'slurOrigin', 'slurDestination', 'slideOrigin', 'slideTarget',
+      'effectSlurOrigin', 'effectSlurDestination', 'bendOrigin',
+    ]
+    const notes = []
+    for (const track of score.tracks) {
+      for (const staff of track.staves) {
+        for (const bar of staff.bars) {
+          for (const voice of bar.voices) {
+            for (const beat of voice.beats) notes.push(...beat.notes)
+          }
+        }
+      }
+    }
+    const id = new Map(notes.map((n, i) => [n, i]))
+    return notes.map((note) => FIELDS.map((f) => (note[f] ? (id.get(note[f]) ?? 'external') : null)))
+  }
+
+  // Each case: a name, and what to do to a fresh fixture.
+  const CASES = [
+    ['rename', (score) => renameTrack(score.tracks[LEAD], 'Something Else')],
+    ['tempo', (score) => applyScoreTempo(score, 187)],
+    ['detune a track', (score) => transposeTrackByTuning(score.tracks[LEAD], -3)],
+    ['transpose frets', (score) => transposeTrackByFrets(score.tracks[LEAD], 2)],
+    [
+      'retune, keep pitches',
+      (score) => retuneTrack(score.tracks[LEAD], [64, 59, 55, 50, 45, 38], RETUNE_KEEP_PITCH),
+    ],
+    [
+      'retune, keep frets',
+      (score) => retuneTrack(score.tracks[LEAD], [64, 59, 55, 50, 45, 38], RETUNE_REASSIGN),
+    ],
+    [
+      'one note fret',
+      (score) => setNoteFret([...stringedNotes(score.tracks[LEAD].staves[0])][0], 9),
+    ],
+    [
+      'one note string',
+      (score) => {
+        const staff = score.tracks[LEAD].staves[0]
+        const note = [...stringedNotes(staff)].find(
+          (n) => n.string < staff.tuning.length && n.fret >= 5,
+        )
+        return shiftNoteString(note, 1)
+      },
+    ],
+    [
+      'a batch of frets',
+      (score) => shiftNotesFret([...stringedNotes(score.tracks[LEAD].staves[0])].slice(0, 6), 1),
+    ],
+    [
+      'a batch of strings',
+      (score) => {
+        const staff = score.tracks[LEAD].staves[0]
+        const notes = [...stringedNotes(staff)].filter(
+          (n) => n.string < staff.tuning.length && n.fret >= 5,
+        )
+        return shiftNotesString(notes, 1)
+      },
+    ],
+    [
+      'silence one note',
+      (score) =>
+        deleteNotes([...stringedNotes(score.tracks[LEAD].staves[0])].slice(0, 1), settings),
+    ],
+    [
+      'silence a passage',
+      (score) =>
+        deleteNotes([...stringedNotes(score.tracks[LEAD].staves[0])].slice(0, 6), settings),
+    ],
+    [
+      'silence notes that are tie and slide origins',
+      (score) => {
+        const notes = []
+        for (const staff of score.tracks[TIES].staves) {
+          for (const note of stringedNotes(staff)) {
+            if (note.tieDestination || note.hammerPullDestination || note.slideTarget) {
+              notes.push(note)
+            }
+          }
+        }
+        expect(notes.length).toBeGreaterThan(0)
+        return deleteNotes(notes, settings)
+      },
+    ],
+    [
+      'silence one note of a chord',
+      (score) => {
+        let chord = null
+        for (const staff of score.tracks[TIES].staves) {
+          for (const bar of staff.bars) {
+            for (const voice of bar.voices) {
+              for (const beat of voice.beats) if (beat.notes.length > 1) chord ??= beat
+            }
+          }
+        }
+        expect(chord).not.toBeNull()
+        return deleteNotes([chord.notes[0]], settings)
+      },
+    ],
+  ]
+
+  for (const [name, apply] of CASES) {
+    it(`puts the model back after: ${name}`, () => {
+      const score = loadFixture()
+      const before = fullSnapshot(score)
+      const beforeMidi = midiNoteOns(score)
+
+      const result = apply(score)
+      expect(result, name).toMatchObject({ ok: true, changed: true })
+      expect(typeof result.undo, `${name} must carry an undo`).toBe('function')
+      // The edit really did something, or the test proves nothing.
+      expect(fullSnapshot(score)).not.toEqual(before)
+
+      result.undo()
+
+      expect(fullSnapshot(score)).toEqual(before)
+      expect(midiNoteOns(score)).toEqual(beforeMidi)
+    })
+  }
+
+  it('unwinds a whole STACK of mixed edits, newest first', () => {
+    const score = loadFixture()
+    const before = fullSnapshot(score)
+    const beforeMidi = midiNoteOns(score)
+
+    // Every case applied to the SAME score, in order. Some become a no-op or a
+    // refusal once an earlier one has moved their target, which is fine and is
+    // exactly why the count is not asserted - only the round trip is.
+    const undos = []
+    for (const [, apply] of CASES) {
+      const result = apply(score)
+      if (result.changed) undos.push(result.undo)
+    }
+    expect(undos.length).toBeGreaterThanOrEqual(CASES.length - 2)
+    expect(fullSnapshot(score)).not.toEqual(before)
+
+    for (const undo of undos.reverse()) undo()
+
+    expect(fullSnapshot(score)).toEqual(before)
+    expect(midiNoteOns(score)).toEqual(beforeMidi)
+  })
+
+  it('and the undone score still exports and re-imports intact', () => {
+    const score = loadFixture()
+    const before = fullSnapshot(score)
+    const result = deleteNotes(
+      [...stringedNotes(score.tracks[TIES].staves[0])].slice(0, 5),
+      settings,
+    )
+    result.undo()
+    expect(fullSnapshot(score)).toEqual(before)
+
+    const back = roundTrip(score)
+    expect(back.tracks.map(snapshotTrack)).toEqual(before.tracks)
+  })
+
+  it('does not report an undo on a no-op', () => {
+    const score = loadFixture()
+    const same = renameTrack(score.tracks[LEAD], score.tracks[LEAD].name)
+    expect(same).toMatchObject({ ok: true, changed: false })
+    expect(same.undo).toBeUndefined()
   })
 })
 

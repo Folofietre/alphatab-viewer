@@ -21,6 +21,7 @@ import {
   tuningChoices,
 } from '@/utils/scoreEdits'
 import { downloadScoreAsGp } from '@/utils/exportScore'
+import { createHistory } from '@/utils/scoreHistory'
 
 // Editing state and orchestration: selection, the "modified" flag, and deciding
 // what has to be re-rendered or re-generated after each edit.
@@ -77,6 +78,40 @@ const selectedNote = shallowRef(null)
 const editMessage = shallowRef(null)
 
 const isExporting = ref(false)
+
+// The undo stack. Bounded, and holding field-level restore records rather than
+// snapshots - see scoreHistory.js for the measurements that rule snapshots out.
+//
+// It has to be CLEARED whenever the score is replaced or closed: its records
+// hold references to Note objects, and a Note reaches the whole score graph
+// through its back-references, so a stale stack would pin an entire discarded
+// score in memory. Same reasoning as the selection.
+const history = createHistory()
+
+// Mirrors of the stack for the UI, since a plain object is not reactive.
+const undoDepth = ref(0)
+const undoLabel = shallowRef(null)
+
+function syncHistory() {
+  undoDepth.value = history.size
+  undoLabel.value = history.nextLabel
+}
+
+// Record an edit so it can be undone, and keep the dirty flag honest.
+//
+// An empty stack means every edit has been undone, so the score is back to how
+// it was loaded - UNLESS the bound has thrown a record away, in which case older
+// edits are still applied and `isClean` says so.
+function remember(label, result) {
+  if (!result?.changed || typeof result.undo !== 'function') return
+  history.push(label, result.undo)
+  syncHistory()
+}
+
+function forgetHistory() {
+  history.clear()
+  syncHistory()
+}
 
 // The notes covered by a click-and-drag range, in a PLAIN array for the same
 // reason `selected` is a plain variable: these are model objects.
@@ -141,7 +176,10 @@ function message(kind, text) {
 //                   RenderHint so alphaTab can keep the unchanged part. Only
 //                   worth setting for a single-note edit; a transposition
 //                   changes bar 0 onwards anyway.
-function propagate(result, { render = false, midi = false, firstChangedBar = null } = {}) {
+//   label           what the undo control offers to take back. Every result that
+//                   changed something carries its own `undo`; this is the human
+//                   name for it.
+function propagate(result, { render = false, midi = false, firstChangedBar = null, label = null } = {}) {
   if (!result.ok) {
     message('error', result.reason)
     return result
@@ -149,6 +187,7 @@ function propagate(result, { render = false, midi = false, firstChangedBar = nul
   message(null, null)
   if (!result.changed) return result
 
+  remember(label, result)
   scoreEditHost.markDirty()
 
   if (render) {
@@ -274,6 +313,7 @@ function bind() {
   scoreEditHost.onScoreCleared = () => {
     clearSelection()
     clearRange()
+    forgetHistory()
     selectedTrackIndex.value = 0
     message(null, null)
   }
@@ -284,6 +324,9 @@ function bind() {
   api.scoreLoaded.on(() => {
     clearSelection()
     clearRange()
+    // A new object graph: every record points at notes that are no longer in the
+    // score, and holding them would pin the discarded one in memory.
+    forgetHistory()
     selectedTrackIndex.value = 0
     message(null, null)
   })
@@ -389,6 +432,8 @@ export function useScoreEdit() {
   // cannot lock the panel against itself.
   const canEdit = computed(() => player.isScoreLoaded.value && !player.isPlaying.value)
 
+  const canUndo = computed(() => canEdit.value && undoDepth.value > 0)
+
   function refused(reason) {
     message('error', reason)
     return { ok: false, changed: false, reason }
@@ -414,7 +459,7 @@ export function useScoreEdit() {
     const index = editedTrack.value?.index
     const result = renameTrack(scoreEditHost.trackAt(index ?? -1), name)
     if (result.changed) scoreEditHost.syncTrack(index)
-    return propagate(result, { render: true })
+    return propagate(result, { render: true, label: 'Rename track' })
   }
 
   // The midi program. The write itself already lives in usePlayer (it needs the
@@ -427,8 +472,17 @@ export function useScoreEdit() {
     if (editedTrack.value?.isPercussion) {
       return refused('Percussion plays on the drum channel and has no program number.')
     }
+    const before = editedTrack.value?.program ?? null
     player.setTrackProgram(index, program)
     message(null, null)
+    // usePlayer owns the write (it needs the automation rewrite from
+    // trackSound.js), so the undo goes back through it rather than touching the
+    // model here.
+    remember('Change instrument', {
+      changed: true,
+      undo: () => player.setTrackProgram(index, before),
+    })
+    scoreEditHost.markDirty()
     return { ok: true, changed: true, reason: null }
   }
 
@@ -440,7 +494,7 @@ export function useScoreEdit() {
     if (!canEdit.value) return refusePlayback()
     const result = applyScoreTempo(scoreEditHost.score, bpm)
     if (result.changed) scoreEditHost.syncScoreInfo()
-    return propagate(result, { render: true, midi: 'now' })
+    return propagate(result, { render: true, midi: 'now', label: 'Tempo' })
   }
 
   // Both transposition modes change the notation and the pitches.
@@ -449,7 +503,7 @@ export function useScoreEdit() {
     const index = editedTrack.value?.index
     const result = transposeTrackByTuning(scoreEditHost.trackAt(index ?? -1), semitones)
     if (result.changed) scoreEditHost.syncTrack(index)
-    return propagate(result, { render: true, midi: 'onPlay' })
+    return propagate(result, { render: true, midi: 'onPlay', label: 'Detune track' })
   }
 
   function transposeByFrets(semitones) {
@@ -460,7 +514,7 @@ export function useScoreEdit() {
       scoreEditHost.syncTrack(index)
       refreshSelection()
     }
-    return propagate(result, { render: true, midi: 'onPlay' })
+    return propagate(result, { render: true, midi: 'onPlay', label: 'Transpose frets' })
   }
 
   function retune(tunings, mode) {
@@ -471,7 +525,7 @@ export function useScoreEdit() {
       scoreEditHost.syncTrack(index)
       refreshSelection()
     }
-    return propagate(result, { render: true, midi: 'onPlay' })
+    return propagate(result, { render: true, midi: 'onPlay', label: 'Retune track' })
   }
 
   // One note. Renders incrementally from the bar that changed, and defers the
@@ -499,6 +553,7 @@ export function useScoreEdit() {
       render: true,
       midi: 'onPlay',
       firstChangedBar: bar,
+      label: 'Change pitch',
     })
   }
 
@@ -511,10 +566,9 @@ export function useScoreEdit() {
   // The selection goes with it: the notes no longer exist, so nothing could be
   // pointed at afterwards.
   //
-  // The one edit with no way back except `Revert`, so it is a plain action with
-  // no confirmation: asking every time would make it useless for one note, and a
-  // threshold on the count would be arbitrary. `isDirty` already warns before
-  // the score is replaced or closed.
+  // A plain action with no confirmation: asking every time would make it useless
+  // for one note, and a threshold on the count would be arbitrary. `undo` takes
+  // it back, and `isDirty` warns before the score is replaced or closed.
   function deleteSelection() {
     if (!canEdit.value) return refusePlayback()
 
@@ -539,7 +593,12 @@ export function useScoreEdit() {
     // `deleteNotes` already ran finish(), which recomputes the tick grid - but it
     // recomputes it to the same values, since removing a note does not change any
     // duration. So the midi can still wait for the next play.
-    return propagate(result, { render: true, midi: 'onPlay', firstChangedBar: bar })
+    return propagate(result, {
+      render: true,
+      midi: 'onPlay',
+      firstChangedBar: bar,
+      label: result.noteCount === 1 ? 'Silence note' : `Silence ${result.noteCount} notes`,
+    })
   }
 
   // Alt + arrow: move the selected note to the adjacent string, keeping its
@@ -582,6 +641,7 @@ export function useScoreEdit() {
       render: true,
       midi: 'onPlay',
       firstChangedBar: bar,
+      label: 'Move to another string',
     })
   }
 
@@ -599,6 +659,7 @@ export function useScoreEdit() {
       render: true,
       midi: 'onPlay',
       firstChangedBar: selectedRange.value?.startBar ?? null,
+      label: 'Move selection to another string',
     })
   }
 
@@ -615,6 +676,7 @@ export function useScoreEdit() {
       render: true,
       midi: 'onPlay',
       firstChangedBar: selectedRange.value?.startBar ?? null,
+      label: 'Transpose selection',
     })
   }
 
@@ -637,6 +699,47 @@ export function useScoreEdit() {
   // Re-read the selected note after an edit that may have moved it.
   function refreshSelection() {
     if (selected) selectedNote.value = describeNote(selected)
+  }
+
+  // ---- undo ---------------------------------------------------------------
+
+  // Take back the most recent edit.
+  //
+  // Gated by playback like every other edit, since it writes the model just as
+  // much as the edit it reverses. And it clears the selection: an undone delete
+  // brings notes back, an undone string move puts them elsewhere, so whatever
+  // was selected may no longer be what the rings are drawn on.
+  //
+  // The dirty flag follows the stack: once every edit has been undone the score
+  // really is back to how it was loaded - unless the bound dropped a record, in
+  // which case older edits are still applied and `isClean` says false.
+  function undo() {
+    if (!canEdit.value) return refusePlayback()
+    if (history.size === 0) {
+      // Said out loud rather than failing silently. A key that does nothing and
+      // explains nothing is indistinguishable from a key that never arrived.
+      const reason = history.hasDropped
+        ? 'Nothing left to undo: the last 30 edits have been taken back. Use Revert in the Score tab to get the file back.'
+        : 'Nothing to undo.'
+      message('info', reason)
+      return { ok: false, changed: false, reason }
+    }
+
+    const label = history.undo()
+    syncHistory()
+
+    clearSelection()
+    clearRange()
+    scoreEditHost.syncAllTracks()
+    scoreEditHost.syncScoreInfo()
+    if (history.isClean) scoreEditHost.clearDirty()
+
+    const api = scoreEditHost.api
+    api?.render({ reuseViewport: true })
+    scoreEditHost.markMidiStale()
+
+    message('ok', `Undone: ${label}.`)
+    return { ok: true, changed: true, reason: null, label }
   }
 
   // ---- saving -------------------------------------------------------------
@@ -709,6 +812,12 @@ export function useScoreEdit() {
     nudgeSelectedFret,
     nudgeSelectedString,
     deleteSelection,
+
+    // undo
+    undo,
+    canUndo,
+    undoLabel,
+    undoDepth,
 
     // saving
     download,

@@ -75,8 +75,21 @@ function saveScore(_player, _event, edit) {
   edit.download()
 }
 
-// One entry per shortcut. `code` is KeyboardEvent.code, which is keyboard-layout
-// independent (unlike `key`), so this works the same on AZERTY and QWERTY.
+// One entry per shortcut, matched on EITHER `code` or `key`, and the choice is
+// not cosmetic.
+//
+//   `code` is the PHYSICAL key, named after the US QWERTY layout. Right for keys
+//   whose position is the point and whose label never moves: Space, Enter, the
+//   arrows, Delete, Backspace.
+//
+//   `key` is the CHARACTER the key produces. Right for a letter shortcut, and
+//   `code` is actively wrong there: `code: 'KeyZ'` is the position QWERTY gives
+//   to Z, which on AZERTY is the key labelled W. So Ctrl+Z declared by code
+//   fires for Ctrl+W on a French keyboard and not for Ctrl+Z. Matching the
+//   character means "the key labelled Z" on every layout, which is what a user
+//   pressing Ctrl+Z means.
+//
+// Comparison is case-insensitive, so a stray Shift cannot break it.
 //
 // `appliesTo(element, player)` decides whether the binding acts; when it returns
 // false the key is left entirely alone. Most bindings only care about the focused
@@ -126,7 +139,7 @@ export const BINDINGS = [
   // This deliberately overrides the browser's "Save page as", which is what the
   // key means in a document app.
   {
-    code: 'KeyS',
+    key: 's',
     label: 'Save the score as .gp',
     // `shift: false` on purpose: Ctrl+Shift+S is Firefox's responsive design
     // mode, and swallowing a devtools key to do the same thing as Ctrl+S is a
@@ -140,11 +153,32 @@ export const BINDINGS = [
     run: saveScore,
   },
   {
-    code: 'KeyS',
+    key: 's',
     label: 'Save the score as .gp',
     modifiers: { meta: true, shift: false },
     appliesTo: (_el, player) => player.isScoreLoaded.value,
     run: saveScore,
+  },
+  // Ctrl+Z and Cmd+Z. Two entries for the same reason Ctrl+S has two, and
+  // `shift: false` because Ctrl+Shift+Z is redo everywhere - a key this editor
+  // does not implement, so it is left alone rather than aliased to undo.
+  //
+  // Applies with focus anywhere, including a text field: a field's own undo is
+  // not what someone pressing Ctrl+Z in a score editor is after, and the edit
+  // panels commit on blur so there is rarely an uncommitted draft to lose.
+  {
+    key: 'z',
+    label: 'Undo the last edit',
+    modifiers: { ctrl: true, shift: false },
+    appliesTo: (_el, player) => player.isScoreLoaded.value,
+    run: (_player, _event, edit) => edit.undo(),
+  },
+  {
+    key: 'z',
+    label: 'Undo the last edit',
+    modifiers: { meta: true, shift: false },
+    appliesTo: (_el, player) => player.isScoreLoaded.value,
+    run: (_player, _event, edit) => edit.undo(),
   },
   // Delete and Backspace both, since editors accept either and the user's
   // keyboard may label only one of them. They stand down for anything that owns
@@ -208,6 +242,13 @@ export const BINDINGS = [
 // benefit. But the two arrow pairs genuinely mean different things with and
 // without it, so they declare `shift` and get an exact match, which is also what
 // keeps Alt+Up from resolving to two bindings at once.
+// A binding matches a key event by physical position or by character, never both.
+export function matchesKey(binding, event) {
+  if (binding.code) return binding.code === event.code
+  if (binding.key) return (event.key || '').toLowerCase() === binding.key
+  return false
+}
+
 export function matchesModifiers(binding, event) {
   const wanted = binding.modifiers ?? {}
   if ('shift' in wanted && !!wanted.shift !== event.shiftKey) return false
@@ -223,11 +264,27 @@ export function useShortcuts() {
   const edit = useScoreEdit()
 
   function onKeyDown(event) {
+    // TEMPORARY DIAGNOSTIC - remove once Ctrl+Z is confirmed in a browser.
+    if (event.ctrlKey || event.metaKey) {
+      const hit = BINDINGS.find((b) => matchesKey(b, event) && matchesModifiers(b, event))
+      console.log(
+        '[key-debug]',
+        `code=${event.code}`,
+        `key=${JSON.stringify(event.key)}`,
+        `ctrl=${event.ctrlKey} meta=${event.metaKey} shift=${event.shiftKey} alt=${event.altKey}`,
+        `defaultPrevented=${event.defaultPrevented}`,
+        `target=${event.target?.tagName}`,
+        `-> binding=${hit ? hit.label : 'NONE'}`,
+        hit ? `appliesTo=${hit.appliesTo(event.target, player)}` : '',
+        `| undo stack depth=${edit.undoDepth.value} canUndo=${edit.canUndo.value}`,
+      )
+    }
+
     // Respect a handler that already acted.
     if (event.defaultPrevented) return
 
     const binding = BINDINGS.find(
-      (b) => b.code === event.code && matchesModifiers(b, event),
+      (b) => matchesKey(b, event) && matchesModifiers(b, event),
     )
     if (!binding) return
     if (!binding.appliesTo(event.target, player)) return

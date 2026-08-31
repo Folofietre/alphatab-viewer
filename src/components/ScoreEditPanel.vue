@@ -121,7 +121,8 @@ function commitTempo() {
   if (!result.ok) tempoDraft.value = tempo.value.tempo == null ? '' : String(tempo.value.tempo)
 }
 
-// The one destructive action here, and there is no undo, so it asks.
+// Reverting throws away EVERY edit at once, including any the 30-step undo
+// stack has already dropped, so this is the one control that asks.
 function onRevert() {
   if (isDirty.value && !window.confirm('Discard every change and reload the file as it was opened?')) {
     return

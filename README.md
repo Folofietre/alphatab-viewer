@@ -181,8 +181,8 @@ Two design rules run through all of it:
 **An operation that cannot be applied is refused, with numbers, never clamped.**
 Moving frets down by one when the lowest note already sits on fret 0 does not
 quietly leave those notes at 0 - it refuses and says so. A transposition that
-clamps some of its notes is not a transposition, and there is no undo to get back
-from one.
+clamps some of its notes is not a transposition, and an undo that only partly
+applied would be no better.
 
 **No component writes to the alphaTab model.** Every write lives in
 [src/utils/scoreEdits.js](src/utils/scoreEdits.js) as a pure named function that
@@ -198,14 +198,19 @@ independent of its notes, so emptying a beat turns it into a rest of exactly the
 same length. A beat that still holds other notes keeps sounding them, so deleting
 one note of a chord silences that note, not the chord.
 
-It is the **only edit with no way back except `Revert`**: a transposition can be
-transposed back, but a deleted note's fret, effects and links are gone. There is
-deliberately no confirmation - asking every time would make it useless for one
-note, and a threshold on the count would be arbitrary - and `isDirty` already
-warns before the score is replaced or closed.
+There is deliberately no confirmation: asking every time would make it useless
+for one note, and a threshold on the count would be arbitrary. `Ctrl+Z` takes it
+back, and `isDirty` warns before the score is replaced or closed.
+
+**`Ctrl+Z` / `Cmd+Z` undoes the last edit**, up to 30 steps back, and the
+sidebar's tab strip carries an `Undo` button showing how many are left. Every one
+of the ten operations can be taken back, the delete included.
+
+Redo is **not** implemented, and `Ctrl+Shift+Z` is deliberately left to the
+browser rather than aliased to undo.
 
 **Deliberately out of scope for this tier:** entering notes, adding or removing
-bars, undo, changing the number of strings, and any validation of note
+bars, redo, changing the number of strings, and any validation of note
 durations.
 
 ### What is NOT saved with the score
@@ -250,13 +255,15 @@ src/
     gmPrograms.js            the 128 GM programs and their 16 families
     trackSound.js            applyTrackProgram() - see the gotcha below
     scoreEdits.js            every model write for the editing features
+    scoreHistory.js          the bounded undo stack
     exportScore.js           Gp7Exporter -> Blob -> download
     format.js                formatTime()
 test/
   fixtures/make-sample.mjs   regenerates sample.gp; the readable source of truth
   fixtures/sample.gp         6 tracks chosen to make every refusal fire
   helpers.js                 load / round-trip / snapshot a score in Node
-  scoreEdits.test.js         the model writes, against the fixture
+  scoreEdits.test.js         the model writes and their undos, on the fixture
+  scoreHistory.test.js       the stack: bound, ordering, the clean flag
   noteSelection.test.js      why selection needs core.includeNoteBounds
   useShortcuts.test.js       which key combination resolves to which action
   exportScore.test.js        filenames and the .gp round trip
@@ -532,6 +539,20 @@ Two details that bite:
 A test pins the whole reverse path against a real headless render: two rectangles
 for a note on a score+tab staff, at two different vertical positions, and
 clicking the centre of each finds the same `Note` back.
+
+### `code` for positions, `key` for letters
+
+A binding matches on **either** `KeyboardEvent.code` or `KeyboardEvent.key`, and
+the choice is not cosmetic. The obvious advice - "use `code`, it is
+layout-independent" - is right for Space, Enter, the arrows, Delete and
+Backspace, whose position is the point. It is **wrong for a letter**:
+
+`code: 'KeyZ'` is the position QWERTY gives to Z, and on AZERTY that is the key
+labelled **W**. Declared by code, `Ctrl+Z` fires for `Ctrl+W` on a French
+keyboard and never for `Ctrl+Z`. So the two letter shortcuts, Save and Undo,
+match `event.key` case-insensitively, which means "the key labelled Z" on every
+layout - AZERTY, Dvorak, Bépo included. Tests assert both directions with the
+physical key and the produced character deliberately disagreeing.
 
 ### Keyboard shortcuts declare their own modifiers
 
@@ -819,21 +840,61 @@ changes none of those. So `deleteNotes()` is the single caller in
 `scoreEdits.js`, for the reasons above. Adding or removing beats or bars would
 need it too.
 
-### Why there is no undo
+### How undo works, and why it is not snapshots
 
-`JsonConverter` on an 85-bar score:
+A whole-score snapshot through `JsonConverter`, measured on the two real test
+scores:
 
 ```
-scoreToJson : 108 ms, 4431 KB
-jsonToScore :  52 ms
-a 100-deep undo stack:  ~433 MB
+scoreToJson :  96 ms /  9.4 MB   (77 bars)
+             152 ms / 18.6 MB   (118 bars)
+jsonToScore :  41 ms / 65 ms
+30 undo levels:  282 MB / 559 MB
 ```
 
-A stack of snapshots is not viable. If undo arrives it will need invertible
-commands, which is why every model write is already a named function with a
-result. In the meantime the safety net is: range operations refuse rather than
-clamp, the download is available before anything risky, and `Revert` reloads the
-bytes of the file as it was opened (kept in memory, since they were read anyway).
+Not viable, which the plan established before any of this was built. So a record
+captures only the fields the operation is about to touch:
+
+```
+field-level record: 0.3-0.9 ms, 8-28 KB
+30 undo levels:     233-849 KB
+```
+
+About a thousand times less memory. Several operations need **no** captured state
+at all, because they are a constant shift: the inverse of "every fret +2" is
+"every fret -2", so those records hold a closure and nothing else.
+
+Each record is produced by the edit function itself, in `scoreEdits.js`: that is
+the only place that knows what a given operation touched, and keeping the capture
+next to the write is what stops the two drifting apart. An undo never
+re-validates - it restores a state the model was already in, so running it back
+through the forward checks could only refuse something legal.
+
+**The delete's undo is the hard one**, and a test caught why. The Note objects
+are still alive, only detached, so re-attaching them is cheap - but `finish()`
+does more than clear links that lost their target. It also **creates** them
+(`findTieOrigin` resolves a tie to an earlier note on the same string once the
+original origin is gone) and it copies a tie destination's `fret`, `octave` and
+`tone` from its origin. So restoring only the links that were cut left a note
+carrying a tie it never had. The record therefore captures everything `finish()`
+derives, for every note of every **affected staff** - the right unit, and one that
+needs no magic constant, because `finish()`'s link resolution walks
+`nextBeat` / `previousBeat` and never leaves a staff.
+
+**`isDirty` follows the stack.** An empty stack means every edit has been undone,
+so the score is back to how it was loaded - *unless* the bound threw a record
+away, in which case older edits are still applied and `history.isClean` says
+false. Without that flag, 40 edits and 30 undos would report a clean score that
+still differs from the file.
+
+The stack is cleared whenever the score is replaced or closed. Its records hold
+`Note` references, and a `Note` reaches the whole score graph through its
+back-references, so a stale stack would pin an entire discarded score in memory -
+the same reasoning as the selection.
+
+`Revert` is still there and is a different thing: undo walks back step by step,
+`Revert` reloads the bytes of the file in one move and works even past the 30-step
+bound.
 
 ---
 

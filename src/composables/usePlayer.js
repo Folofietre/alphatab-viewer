@@ -25,10 +25,10 @@ let scoreTracks = [] // raw alphaTab Track objects, indexed by track.index
 let pendingRestore = null
 
 // The bytes of the file that was opened, kept so an edit session always has a
-// way back. There is no undo stack - a stack of score snapshots is not viable,
-// `JsonConverter` costs 108ms and 4.4MB per snapshot on an 85-bar score - so
-// this one buffer covers the worst case for the price of a reference to data
-// that was read anyway.
+// way back in one move. Different from the undo stack in scoreHistory.js, and
+// not made redundant by it: undo walks back step by step and is bounded at 30,
+// while this covers everything at once however long ago it happened, for the
+// price of a reference to data that was read anyway.
 //
 // The buffer itself is a plain variable (it is data, not UI state) with a
 // reactive companion flag, because the Revert button's enabled state has to
@@ -405,10 +405,10 @@ export function usePlayer() {
 
   // Throw away every edit and reload the file exactly as it was opened.
   //
-  // This is the whole safety net for this tier of editing: there is no undo, so
-  // the guarantees are that range operations refuse rather than clamp, that the
-  // download is available before anything risky, and that the file as loaded is
-  // always one click away.
+  // The coarse half of the safety net. `Ctrl+Z` walks back one edit at a time and
+  // is bounded at 30; this puts the whole file back in one move, however many
+  // edits ago. The rest of the net is that range operations refuse rather than
+  // clamp, and that the download is available before anything risky.
   function revertToOriginal() {
     if (!api || !originalBytes) return false
     // scoreLoaded clears isDirty and re-seeds every descriptor.
@@ -683,6 +683,11 @@ export const scoreEditHost = {
   // Re-read the flat descriptor for one track after an edit wrote to it.
   syncTrack(index) {
     syncTrackFields(index)
+  },
+  // All of them. An undo can reach any track, and the stack does not record
+  // which, so this is cheaper than remembering.
+  syncAllTracks() {
+    for (const descriptor of tracks.value) syncTrackFields(descriptor.index)
   },
   // Re-read the document strip after an edit changed the tempo.
   syncScoreInfo() {

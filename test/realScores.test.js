@@ -297,6 +297,63 @@ describe.skipIf(scores.length === 0)('invariants on real scores', () => {
         expect(roundTrip(score).masterBars.length).toBe(bars)
       })
 
+      it('every edit can be undone exactly, midi included', () => {
+        // The claim that matters for an undo stack, on a real score: apply, take
+        // it back, and compare both the model and what would be played.
+        const snapshot = (score) => ({
+          tempo: tempoMap(score),
+          tracks: score.tracks.map(snapshotTrack),
+        })
+
+        const CASES = [
+          ['rename', (s2) => renameTrack(s2.tracks[0], 'Undo Me')],
+          ['tempo', (s2) => applyScoreTempo(s2, Math.round(s2.tempo) + 17)],
+          ['detune', (s2) => transposeTrackByTuning(stringedTracks(s2)[0], -2)],
+          ['frets', (s2) => transposeTrackByFrets(stringedTracks(s2)[0], 1)],
+          [
+            'retune keep pitches',
+            (s2) => {
+              const track = stringedTracks(s2)[0]
+              const staff = track.staves.find((st) => st.isStringed)
+              return retuneTrack(track, staff.tuning.map((v) => v - 2), RETUNE_KEEP_PITCH)
+            },
+          ],
+          [
+            'silence linked notes',
+            (s2) => {
+              const notes = []
+              for (const track of stringedTracks(s2)) {
+                for (const staff of track.staves) {
+                  if (!staff.isStringed) continue
+                  for (const note of stringedNotes(staff)) {
+                    if (note.tieDestination || note.hammerPullDestination || note.slideTarget) {
+                      notes.push(note)
+                    }
+                  }
+                }
+              }
+              return notes.length > 0 ? deleteNotes(notes.slice(0, 25), settings) : null
+            },
+          ],
+        ]
+
+        for (const [name, apply] of CASES) {
+          const score = loadFile(file)
+          const before = snapshot(score)
+          const beforeMidi = midiNoteOns(score)
+
+          const result = apply(score)
+          if (!result || !result.changed) continue // legitimately not applicable
+          expect(typeof result.undo, name).toBe('function')
+          expect(snapshot(score), name).not.toEqual(before)
+
+          result.undo()
+
+          expect(snapshot(score), name).toEqual(before)
+          expect(midiNoteOns(score), name).toEqual(beforeMidi)
+        }
+      })
+
       it('offers a reachable tuning list for every stringed staff', () => {
         const score = loadFile(file)
         for (const track of stringedTracks(score)) {
