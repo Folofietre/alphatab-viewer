@@ -8,7 +8,10 @@
     :class="fill.state"
     :title="title"
   >
-    <span class="where">Bar {{ fill.barIndex + 1 }}</span>
+    <!-- No class: the label is the baseline this chip's hierarchy is measured
+         from, so it declares nothing and takes the container's own type. The
+         two spans below are the ones that differ. -->
+    <span>Bar {{ fill.barIndex + 1 }}</span>
     <span class="count">{{ fill.beats }} / {{ fill.beatCapacity }}</span>
     <span class="unit">{{ fill.numerator }}/{{ fill.denominator }}</span>
   </p>
