@@ -8,9 +8,9 @@ works and why it is built the way it is lives here.
 | --- | --- |
 | [Features](features.md) | What the app does, and what is not saved with the score |
 | [Architecture](architecture.md) | File layout, styling rules, the state singleton |
-| [Editing internals](editing.md) | Selection, propagation, undo and redo |
+| [Editing internals](editing.md) | The cursor, propagation, bar filling, undo and redo |
 | [Keyboard shortcuts](shortcuts.md) | The binding table and how the help is generated |
-| [alphaTab gotchas](alphatab-gotchas.md) | Six verified traps the editor is built around |
+| [alphaTab gotchas](alphatab-gotchas.md) | Eight verified traps the editor is built around |
 | [Tests](tests.md) | What is covered, and what needs a browser |
 
 ## How to read this

@@ -171,6 +171,237 @@ A test pins the whole reverse path against a real headless render: two rectangle
 for a note on a score+tab staff, at two different vertical positions, and
 clicking the centre of each finds the same `Note` back.
 
+## The cursor is the selection, extended to somewhere empty
+
+A selection can only ever designate something that **exists**. Writing music
+means pointing at somewhere that does not, so the position had to be able to land
+on an empty string.
+
+The trap here was three concepts - a cursor, a selected note, a dragged range -
+and keeping them in step. There are **two**: a position, which may or may not
+hold a note, and a range. Clicking a note puts the cursor on it and selects it;
+that is one act, not two states to synchronise. `setCursor()` is the single place
+`selected` is written from a position, so the two cannot disagree.
+
+One case needs the note passed in explicitly rather than found back from the
+string: percussion reports `string: -1`, so resolving through
+`getNoteOnString()` would answer null and clicking a drum would silently select
+nothing.
+
+### Clicking an empty string needs the mouse coordinates, which the typed event lacks
+
+`api.beatMouseDown` carries the `Beat` and no coordinates. That is enough to
+select a note, because the note hit-test has already run by then; it is not
+enough to place a cursor on an empty string, which has no object of its own to be
+handed over.
+
+alphaTab also dispatches a DOM `alphaTab.beatMouseDown` CustomEvent on its host
+element for every typed event, and `UiFacade.triggerEvent` puts the original
+`MouseEvent` on it as `originalEvent` whenever the event came from the mouse.
+That is the only route to the X and Y.
+
+The order is guaranteed and load-bearing: `_onBeatMouseDown` fires the typed
+event, then the DOM one, and only then `_onNoteMouseDown`. So the coordinates are
+already recorded by the time the deselect microtask runs, and that microtask now
+places a cursor instead of clearing everything - falling back to a plain
+deselection when there are no coordinates, so a synthetic event cannot leave a
+stale cursor pointing at wherever the last real click was.
+
+### The hit-test is our own, because alphaTab's ignores Y for the bar
+
+`BoundsLookup.getBeatAtPos` picks the bar with `findBarAtPos(x)` - **X only** -
+so with several tracks displayed the beat it returns can belong to a different
+track from the one that was clicked. Selecting a note hides that, because the
+note hit-test that follows is a rectangle and does use Y. An empty string has no
+such second chance.
+
+So `scoreGeometry.js` walks the lookup itself: the staff system by Y, the master
+bar by X, then the `BarBounds` by Y. Each step falls back to the NEAREST
+candidate, which is not politeness: bars are only as tall as the notation they
+hold, so between the standard staff and the tablature of one track there is a
+real gap - 56px on the fixture - belonging to no `BarBounds` at all.
+
+It also picks the beat itself rather than calling `BarBounds.findBeatAtPos`,
+which compares with a strict `<`: a note whose head is drawn exactly on its
+beat's left edge - a tie destination, which the fixture's Ties track really has -
+then resolves to the previous beat. One pixel wide, but it is the pixel the note
+is at.
+
+### Which row is the tablature, and why the answer is "the last one"
+
+`showStandardNotation` and `showTablature` can both be true on one staff, and
+alphaTab then renders two rows and produces two `BarBounds` carrying the **same**
+`Bar`. Only on the tablature does a Y coordinate mean a string: measured, the
+same interpolation on the standard staff answers string 3 for a note on string 4.
+So a click there gives a beat and a **null** string, which is an honest position
+rather than a wrong one.
+
+The tablature is the last row, and that is read from alphaTab rather than
+guessed: `StaveProfile._createDefaultStaveProfiles` lists the renderers as
+`Slash, Score, Numbered, Tab`, so the tablature is drawn below every other
+notation of the same staff, `showSlash` and `showNumbered` included.
+
+### The interpolation, and how exactly it was checked
+
+```
+spacing = visualBounds.h / (strings - 1)
+string  = strings - round((y - visualBounds.y) / spacing)
+```
+
+`h / (strings - 1)` and not `h / strings`, because the first line sits on the top
+edge. The subtraction at the end is pitfall 2: the lines are drawn highest string
+first while `note.string` counts up from the lowest.
+
+Not "close enough" - exact. Run against a headless render of the fixture with all
+six tracks displayed, it returns the right string for **all 81 notes** of the five
+stringed tracks, whose staves have 4, 6 and 7 strings. A test keeps it that way,
+because being off by one line would place the cursor on the wrong string with
+nothing on screen to say why.
+
+### Two markers, never both at once
+
+The cursor draws a **dashed** outline; the selection draws a solid ring. They are
+never on screen together: the ring already marks the position whenever it holds a
+note, and a second marker on the same place would read as two positions.
+
+On an empty string there is no note head to measure, so the rectangle is invented
+from the string spacing rather than read from the lookup. With no string at all,
+it becomes a full-height caret on every row of the beat.
+
+## Navigating with the arrows, and giving them back
+
+The bare arrows move the cursor: left and right along the beats, crossing bars;
+up and down across the strings of the same beat, in the direction the key points.
+
+With **nothing selected** they are not claimed at all and the page still scrolls,
+which is the only reason taking them is acceptable. That decision has to be
+reachable from `appliesTo`, not from `run`: the handler calls `preventDefault()`
+before `run`, so deciding later would have killed the scroll either way. This is
+why `appliesTo` grew a third argument.
+
+Three smaller rules, each of which would otherwise look like a broken key:
+
+- **Empty bars are walked through, not stopped at.** A bar with no beats in this
+  voice is a hole in the line, not the end of it.
+- **Running off either end is silent.** It is the natural end of a repeatable
+  key. Creating a bar past the end is a write, and belongs to the writing palier.
+- **A dragged range collapses onto its far edge.** Right moves on from the range's
+  last note, left from its first - the edge the arrow is travelling away from.
+  The range then goes, because a cursor and a range are the two notions and only
+  one at a time.
+
+From a position with no string yet, the first press enters the fretboard from the
+far edge in the direction of travel: up starts at the lowest string, down at the
+highest, so the next press continues the same way instead of doubling back.
+
+**The view follows, driven by a move counter and nothing else.** The rectangles
+are also rebuilt after every render, with the same values, so watching them would
+make the view jump on a resize or a track toggle - and during playback it would
+fight alphaTab's own scrolling. A counter only changes when the user pressed an
+arrow, which is the one moment following them is what they meant.
+
+## How full a bar is, and the one thing nothing else reports
+
+An overfull bar - one holding more ticks than its time signature allows - passes
+through alphaTab's model, its midi generator and its `.gp` exporter without a
+word. See pitfall 8. So the red rectangle and the counter in the action bar are
+the only thing in the stack that will ever say a bar is invalid.
+
+Three states, not two, and that is the important part: a bar being written into
+is *incomplete* for most of its life, so marking that red would paint the whole
+score red. Only the overflow is coloured.
+
+| Reading | Meaning | Shown as |
+| --- | --- | --- |
+| filled < capacity | incomplete, normal while writing | nothing |
+| filled = capacity | correct | nothing on the score |
+| filled > capacity | **invalid** | red outline round the bar |
+
+Three details in the arithmetic, all verified rather than assumed:
+
+- `masterBar.calculateDuration()` already handles the **anacrusis**: for a normal
+  bar it returns `numerator * valueToTicks(denominator)`, and for a pickup bar
+  the longest bar actually written at that index, which is the only sane capacity
+  for a bar that is deliberately short.
+- `voice.calculateDuration()` returns **0** for a voice alphaTab marked empty.
+  `finish()` fills unwritten voices with generated rests and leaves `isEmpty`
+  true, so counting them would report every multi-voice bar as empty. They are
+  skipped, and a bar whose every voice is empty is an implicit whole-bar rest.
+- Tick arithmetic **drifts downwards on tuplets**: seven sixteenth-septuplets are
+  137 ticks each, so 959 where a quarter note is 960. The comparison carries a
+  tolerance of one tick per beat, which is the exact bound on that truncation.
+
+The bar is judged by its **fullest** voice, since one voice overflowing is enough
+to make the bar invalid.
+
+Measured across 17 real files and 11682 bars: exactly one bar came out overfull
+and one incomplete, both genuine. So this is not a false-positive machine - which
+was the real risk - but it is also worth being honest that on files someone else
+wrote it will almost never fire. Its value arrives with the writing palier, and
+that is the reason it was built first: the net is hung before anyone walks on the
+wire.
+
+The counter beside it reads in **beats of the time signature** rather than ticks,
+because `3 / 4` says something to a musician where `2880 / 3840` does not.
+
+## The octave is a re-fingering, not a fret shift
+
+Measured on two real files, and this is the number that decides the design:
+
+| file | +12 same string | -12 same string | -12 impossible |
+| --- | --- | --- | --- |
+| Le Chant des Forges | 99 % | 2 % | 22 % |
+| Morbid Angel (.gpx) | 95 % | 7 % | 85 % |
+
+Going up an octave almost always stays on the same string. Going down one is
+physically impossible for most notes - the instrument does not reach that low.
+Over the 17 real files as a whole: **1.8 %** of notes cannot go up, **36.8 %**
+cannot go down.
+
+So the octave aims at a pitch and looks for a string and fret that can hold it:
+the current string first, then the others in the direction of travel, nearest to
+farthest. Going up when the fret runs off the neck means moving to a *higher*
+string, which needs a lower fret for the same pitch.
+
+The pitch target is computed from `fret + tuningForString(...)` rather than from
+`note.realValue`, so both sides of the subtraction use the same convention and
+any capo or track transposition cancels instead of having to be reasoned about.
+
+**Landing is allowed only onto a string that is empty in that beat**, even when
+the note currently there is also part of the batch. That refuses a few placements
+a cleverer solver would find, and in exchange no note can be dropped by two notes
+claiming one entry of `noteStringLookup` (pitfall 5). "Empty" has to mean empty
+*after the moves already planned*, not just in the model as it stands: without
+that, two notes of one chord both find the same free string and the second
+silently erases the first. The real-score invariant caught exactly that.
+
+### Best effort, and why the exception does not spread
+
+This is the one operation that is not all or nothing, and the reason it is
+tenable has to be written down or the exception will contaminate the rest:
+
+> **Clipping produces a wrong value. Not moving keeps a right one.**
+
+A fret transposition that clips leaves a note at fret 0 where it needed -2: that
+note now sounds wrong, and it has lost its interval with its neighbours, which is
+the whole content of a transposition. A note that could not drop an octave keeps
+the pitch it always had. The passage is no longer the passage an octave down, but
+no note carries an incorrect value.
+
+So the frets and the strings stay all or nothing, and only this is best effort.
+
+**And it needs no new result state.** `movedCount` and `blockedCount` are facts
+about what happened, of the same kind as the `noteCount` the other operations
+already return. A fourth result state was drafted and dropped: the score is on
+screen, a note that did not move is visible with its fret number unchanged, and
+that is a better channel than any flag. The message that does appear is posted by
+the caller *after* `propagate` - which clears the message on a success - so an
+existing channel is used by a caller rather than the contract changing.
+
+The only real difference from all-or-nothing is in the undo, and it settles
+itself: the swap holds only the notes that **moved**, so undoing puts back only
+those. Same mechanism, shorter list.
+
 ## Sounding a note, and when the midi gets rebuilt
 
 `api.playNote(note)` generates a **one-note** midi file from the current model

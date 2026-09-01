@@ -31,15 +31,31 @@ things with and without it, so they declare `shift` explicitly and get an exact
 match - which is also what keeps `Alt` + up from resolving to two bindings at
 once. A test asserts exactly one binding matches each of the four combinations.
 
-Auto-repeat is also per binding. The arrow bindings repeat, because holding the
-key to walk a note across the neck is the point. Everything else swallows
-repeats, `Ctrl+S` included.
+Auto-repeat is also per binding. The keys that **walk somewhere** repeat - the
+arrows, whether they move a note across the neck or the cursor along a line, and
+the octave keys - because holding one is the gesture. Everything else swallows
+repeats, `Ctrl+S` included, and a test pins exactly which set is which.
 
-`appliesTo(element, player)` takes the player as a second argument for one
-binding only: `Ctrl+S` stands down when no score is open, so the browser's own
-Save-page still works on the empty page rather than being swallowed for nothing.
-`Ctrl+Shift+S` is left alone too - that is Firefox's responsive design mode, and
-swallowing a devtools key to do the same thing as `Ctrl+S` is a bad trade.
+## `appliesTo(element, player, edit)`
+
+Three arguments, each earned by a specific binding, and a test asserts that no
+binding reaches for one it has no reason to.
+
+`player` is for `Ctrl+S`, which stands down when no score is open so the
+browser's own Save-page still works on the empty page rather than being swallowed
+for nothing. `Ctrl+Shift+S` is left alone too - that is Firefox's responsive
+design mode, and swallowing a devtools key to do the same thing as `Ctrl+S` is a
+bad trade.
+
+`edit` is for the four **bare arrows**, and the reason it has to be reachable
+from `appliesTo` is mechanical rather than tidy. A bare arrow either moves the
+cursor or scrolls the page; the handler calls `preventDefault()` **before**
+`run`, so a binding that decided inside `run` would have killed the scroll
+either way. With nothing selected, `edit.canNavigate` is false, the binding never
+applies, and the key is left entirely alone.
+
+That is the whole reason taking the bare arrows is acceptable at all: they are
+only claimed once the user has clicked something.
 
 One subtlety in the save shortcut: it **blurs the focused element first**. The
 edit panels commit their text and number fields on `change`, which fires on blur,
@@ -48,6 +64,28 @@ otherwise export the old name. `change` is dispatched synchronously by `blur()`,
 so the commit and the render it triggers are done before the export reads the
 model. Clicking the `Save .gp` button needs none of this, because the click moves
 focus out of the field on its way.
+
+## The arrow keys, and why there are three layers of them
+
+The up and down arrows now mean three different things, separated by modifiers
+and each with an exact match so none of them is ambiguous:
+
+| Keys | Acts on | Moves |
+| --- | --- | --- |
+| arrow | the **cursor** | one beat sideways, one string up or down |
+| `Alt` + arrow | the **note** | to the next string, keeping its pitch |
+| `Alt` + `Shift` + arrow | the **note** | one semitone, on the same string |
+| `Alt` + `PageUp` / `PageDown` | the **note** | a whole octave, re-fingered |
+
+The reading is "the arrow moves the cursor, `Alt` makes it move the note". Up
+means the higher-pitched string in every row of that table, which is also the
+higher line on the tablature, so everything moves the way the key points.
+
+The octave is a paging key rather than a third arrow combination because it is a
+different **kind** of move: the fret and the string are both recomputed to land
+on a pitch, so unlike the others it can be impossible - going down an octave is
+off the bottom of the instrument for 37 % of the notes of the real scores
+measured.
 
 ## The shortcut help is generated, not written
 

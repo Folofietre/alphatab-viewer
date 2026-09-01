@@ -14,6 +14,23 @@
       <div class="alphatab-stack">
         <div ref="host" class="alphatab-host" />
 
+        <!-- Bars holding more ticks than their time signature allows.
+             Underneath the selection markers, because this is a property of the
+             paper rather than of what is being edited - and because nothing
+             else in the stack reports it: alphaTab's model, its midi generator
+             and its .gp exporter all accept an overfull bar in silence. -->
+        <div
+          v-for="(rect, i) in overfullRects"
+          :key="`over-${i}`"
+          class="bar-overfull"
+          aria-hidden="true"
+          :style="{
+            transform: `translate(${rect.x}px, ${rect.y}px)`,
+            width: `${rect.w}px`,
+            height: `${rect.h}px`,
+          }"
+        />
+
         <!-- The selected note, marked where alphaTab actually drew it.
              Coordinates come straight from `boundsLookup` and need no scroll
              maths: this sits inside the scrolled content, exactly like
@@ -30,6 +47,25 @@
             height: `${rect.h + MARKER_PAD * 2}px`,
           }"
         />
+
+        <!-- The cursor on an EMPTY position. Never drawn at the same time as
+             the ring above: they are one notion, and the ring already marks the
+             position whenever it holds a note. Dashed rather than solid, since
+             the solid ring already means "this note will change" and this one
+             means "this is where you are". Already padded by the geometry,
+             which invents its size from the string spacing rather than
+             measuring a glyph that is not there. -->
+        <div
+          v-for="(rect, i) in cursorRects"
+          :key="`cursor-${i}`"
+          class="cursor-marker"
+          aria-hidden="true"
+          :style="{
+            transform: `translate(${rect.x}px, ${rect.y}px)`,
+            width: `${rect.w}px`,
+            height: `${rect.h}px`,
+          }"
+        />
       </div>
     </div>
     <div v-if="isRendering" class="rendering">Rendering…</div>
@@ -37,7 +73,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onBeforeUnmount } from 'vue'
+import { ref, watch, onMounted, onBeforeUnmount } from 'vue'
 import { usePlayer } from '@/composables/usePlayer'
 import { useScoreEdit } from '@/composables/useScoreEdit'
 
@@ -45,10 +81,42 @@ import { useScoreEdit } from '@/composables/useScoreEdit'
 // about 11x9, so without a little air the ring reads as part of the glyph.
 const MARKER_PAD = 3
 
+// How much of the score to keep visible around the cursor when following it.
+const FOLLOW_MARGIN = 48
+
 const host = ref(null)
 const scroller = ref(null)
 const { init, destroy, isRendering, isScoreLoaded } = usePlayer()
-const { selectedNoteRects } = useScoreEdit()
+const { selectedNoteRects, cursorRects, overfullRects, cursorMoves } = useScoreEdit()
+
+// Keep the cursor in view when the arrows walk it off the edge.
+//
+// Driven by the MOVE COUNTER, not by the rectangles. The rectangles are also
+// rebuilt after every render, with the same values, so watching them would make
+// the view jump on a resize or a track toggle - and during playback it would
+// fight alphaTab's own scrolling. A counter only changes when the user pressed
+// an arrow, which is the one moment following them is what they meant.
+//
+// The maths needs no element measurement: these coordinates are already offsets
+// inside the scrolled content, which is the same assumption the markers are
+// positioned on and which their being in the right place demonstrates.
+function follow() {
+  const el = scroller.value
+  const rect = cursorRects.value[0] ?? selectedNoteRects.value[0] ?? null
+  if (!el || !rect) return
+
+  const top = rect.y - FOLLOW_MARGIN
+  const bottom = rect.y + rect.h + FOLLOW_MARGIN
+  if (top < el.scrollTop) el.scrollTop = Math.max(0, top)
+  else if (bottom > el.scrollTop + el.clientHeight) el.scrollTop = bottom - el.clientHeight
+
+  const left = rect.x - FOLLOW_MARGIN
+  const right = rect.x + rect.w + FOLLOW_MARGIN
+  if (left < el.scrollLeft) el.scrollLeft = Math.max(0, left)
+  else if (right > el.scrollLeft + el.clientWidth) el.scrollLeft = right - el.clientWidth
+}
+
+watch(cursorMoves, follow)
 
 onMounted(() => init(host.value, scroller.value))
 onBeforeUnmount(() => destroy())

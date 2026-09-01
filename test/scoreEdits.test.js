@@ -18,8 +18,15 @@ import {
   setNoteFret,
   shiftNoteString,
   shiftNotesFret,
+  shiftNotesOctave,
+  shiftNoteOctave,
   shiftNotesString,
   stringedNotes,
+  BAR_UNDER,
+  BAR_EXACT,
+  BAR_OVER,
+  barFill,
+  describeBarFill,
   tempoInfo,
   transposeTrackByFrets,
   transposeTrackByTuning,
@@ -1281,5 +1288,229 @@ describe('the .gp export itself', () => {
     expect(back.tracks.map(snapshotTrack)).toEqual(expected)
     expect(tempoMap(back)).toEqual(expectedTempo)
     expect(back.tempo).toBe(156)
+  })
+})
+
+// ---------------------------------------------------------------------------
+
+describe('how full a bar is', () => {
+  // The fixture is 4/4 throughout, four quarters per bar.
+  const FULL = 3840
+
+  function firstBar(track = LEAD) {
+    return loadFixture().tracks[track].staves[0].bars[0]
+  }
+
+  it('reads a correct bar as exactly full', () => {
+    expect(barFill(firstBar())).toMatchObject({ capacity: FULL, filled: FULL, state: BAR_EXACT })
+  })
+
+  it('reads a bar with a note removed as INCOMPLETE, not as wrong', () => {
+    // Incomplete is the normal state of a bar being written into. It is not the
+    // state the red marker is for.
+    const bar = firstBar()
+    bar.voices[0].beats.pop()
+    expect(barFill(bar)).toMatchObject({ filled: 2880, state: BAR_UNDER })
+  })
+
+  it('reads a bar holding MORE than its time signature as over', () => {
+    // The state nothing else in the stack reports. See pitfall 8.
+    const score = loadFixture()
+    const bar = score.tracks[LEAD].staves[0].bars[0]
+    bar.voices[0].beats[0].duration = alphaTab.model.Duration.Whole
+    // `playbackDuration` is DERIVED and stays stale until finish() - pitfall 7 -
+    // so a fill read before it would still say the bar was exactly full.
+    expect(barFill(bar).state).toBe(BAR_EXACT)
+    score.finish(settings)
+    expect(barFill(bar)).toMatchObject({ filled: 6720, state: BAR_OVER })
+  })
+
+  it('and alphaTab writes that overfull bar to a .gp file without a word', () => {
+    // This is the whole reason the marker exists: no importer, generator or
+    // exporter in the chain objects, so nothing but this would ever say so.
+    const score = loadFixture()
+    score.tracks[LEAD].staves[0].bars[0].voices[0].beats[0].duration =
+      alphaTab.model.Duration.Whole
+    score.finish(settings)
+    const back = roundTrip(score)
+    expect(barFill(back.tracks[LEAD].staves[0].bars[0]).state).toBe(BAR_OVER)
+  })
+
+  it('tolerates the tick that a tuplet loses to truncation', () => {
+    // A septuplet of sixteenths is 137 ticks each, so seven of them measure 959
+    // where a quarter note is 960. That bar is CORRECT and must not be reported
+    // as incomplete; the tolerance is one tick per beat, which is the exact
+    // bound on the truncation.
+    const tex = `\\title "Tuplets"\n.\n\\track "A" \\staff{score tabs} \\tuning e4 b3 g3 d3 a2 e2\n` +
+      `:16 3.3{tu 7} 3.3{tu 7} 3.3{tu 7} 3.3{tu 7} 3.3{tu 7} 3.3{tu 7} 3.3{tu 7} :4 3.3 3.3 3.3 |\n`
+    const importer = new alphaTab.importer.AlphaTexImporter()
+    importer.initFromString(tex, settings)
+    const bar = importer.readScore().tracks[0].staves[0].bars[0]
+
+    expect(bar.voices[0].calculateDuration()).toBe(3839)
+    expect(barFill(bar).state).toBe(BAR_EXACT)
+  })
+
+  it('judges a bar by its FULLEST voice, since one overflow is enough', () => {
+    const tex = `\\title "Voices"\n.\n\\track "A" \\staff{score tabs} \\tuning e4 b3 g3 d3 a2 e2\n` +
+      `\\voice :4 3.3 3.3 3.3 3.3 |\n\\voice :4 5.4 5.4 |\n`
+    const importer = new alphaTab.importer.AlphaTexImporter()
+    importer.initFromString(tex, settings)
+    const bar = importer.readScore().tracks[0].staves[0].bars[0]
+
+    expect(bar.voices.length).toBeGreaterThan(1)
+    expect(barFill(bar)).toMatchObject({ filled: 3840, state: BAR_EXACT })
+  })
+
+  it('describeBarFill counts in BEATS of the time signature, not in ticks', () => {
+    const bar = firstBar()
+    bar.voices[0].beats.pop()
+    expect(describeBarFill(bar)).toMatchObject({
+      barIndex: 0,
+      beats: 3,
+      beatCapacity: 4,
+      numerator: 4,
+      denominator: 4,
+      state: BAR_UNDER,
+    })
+  })
+
+  it('barFill answers null rather than throwing on nothing', () => {
+    expect(barFill(null)).toBeNull()
+    expect(describeBarFill(null)).toBeNull()
+  })
+})
+
+describe('moving a note by an octave', () => {
+  function leadNote(score) {
+    return score.tracks[LEAD].staves[0].bars[0].voices[0].beats[0].notes[0]
+  }
+
+  it('goes up on the SAME string when the fret can reach', () => {
+    const score = loadFixture()
+    const note = leadNote(score)
+    const { string, fret, realValue } = note
+
+    expect(shiftNoteOctave(note, 1)).toMatchObject({ ok: true, changed: true, movedCount: 1 })
+    expect(note.string).toBe(string)
+    expect(note.fret).toBe(fret + 12)
+    expect(note.realValue).toBe(realValue + 12)
+  })
+
+  it('changes STRING when the fret alone cannot reach', () => {
+    // Standard tuning, fret 20 on the low E (string 1, midi 40). An octave up
+    // is midi 72, which needs fret 32 on that string and fret 27 on the A -
+    // both off the neck - and lands on the D string (midi 50) at fret 22.
+    const tex = `\\title "Reach"\n.\n\\track "A" \\staff{score tabs} \\tuning e4 b3 g3 d3 a2 e2\n:4 20.6 |\n`
+    const importer = new alphaTab.importer.AlphaTexImporter()
+    importer.initFromString(tex, settings)
+    const note = importer.readScore().tracks[0].staves[0].bars[0].voices[0].beats[0].notes[0]
+    expect([note.string, note.fret]).toEqual([1, 20])
+
+    expect(shiftNoteOctave(note, 1)).toMatchObject({ ok: true, changed: true })
+    expect([note.string, note.fret]).toEqual([3, 22])
+    expect(note.realValue).toBe(72)
+  })
+
+  it('refuses a single note the tuning cannot reach, and says which pitch', () => {
+    const score = loadFixture()
+    // Fret 0 on the lowest string of the bass: nothing goes an octave below it.
+    const note = [...stringedNotes(score.tracks[BASS].staves[0])].find(
+      (n) => n.fret === 0 && n.string === 1,
+    )
+    expect(note).toBeDefined()
+
+    const from = alphaTab.model.Tuning.getTextForTuning(note.realValue, true)
+    const to = alphaTab.model.Tuning.getTextForTuning(note.realValue - 12, true)
+
+    const result = shiftNoteOctave(note, -1)
+    expect(result.ok).toBe(false)
+    expect(result.blockedCount).toBe(1)
+    // The message names both pitches rather than just saying no: "too low" is
+    // only useful when it says how low.
+    expect(result.reason).toBe(
+      `${from} cannot move down an octave: ${to} is below anything this tuning reaches within frets ${MIN_FRET}-${MAX_FRET}.`,
+    )
+  })
+
+  it('refuses a natural harmonic, for the reason every fret operation does', () => {
+    const score = loadFixture()
+    const harmonic = [...stringedNotes(score.tracks[HARM].staves[0])].find(
+      (n) => n.harmonicType === alphaTab.model.HarmonicType.Natural,
+    )
+    expect(shiftNoteOctave(harmonic, 1).reason).toMatch(/natural harmonic/)
+  })
+
+  it('on a RANGE it is best effort: what can move moves, the rest stays put', () => {
+    // The one exception to the all-or-nothing rule, and the reason it is
+    // tenable: a note that does not move keeps a RIGHT value, where a clipped
+    // one would carry a wrong pitch.
+    const score = loadFixture()
+    const notes = [...stringedNotes(score.tracks[BASS].staves[0])]
+    const before = notes.map((n) => n.realValue)
+
+    const result = shiftNotesOctave(notes, -1)
+    expect(result.ok).toBe(true)
+    expect(result.movedCount).toBeGreaterThan(0)
+    expect(result.blockedCount).toBeGreaterThan(0)
+    expect(result.movedCount + result.blockedCount).toBe(notes.length)
+
+    // Every note is either exactly an octave down, or exactly where it was.
+    notes.forEach((note, i) => {
+      expect([before[i], before[i] - 12]).toContain(note.realValue)
+    })
+  })
+
+  it('refuses outright when NOTHING in the range can move', () => {
+    const score = loadFixture()
+    const harmonics = [...stringedNotes(score.tracks[HARM].staves[0])].filter(
+      (n) => n.harmonicType === alphaTab.model.HarmonicType.Natural,
+    )
+    expect(harmonics.length).toBeGreaterThan(1)
+    const result = shiftNotesOctave(harmonics, 1)
+    expect(result).toMatchObject({ ok: false, changed: false, movedCount: 0 })
+  })
+
+  it('never lands two notes of a chord on one string', () => {
+    const score = loadFixture()
+    // The Ties track carries a two-note chord.
+    const chord = [...notesOf(score.tracks[5].staves[0])]
+      .map((n) => n.beat)
+      .find((beat) => beat.notes.length > 1)
+    expect(chord).toBeDefined()
+
+    shiftNotesOctave([...chord.notes], 1)
+    const strings = chord.notes.map((n) => n.string)
+    expect(new Set(strings).size).toBe(strings.length)
+    for (const note of chord.notes) {
+      expect(chord.getNoteOnString(note.string)).toBe(note)
+    }
+  })
+
+  it('undoes to exactly what was there, and redoes by being called again', () => {
+    const score = loadFixture()
+    const notes = [...stringedNotes(score.tracks[LEAD].staves[0])]
+    const before = notes.map((n) => ({ string: n.string, fret: n.fret }))
+
+    const result = shiftNotesOctave(notes, 1)
+    const after = notes.map((n) => ({ string: n.string, fret: n.fret }))
+    expect(after).not.toEqual(before)
+
+    result.undo()
+    expect(notes.map((n) => ({ string: n.string, fret: n.fret }))).toEqual(before)
+    result.undo()
+    expect(notes.map((n) => ({ string: n.string, fret: n.fret }))).toEqual(after)
+  })
+
+  it('survives the .gp round trip', () => {
+    const score = loadFixture()
+    shiftNotesOctave([...stringedNotes(score.tracks[LEAD].staves[0])], 1)
+    const expected = snapshotTrack(score.tracks[LEAD])
+    expect(snapshotTrack(roundTrip(score).tracks[LEAD])).toEqual(expected)
+  })
+
+  it('a direction of zero is a no-op rather than a refusal', () => {
+    const score = loadFixture()
+    expect(shiftNoteOctave(leadNote(score), 0)).toMatchObject({ ok: true, changed: false })
   })
 })

@@ -1,0 +1,46 @@
+@use '@/styles/mixins' as *;
+
+// Sits in the dark action bar, so it draws no surface of its own - except in
+// the one state that has to be seen without being looked for.
+.bar-fill {
+  display: flex;
+  align-items: baseline;
+  gap: 0.35rem;
+  padding: 0.15rem 0.4rem;
+  border: 1px solid transparent;
+  border-radius: $radius-control;
+  font-size: 0.72rem;
+  white-space: nowrap;
+  color: var(--chrome-text-muted);
+}
+
+.where {
+  color: var(--chrome-text-muted);
+}
+
+.count {
+  @include tabular;
+  font-size: 0.78rem;
+  color: var(--chrome-text);
+}
+
+.unit {
+  @include tabular;
+  opacity: 0.6;
+}
+
+// Incomplete is NORMAL - it is what every bar looks like while it is being
+// written - so it is not marked at all. Only the two ends say anything.
+.exact .count {
+  color: var(--accent-soft);
+}
+
+.over {
+  border-color: var(--warn-border);
+  background: var(--warn-bg);
+
+  .count,
+  .where {
+    color: var(--warn-text-chrome);
+  }
+}

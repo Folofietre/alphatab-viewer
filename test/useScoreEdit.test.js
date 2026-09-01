@@ -34,6 +34,7 @@ const host = {
   dirty: false,
   tracksById: new Map(),
 
+  hostElement: null,
   trackAt(index) {
     return host.tracksById.get(index) ?? null
   },
@@ -128,13 +129,69 @@ function fakeBoundsLookup() {
   return {
     findBeats(beat) {
       if (!beat) return null
-      return [0, 1].map((staff) => ({
+      // Two rows per beat, standard notation then tablature, which is the order
+      // alphaTab renders them in and which the cursor geometry relies on.
+      return [0, 1].map((row) => ({
+        onNotesX: 100 + row,
+        barBounds: {
+          bar: beat.voice.bar,
+          visualBounds: { x: 90, y: 40 + row * 40, w: 200, h: row === 0 ? 36 : 65 },
+        },
         notes: beat.notes.map((note, i) => ({
           note,
-          noteHeadBounds: { x: 100 + staff * 1000 + i, y: 50 + staff * 40, w: 11, h: 9 },
+          noteHeadBounds: { x: 100 + row * 1000 + i, y: 50 + row * 40, w: 11, h: 9 },
         })),
       }))
     },
+    staffSystems: [],
+  }
+}
+
+// A minimal but real-shaped `staffSystems` tree over bar 0 of one track, so the
+// click-to-cursor wiring can be exercised without a browser.
+//
+// Deliberately small: the hit-test arithmetic itself is pinned against a REAL
+// headless render in scoreGeometry.test.js, and duplicating that here would only
+// assert that two stubs agree. What this covers is the wiring - that the DOM
+// event's coordinates reach the deselect microtask in time, and that a miss now
+// places a cursor instead of clearing everything.
+//
+// Two rows for the bar, standard notation then tablature, at the vertical
+// positions and spacing a six-string staff really renders at.
+function fakeStaffSystems(bar) {
+  const beats = bar.voices[0].beats
+  const beatBounds = (row) =>
+    beats.map((beat, i) => ({
+      beat,
+      realBounds: { x: 100 + i * 50, y: row.y, w: 50, h: row.h },
+    }))
+  const rows = [
+    { y: 40, h: 36 },
+    { y: 120, h: 65 },
+  ].map((row) => ({
+    bar,
+    realBounds: { x: 100, y: row.y, w: 200, h: row.h },
+    visualBounds: { x: 100, y: row.y, w: 200, h: row.h },
+    beats: beatBounds(row),
+  }))
+
+  return [
+    {
+      realBounds: { x: 100, y: 40, w: 200, h: 145 },
+      bars: [{ realBounds: { x: 100, y: 40, w: 200, h: 145 }, bars: rows }],
+    },
+  ]
+}
+
+// A stand-in for the alphaTab host element, which is where the DOM
+// `alphaTab.beatMouseDown` carrying the mouse coordinates is dispatched.
+function fakeHostElement() {
+  const listeners = new Map()
+  return {
+    isConnected: true,
+    addEventListener: (name, fn) => listeners.set(name, fn),
+    getBoundingClientRect: () => ({ left: 0, top: 0 }),
+    fire: (name, event) => listeners.get(name)?.(event),
   }
 }
 
@@ -209,6 +266,7 @@ function beatsOf(trackIndex) {
 beforeEach(async () => {
   score = loadFixture()
   host.api = fakeApi()
+  host.hostElement = fakeHostElement()
   host.score = score
   host.renders = []
   host.midiReloads = 0
@@ -1404,5 +1462,382 @@ describe('saving and reverting', () => {
     player.revertToOriginal.mockReturnValueOnce(false)
     expect(edit.revert()).toBe(false)
     expect(edit.editMessage.value).toMatchObject({ kind: 'error' })
+  })
+})
+
+// ---------------------------------------------------------------------------
+
+describe('the cursor', () => {
+  // Beat helpers on the Lead track, which renders standard notation AND
+  // tablature and has four beats per bar.
+  function beatAt(bar, index, track = LEAD) {
+    return score.tracks[track].staves[0].bars[bar].voices[0].beats[index]
+  }
+
+  it('clicking a note puts the cursor ON it: one notion, not two states', () => {
+    const note = beatAt(0, 0).notes[0]
+    clickAt(note)
+
+    expect(edit.selectedNote.value).toMatchObject({ string: note.string, fret: note.fret })
+    expect(edit.cursor.value).toMatchObject({
+      trackIndex: LEAD,
+      barIndex: 0,
+      beatIndex: 0,
+      string: note.string,
+      hasNote: true,
+    })
+    // The ring already marks it, so the cursor draws nothing of its own.
+    expect(edit.cursorRects.value).toEqual([])
+    expect(edit.selectedNoteRects.value.length).toBeGreaterThan(0)
+  })
+
+  it('and a percussion note still selects, though it has no string', () => {
+    // Percussion reports `string: -1`, so a cursor that resolved the note back
+    // through `getNoteOnString` would find nothing and silently deselect.
+    const drum = beatAt(0, 0, DRUMS).notes[0]
+    clickAt(drum)
+    expect(edit.selectedNote.value).not.toBeNull()
+    expect(edit.cursor.value.string).toBeNull()
+  })
+
+  it('clicking an EMPTY string places the cursor there, instead of deselecting', async () => {
+    // The whole point of a cursor: a selection can only designate something that
+    // exists, and this designates a place. Before this, the same click cleared
+    // the selection and nothing else.
+    const bar = score.tracks[LEAD].staves[0].bars[0]
+    host.api.boundsLookup.staffSystems = fakeStaffSystems(bar)
+    clickAt(bar.voices[0].beats[0].notes[0])
+    expect(edit.cursor.value.hasNote).toBe(true)
+
+    // A miss: beatMouseDown, then the DOM event with the coordinates, and no
+    // noteMouseDown. The tab row runs 120..185 over six strings, so 13px per
+    // line and y = 133 is the second line from the top - string 5.
+    host.api.beatMouseDown.emit(bar.voices[0].beats[1])
+    host.hostElement.fire('alphaTab.beatMouseDown', {
+      originalEvent: { clientX: 160, clientY: 133 },
+    })
+    await Promise.resolve()
+
+    expect(edit.cursor.value).toMatchObject({ barIndex: 0, beatIndex: 1, string: 5 })
+    expect(edit.selectedNote.value).toBeNull()
+    expect(edit.cursorRects.value.length).toBe(1)
+  })
+
+  it('and a click with no coordinates still just deselects', async () => {
+    // The fallback matters: without it a keyboard-driven or synthetic event
+    // would leave a stale cursor pointing at wherever the last real click was.
+    clickAt(beatAt(0, 0).notes[0])
+    host.api.beatMouseDown.emit(beatAt(0, 1))
+    await Promise.resolve()
+    expect(edit.cursor.value).toBeNull()
+    expect(edit.selectedNote.value).toBeNull()
+  })
+
+  it('a click on the standard-notation row gives a beat and NO string', async () => {
+    // Interpolating a string there answers the wrong one, measured. So the
+    // position holds the beat and leaves the string open.
+    const bar = score.tracks[LEAD].staves[0].bars[0]
+    host.api.boundsLookup.staffSystems = fakeStaffSystems(bar)
+
+    host.api.beatMouseDown.emit(bar.voices[0].beats[0])
+    host.hostElement.fire('alphaTab.beatMouseDown', {
+      originalEvent: { clientX: 110, clientY: 55 },
+    })
+    await Promise.resolve()
+
+    expect(edit.cursor.value).toMatchObject({ beatIndex: 0, string: null, hasNote: false })
+    // A caret on every row, since no string was chosen.
+    expect(edit.cursorRects.value.length).toBe(2)
+  })
+
+  it('and the first arrow then enters the fretboard from the far edge', async () => {
+    // Up starts at the lowest string and down at the highest, so the next press
+    // continues the same way instead of doubling back.
+    const bar = score.tracks[LEAD].staves[0].bars[0]
+    host.api.boundsLookup.staffSystems = fakeStaffSystems(bar)
+    // A DIFFERENT beat each time: two presses on the same one inside 400ms are a
+    // double click, which selects the bar instead.
+    const land = async (index) => {
+      host.api.beatMouseDown.emit(bar.voices[0].beats[index])
+      host.hostElement.fire('alphaTab.beatMouseDown', {
+        originalEvent: { clientX: 110 + index * 50, clientY: 55 },
+      })
+      await Promise.resolve()
+    }
+
+    await land(0)
+    expect(edit.cursor.value.string).toBeNull()
+    edit.moveCursorString(1)
+    expect(edit.cursor.value.string).toBe(1)
+
+    await land(1)
+    expect(edit.cursor.value.string).toBeNull()
+    edit.moveCursorString(-1)
+    expect(edit.cursor.value.string).toBe(edit.cursor.value.stringCount)
+  })
+
+  it('the arrows walk the beats, crossing into the next bar', () => {
+    clickAt(beatAt(0, 3).notes[0])
+    expect(edit.moveCursorBeat(1).ok).toBe(true)
+    expect(edit.cursor.value).toMatchObject({ barIndex: 1, beatIndex: 0 })
+
+    expect(edit.moveCursorBeat(-1).ok).toBe(true)
+    expect(edit.cursor.value).toMatchObject({ barIndex: 0, beatIndex: 3 })
+  })
+
+  it('and selects whatever note is at the position it lands on', () => {
+    clickAt(beatAt(0, 0).notes[0])
+    const next = beatAt(0, 1).notes[0]
+    // Same string across the fixture's first bar, so the walk stays on notes.
+    edit.moveCursorBeat(1)
+    expect(edit.cursor.value.hasNote).toBe(true)
+    expect(edit.selectedNote.value.fret).toBe(next.fret)
+  })
+
+  it('leaves the selection empty where the string it keeps holds nothing', () => {
+    clickAt(beatAt(0, 0).notes[0])
+    // Two strings away from the line this bar is written on.
+    edit.moveCursorString(2)
+    expect(edit.cursor.value.hasNote).toBe(false)
+    expect(edit.selectedNote.value).toBeNull()
+    // And NOW the cursor draws itself, because no ring is doing it.
+    expect(edit.cursorRects.value.length).toBe(1)
+  })
+
+  it('stops silently at the ends of the score rather than creating anything', () => {
+    // Creating a bar past the end is a WRITE, and belongs to the writing palier.
+    const staff = score.tracks[LEAD].staves[0]
+    const lastBar = staff.bars.length - 1
+    const lastBeat = staff.bars[lastBar].voices[0].beats
+    clickAt(lastBeat[lastBeat.length - 1].notes[0])
+
+    const before = edit.cursor.value
+    expect(edit.moveCursorBeat(1)).toMatchObject({ ok: false, changed: false })
+    expect(edit.cursor.value).toEqual(before)
+    expect(score.masterBars.length).toBe(4)
+  })
+
+  it('walks the strings the way the key points, and stops at the edges', () => {
+    clickAt(beatAt(0, 0).notes[0])
+    const { string, stringCount } = edit.cursor.value
+
+    expect(edit.moveCursorString(1).ok).toBe(true)
+    expect(edit.cursor.value.string).toBe(string + 1)
+
+    // Up to the top, then no further - silent, like running out of frets.
+    while (edit.cursor.value.string < stringCount) edit.moveCursorString(1)
+    expect(edit.moveCursorString(1)).toMatchObject({ ok: false, changed: false })
+    expect(edit.cursor.value.string).toBe(stringCount)
+  })
+
+  it('refuses to walk strings on a staff that has none', () => {
+    clickAt(beatAt(0, 0, DRUMS).notes[0])
+    expect(edit.cursor.value.string).toBeNull()
+    expect(edit.moveCursorString(1)).toMatchObject({ ok: false, changed: false })
+  })
+
+  it('bumps the move counter only when it actually moved', () => {
+    // ScoreViewer follows this and nothing else: watching the rectangles would
+    // make the view jump on every render, including alphaTab's own during
+    // playback.
+    clickAt(beatAt(0, 0).notes[0])
+    const before = edit.cursorMoves.value
+    edit.moveCursorBeat(1)
+    expect(edit.cursorMoves.value).toBe(before + 1)
+
+    // A refused move does not count as one.
+    const staff = score.tracks[LEAD].staves[0]
+    const beats = staff.bars[0].voices[0].beats
+    clickAt(beats[0].notes[0])
+    const at = edit.cursorMoves.value
+    edit.moveCursorBeat(-1)
+    expect(edit.cursorMoves.value).toBe(at)
+  })
+
+  it('a dragged range collapses onto its far edge, per direction', () => {
+    const first = beatAt(0, 0)
+    const last = beatAt(0, 3)
+    dragOver(first, last)
+    expect(edit.selectedRange.value).not.toBeNull()
+    expect(edit.cursor.value).toBeNull()
+
+    // Right moves on from the LAST note of the range.
+    edit.moveCursorBeat(1)
+    expect(edit.cursor.value).toMatchObject({ barIndex: 1, beatIndex: 0 })
+    // And the range is gone: a cursor and a range are the two notions, one at a
+    // time, or every key would be ambiguous about what it acts on.
+    expect(edit.selectedRange.value).toBeNull()
+
+    dragOver(beatAt(1, 1), beatAt(1, 3))
+    edit.moveCursorBeat(-1)
+    expect(edit.cursor.value).toMatchObject({ barIndex: 1, beatIndex: 0 })
+  })
+
+  it('canNavigate is what lets the bare arrows keep scrolling the page', () => {
+    expect(edit.canNavigate.value).toBe(false)
+    clickAt(beatAt(0, 0).notes[0])
+    expect(edit.canNavigate.value).toBe(true)
+    edit.clearSelection()
+    expect(edit.canNavigate.value).toBe(false)
+    dragOver(beatAt(0, 0), beatAt(0, 3))
+    expect(edit.canNavigate.value).toBe(true)
+  })
+
+  it('is dropped when the score is replaced, like everything else holding a model object', () => {
+    clickAt(beatAt(0, 0).notes[0])
+    expect(edit.cursor.value).not.toBeNull()
+    host.api.scoreLoaded.emit()
+    expect(edit.cursor.value).toBeNull()
+    expect(edit.cursorBarFill.value).toBeNull()
+  })
+
+  it('reports how full its bar is, and follows the cursor to another bar', () => {
+    clickAt(beatAt(0, 0).notes[0])
+    expect(edit.cursorBarFill.value).toMatchObject({
+      barIndex: 0,
+      beats: 4,
+      beatCapacity: 4,
+      state: 'exact',
+    })
+
+    // A bar of the same score with a beat taken out reads as incomplete.
+    score.tracks[LEAD].staves[0].bars[1].voices[0].beats.pop()
+    clickAt(beatAt(1, 0).notes[0])
+    expect(edit.cursorBarFill.value).toMatchObject({ barIndex: 1, beats: 3, state: 'under' })
+  })
+})
+
+describe('the octave', () => {
+  function leadNote() {
+    return score.tracks[LEAD].staves[0].bars[0].voices[0].beats[0].notes[0]
+  }
+
+  it('renders from the bar that changed and defers the midi, like every pitch edit', () => {
+    clickAt(leadNote())
+    host.renders = []
+    expect(edit.shiftSelectedOctave(1)).toMatchObject({ ok: true, changed: true })
+    expect(host.renders).toEqual([{ reuseViewport: true, firstChangedMasterBar: 0 }])
+    expect(host.midiStale).toBe(true)
+    expect(host.midiReloads).toBe(0)
+  })
+
+  it('sounds the new pitch, unlike the string move which keeps it', () => {
+    const note = leadNote()
+    clickAt(note)
+    edit.shiftSelectedOctave(1)
+    expect(host.previews).toContain(note)
+  })
+
+  it('keeps the note descriptor in step with where the note ended up', () => {
+    const note = leadNote()
+    clickAt(note)
+    edit.shiftSelectedOctave(1)
+    expect(edit.selectedNote.value).toMatchObject({ string: note.string, fret: note.fret })
+  })
+
+  it('says how many notes stayed put, without inventing a result state', () => {
+    // The one best-effort operation. `propagate` clears the message on success,
+    // so this is posted after it - an existing channel used by a caller, not a
+    // fourth kind of result.
+    const notes = [...stringedNotes(score.tracks[BASS].staves[0])]
+    dragOver(notes[0].beat, notes[notes.length - 1].beat)
+
+    const result = edit.shiftSelectedOctave(-1)
+    expect(result.ok).toBe(true)
+    expect(result.blockedCount).toBeGreaterThan(0)
+    expect(edit.editMessage.value).toMatchObject({ kind: 'info' })
+    expect(edit.editMessage.value.text).toMatch(/stayed put/)
+  })
+
+  it('says nothing extra when every note moved', () => {
+    clickAt(leadNote())
+    edit.shiftSelectedOctave(1)
+    expect(edit.editMessage.value).toBeNull()
+  })
+
+  it('refuses while playing, like every other edit', () => {
+    clickAt(leadNote())
+    player.isPlaying.value = true
+    expect(edit.shiftSelectedOctave(1)).toMatchObject({ ok: false })
+    expect(edit.editMessage.value).toMatchObject({ kind: 'error' })
+  })
+
+  it('refuses with nothing selected', () => {
+    expect(edit.shiftSelectedOctave(1)).toMatchObject({ ok: false, changed: false })
+  })
+
+  it('is undoable through the same stack as everything else', () => {
+    const note = leadNote()
+    const before = { string: note.string, fret: note.fret }
+    clickAt(note)
+    edit.shiftSelectedOctave(1)
+    expect(edit.undoDepth.value).toBe(1)
+    expect(edit.undoLabel.value).toBe('Up an octave')
+
+    edit.undo()
+    expect({ string: note.string, fret: note.fret }).toEqual(before)
+    edit.redo()
+    expect(note.fret).toBe(before.fret + 12)
+  })
+})
+
+describe('the cursor stays in step with the edits', () => {
+  function leadNote() {
+    return score.tracks[LEAD].staves[0].bars[0].voices[0].beats[0].notes[0]
+  }
+
+  it('follows the note when Alt + arrow moves it to another string', () => {
+    // They are one notion: a cursor still pointing at the string the note has
+    // LEFT would make the next bare arrow start from the wrong place.
+    const note = leadNote()
+    clickAt(note)
+    const before = edit.cursor.value.string
+
+    expect(edit.nudgeSelectedString(-1).ok).toBe(true)
+    expect(note.string).toBe(before - 1)
+    expect(edit.cursor.value.string).toBe(note.string)
+    expect(edit.cursor.value.hasNote).toBe(true)
+  })
+
+  it('so the next bare arrow starts from where the note ended up', () => {
+    // The consequence that would actually be felt: without the cursor following,
+    // pressing Alt+Down then Down would jump two strings.
+    const note = leadNote()
+    clickAt(note)
+    edit.nudgeSelectedString(-1)
+    const landed = note.string
+
+    edit.moveCursorString(-1)
+    expect(edit.cursor.value.string).toBe(landed - 1)
+  })
+
+  it('stays where a silenced note was, instead of disappearing with it', () => {
+    // The beat outlives the note - `Beat.isRest` is a getter over
+    // `notes.length` - so the position is still there, and it is where someone
+    // would want to be next.
+    const note = leadNote()
+    clickAt(note)
+    const at = { ...edit.cursor.value }
+
+    expect(edit.deleteSelection().ok).toBe(true)
+    expect(edit.selectedNote.value).toBeNull()
+    expect(edit.cursor.value).toMatchObject({
+      barIndex: at.barIndex,
+      beatIndex: at.beatIndex,
+      string: at.string,
+      hasNote: false,
+    })
+    // And the dashed marker takes over from the ring.
+    expect(edit.cursorRects.value.length).toBe(1)
+  })
+
+  it('but a range delete leaves nothing to point at', () => {
+    dragOver(
+      score.tracks[LEAD].staves[0].bars[0].voices[0].beats[0],
+      score.tracks[LEAD].staves[0].bars[0].voices[0].beats[3],
+    )
+    expect(edit.deleteSelection().ok).toBe(true)
+    expect(edit.cursor.value).toBeNull()
+    expect(edit.selectedRange.value).toBeNull()
   })
 })

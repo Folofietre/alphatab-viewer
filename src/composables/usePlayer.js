@@ -20,6 +20,20 @@ import { countNaturalHarmonics, describeTuning, fretRange } from '@/utils/scoreE
 let api = null
 let scoreTracks = [] // raw alphaTab Track objects, indexed by track.index
 
+// The element alphaTab renders into, kept so `scoreEditHost` can hand it to the
+// editing layer.
+//
+// Needed for exactly one thing: alphaTab dispatches a DOM `alphaTab.*`
+// CustomEvent on this element alongside every typed event, and only the DOM one
+// carries the original `MouseEvent`. The typed `beatMouseDown` gives the Beat
+// and no coordinates, so clicking an EMPTY string - which has no Beat of its own
+// to hand over - can only be resolved from this element's events.
+//
+// Held here rather than read back off `api.container.element`: `container` is
+// public but `element` is a platform-specific field of alphaTab's browser
+// container, and `init()` is already given the element by ScoreViewer.
+let hostElement = null
+
 // Set right before loadMidiForScore() so the midiLoaded handler can put the
 // playhead back where it was and resume if we were playing.
 let pendingRestore = null
@@ -267,6 +281,7 @@ export function usePlayer() {
   function init(element, scrollElement) {
     if (api || !element || !scrollElement) return
 
+    hostElement = element
     api = new alphaTab.AlphaTabApi(element, playerSettings(scrollElement))
 
     api.masterVolume = masterVolume.value
@@ -350,6 +365,7 @@ export function usePlayer() {
   function destroy() {
     api?.destroy()
     api = null
+    hostElement = null
     scoreTracks = []
     originalBytes = null
     canRevert.value = false
@@ -676,6 +692,12 @@ export const scoreEditHost = {
   },
   get score() {
     return api?.score ?? null
+  },
+  // The element alphaTab renders into. See `hostElement`: the DOM
+  // `alphaTab.beatMouseDown` event fired on it is the only one carrying the
+  // click coordinates.
+  get hostElement() {
+    return hostElement
   },
   trackAt(index) {
     return scoreTracks.find((t) => t.index === index) ?? null

@@ -52,7 +52,11 @@
             </dd>
 
             <dt><span class="gesture">Click a bar, off any note</span></dt>
-            <dd>Move the playhead there, and drop the selection.</dd>
+            <dd>
+              Move the playhead there, and put the cursor on the string you
+              clicked - marked with a dashed outline. The arrow keys move it from
+              there.
+            </dd>
 
             <dt><span class="gesture">Click a track name</span></dt>
             <dd>In the Mixer tab, show that track alone.</dd>

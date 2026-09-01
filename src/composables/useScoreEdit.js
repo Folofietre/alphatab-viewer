@@ -1,8 +1,11 @@
 import { computed, ref, shallowRef } from 'vue'
 import { usePlayer, scoreEditHost } from '@/composables/usePlayer'
 import {
+  BAR_OVER,
   MAX_FRET,
   MIN_FRET,
+  barFill,
+  describeBarFill,
   deleteNotes,
   RETUNE_KEEP_PITCH,
   RETUNE_REASSIGN,
@@ -14,12 +17,18 @@ import {
   setNoteFret,
   shiftNoteString,
   shiftNotesFret,
+  shiftNotesOctave,
   shiftNotesString,
   tempoInfo,
   transposeTrackByFrets,
   transposeTrackByTuning,
   tuningChoices,
 } from '@/utils/scoreEdits'
+import {
+  barRects,
+  cursorRects as rectsForCursor,
+  positionAtPoint,
+} from '@/utils/scoreGeometry'
 import { downloadScoreAsGp } from '@/utils/exportScore'
 import { createHistory } from '@/utils/scoreHistory'
 
@@ -84,6 +93,74 @@ let lastBeatDownAt = 0
 
 // Set by `beatMouseDown` and cleared by `noteMouseDown`. See the handlers below.
 let missedNote = false
+
+// ---- the cursor ------------------------------------------------------------
+//
+// A POSITION rather than an object, which is the whole difference: a selection
+// can only ever designate something that exists, and writing music means
+// pointing at somewhere empty.
+//
+// The cursor and the selected note are the SAME thing, not two states to keep in
+// step. Clicking a note selects it; the arrows navigate from it; and the only
+// thing this adds is that the position may land where no note is, in which case
+// `selected` is simply null and the cursor is still there. There are two
+// notions in this file, not three: a position, and a range.
+//
+// Held as the Beat itself in a plain variable, for the reason `selected` is one:
+// a Beat sits in the same cyclic graph and must never be deep-proxied. It is
+// also the right key - a render rebuilds every bound rectangle but never touches
+// the model, so a Beat survives exactly as long as the score does.
+let cursorBeat = null
+
+// Which string of that beat, 1-based and counting up from the lowest (pitfall 2
+// in scoreEdits.js). Null is a real value and means "this beat, no string": a
+// click on a standard-notation staff, or on percussion, where a Y coordinate
+// carries no string information.
+let cursorString = null
+
+// The flat description of the cursor, for the UI. Same rule as `selectedNote`.
+const cursorInfo = shallowRef(null)
+
+// Where to draw the cursor, ready to place, in the host's coordinate space.
+//
+// EMPTY whenever the cursor sits on a note: the selection ring is already
+// marking that position, and two markers on one place would say there are two.
+const cursorRects = shallowRef([])
+
+// The bars holding more than their time signature allows, as rectangles.
+//
+// This is not decoration. alphaTab's model, its midi generator and its .gp
+// exporter all accept an overfull bar without a word (pitfall 8), so nothing
+// else in the stack will ever tell anyone that a bar is invalid - not while
+// editing, and not when the file is written.
+const overfullRects = shallowRef([])
+
+// How full the cursor's bar is, for the counter in the action bar. Null with no
+// cursor: it describes a specific bar, and without a cursor there is none.
+const cursorBarFill = shallowRef(null)
+
+// Bumped by every cursor MOVE, and by nothing else.
+//
+// ScoreViewer watches it to scroll the cursor back into view. It cannot watch
+// the rectangles instead: those are also rebuilt after every render, with the
+// same values, and scrolling on a render would fight alphaTab's own scrolling
+// during playback. A counter says "the user moved", which is the only moment
+// following them is right.
+const cursorMoves = ref(0)
+
+// The coordinates of the last click on the score, captured from the DOM.
+//
+// alphaTab's typed `beatMouseDown` carries the Beat and NO coordinates, which is
+// enough to select a note (the note hit-test already ran) but not to place a
+// cursor on an empty string. The DOM `alphaTab.beatMouseDown` CustomEvent it
+// dispatches alongside carries `originalEvent`, the real MouseEvent - verified
+// in alphaTab 1.8.4, `UiFacade.triggerEvent`, which sets it whenever the event
+// came from the mouse.
+//
+// Order matters and is guaranteed by alphaTab: `_onBeatMouseDown` fires the
+// typed event, then the DOM one, and only then `_onNoteMouseDown`. So this is
+// already up to date by the time the deselect microtask runs.
+let lastClickPoint = null
 
 // Which track the panel edits. Deliberately NOT the same thing as which tracks
 // are DISPLAYED (`descriptor.rendered`): a user can have five staves on screen
@@ -179,6 +256,92 @@ function message(kind, text) {
   editMessage.value = text ? { kind, text } : null
 }
 
+// ---- cursor reads and writes -----------------------------------------------
+
+// The flat description of a position, for the UI and for the shortcuts.
+//
+// `hasNote` is what tells "on a note" from "on an empty string", which is the
+// distinction the whole cursor exists for, and it is derived rather than stored
+// so it cannot disagree with `selectedNote`.
+function describeCursor(beat, string) {
+  if (!beat) return null
+  const bar = beat.voice?.bar ?? null
+  const staff = bar?.staff ?? null
+  return {
+    trackIndex: staff?.track?.index ?? null,
+    staffIndex: staff?.index ?? null,
+    // The MASTER bar index, for the same reason describeNote uses it: it is what
+    // `RenderHints.firstChangedMasterBar` wants.
+    barIndex: bar?.masterBar?.index ?? null,
+    voiceIndex: beat.voice?.index ?? null,
+    beatIndex: beat.index ?? null,
+    string,
+    stringCount: staff?.tuning?.length ?? 0,
+    hasNote: string == null ? false : !!beat.getNoteOnString(string),
+  }
+}
+
+// Put the cursor somewhere, and bring everything that follows from it in line.
+//
+// This is the ONE place `selected` is written from a position, which is what
+// keeps the cursor and the selection from being two states that can disagree.
+// `note` is passed explicitly only where the note is already known and cannot be
+// found back from the string: a percussion note reports `string: -1`, so
+// `getNoteOnString` would answer null and clicking a drum would stop selecting
+// anything.
+function setCursor(beat, string, note = undefined) {
+  if (!beat) {
+    clearSelection()
+    return false
+  }
+
+  // A range and a cursor are the two notions, and only one at a time: having
+  // both would make every key ambiguous about what it acts on. Cleared here
+  // rather than through `clearRange()`, which would refresh the rectangles a
+  // second time for nothing.
+  rangeNotes = []
+  selectedRange.value = null
+
+  cursorBeat = beat
+  cursorString = string ?? null
+  selected = note !== undefined ? note : (cursorString == null ? null : beat.getNoteOnString(cursorString) ?? null)
+  selectedNote.value = describeNote(selected)
+  cursorInfo.value = describeCursor(cursorBeat, cursorString)
+  missedNote = false
+
+  // Landing anywhere is also how the user says which track they are working on.
+  const trackIndex = cursorInfo.value?.trackIndex
+  if (typeof trackIndex === 'number') selectedTrackIndex.value = trackIndex
+
+  refreshSelectionRects()
+  refreshBarFill()
+  return true
+}
+
+// A click on a note head. The string comes from the note rather than from the
+// geometry, since the hit-test already answered it exactly.
+function setCursorFromNote(note) {
+  if (!note) return false
+  return setCursor(note.beat, note.isStringed ? note.string : null, note)
+}
+
+// How full the cursor's bar is. Re-read on every cursor move; nothing in palier
+// A changes a duration, so nothing else can move it.
+function refreshBarFill() {
+  const bar = cursorBeat?.voice?.bar ?? null
+  cursorBarFill.value = bar ? describeBarFill(bar) : null
+}
+
+// The overfull bars, re-read from the lookup after every render for the same
+// reason the selection rectangles are: a render rebuilds every rectangle, and
+// the old coordinates then point nowhere.
+function refreshOverfullRects() {
+  const lookup = scoreEditHost.api?.boundsLookup ?? null
+  overfullRects.value = lookup
+    ? barRects(lookup, (bar) => barFill(bar)?.state === BAR_OVER)
+    : []
+}
+
 // Apply the propagation matrix for one edit result.
 //
 // Getting this wrong is the expensive mistake in an editor: too little and the
@@ -242,23 +405,45 @@ function bind() {
   // defaults to false: without it alphaTab never runs the note hit-test and this
   // handler is never called. See the comment at that setting.
   api.noteMouseDown.on((note) => {
-    missedNote = false
-    clearRange()
-    selected = note
-    selectedNote.value = describeNote(note)
-    // Selecting a note is also how the user says which track they are working
-    // on, so keep the panel pointing at the same place they just clicked.
-    const trackIndex = selectedNote.value?.trackIndex
-    if (typeof trackIndex === 'number') selectedTrackIndex.value = trackIndex
-    refreshSelectionRects()
+    // Selecting a note is putting the cursor ON it: one notion, so there is no
+    // second state to keep in step. setCursor also points the panel at the
+    // track that was clicked, and drops any range.
+    setCursorFromNote(note)
     message(null, null)
   })
 
-  // A render rebuilds the bounds lookup, so the marker has to be re-read from
-  // it. This covers every path at once: an edit, a track change, a resize,
+  // The coordinates of the click, which the typed events do not carry.
+  //
+  // alphaTab dispatches this DOM CustomEvent on its host element for every typed
+  // event, with the Beat in `detail` and - when the event came from the mouse -
+  // the original MouseEvent in `originalEvent`. That is the only route to the X
+  // and Y of a click, and without them a click on an EMPTY string has nothing to
+  // resolve: there is no Beat of its own to hand over, only a place.
+  //
+  // Recorded here and consumed by the `beatMouseDown` handler below rather than
+  // acted on directly, so that the whole click keeps ONE ordered handler. Two
+  // handlers on the same event is the arrangement that already worked only by
+  // accident once, and this would be the third job on it.
+  const host = scoreEditHost.hostElement
+  host?.addEventListener('alphaTab.beatMouseDown', (event) => {
+    const mouse = event.originalEvent ?? null
+    if (!mouse || !host.isConnected) {
+      lastClickPoint = null
+      return
+    }
+    // The same origin the selection marker is positioned from, which is what
+    // makes these directly comparable to `boundsLookup` coordinates with no
+    // scroll maths: the overlay lives inside the scrolled content.
+    const box = host.getBoundingClientRect()
+    lastClickPoint = { x: mouse.clientX - box.left, y: mouse.clientY - box.top }
+  })
+
+  // A render rebuilds the bounds lookup, so every rectangle has to be re-read
+  // from it. This covers every path at once: an edit, a track change, a resize,
   // a bars-per-row change.
   api.postRenderFinished.on(() => {
     refreshSelectionRects()
+    refreshOverfullRects()
   })
 
   // The click-and-drag range, straight from alphaTab's own loop selection.
@@ -290,13 +475,15 @@ function bind() {
   // select the whole measure. The state resets on every non-matching press, so a
   // slow second click starts over rather than pairing with something older.
   //
-  // Job 2, DESELECTION: a click that landed on a beat but not on a note head
-  // drops WHATEVER was selected, note or range. Clicking a bar is a normal seek,
-  // not a mistake, so this is silent - the ring vanishing is the feedback, and a
-  // message on every seek would be noise.
+  // Job 2, THE CURSOR: a click that landed on a beat but not on a note head puts
+  // the cursor where it landed - on the empty string of that beat, which is the
+  // one thing a selection could never designate. Silent, like the deselection it
+  // replaces: clicking a bar is a normal seek, not a mistake.
   //
-  // Both are cleared, not just the note: leaving a measure selected after a
-  // click elsewhere would mean Alt+arrow still acted on it.
+  // It falls back to dropping WHATEVER was selected, note or range, when the
+  // coordinates are missing or resolve to nothing (a keyboard-driven event, a
+  // stale lookup). Both are cleared, not just the note: leaving a measure
+  // selected after a click elsewhere would mean Alt+arrow still acted on it.
   //
   // How the miss is detected: alphaTab fires `beatMouseDown` and then, in the
   // SAME synchronous handler, `noteMouseDown` if the hit-test found a note head.
@@ -317,8 +504,10 @@ function bind() {
     queueMicrotask(() => {
       if (!missedNote) return
       missedNote = false
-      clearSelection()
-      clearRange()
+      if (!placeCursorAtLastClick()) {
+        clearSelection()
+        clearRange()
+      }
       message(null, null)
     })
 
@@ -335,6 +524,7 @@ function bind() {
     clearRange()
     forgetLastClick()
     forgetHistory()
+    overfullRects.value = []
     selectedTrackIndex.value = 0
     message(null, null)
   }
@@ -346,6 +536,9 @@ function bind() {
     clearSelection()
     clearRange()
     forgetLastClick()
+    // Rebuilt by the render that follows; cleared here so a failed load cannot
+    // leave the previous score's red bars floating over an empty stage.
+    overfullRects.value = []
     // A new object graph: every record points at notes that are no longer in the
     // score, and holding them would pin the discarded one in memory.
     forgetHistory()
@@ -362,13 +555,36 @@ function bind() {
 function forgetLastClick() {
   lastBeatDown = null
   lastBeatDownAt = 0
+  lastClickPoint = null
 }
 
 function clearSelection() {
   selected = null
   selectedNote.value = null
   selectedNoteRects.value = []
+  // The cursor goes with it. It is the same notion as the selected note, so
+  // leaving one behind would be leaving half a state.
+  cursorBeat = null
+  cursorString = null
+  cursorInfo.value = null
+  cursorRects.value = []
+  cursorBarFill.value = null
   missedNote = false
+}
+
+// Resolve the last click into a position and put the cursor there.
+//
+// Returns false when there is nothing to resolve, which is what makes the caller
+// fall back to plain deselection rather than leaving a stale cursor behind.
+function placeCursorAtLastClick() {
+  const point = lastClickPoint
+  lastClickPoint = null
+  const lookup = scoreEditHost.api?.boundsLookup ?? null
+  if (!point || !lookup) return false
+
+  const position = positionAtPoint(lookup, point.x, point.y)
+  if (!position?.beat) return false
+  return setCursor(position.beat, position.string)
 }
 
 // Turn a pair of beats into the current range: the notes in their tick window on
@@ -472,6 +688,16 @@ function clearRange() {
 // non-empty at all.
 function refreshSelectionRects() {
   const lookup = scoreEditHost.api?.boundsLookup ?? null
+
+  // The cursor's own rectangle, drawn only where the ring is NOT.
+  //
+  // On a note the ring already marks the position, and a second marker on the
+  // same place would read as two positions. On an empty string there is no ring
+  // to draw - there is no note head to measure - so the rectangle is computed
+  // from the string spacing instead of read from the lookup.
+  cursorRects.value =
+    lookup && cursorBeat && !selected ? rectsForCursor(lookup, cursorBeat, cursorString) : []
+
   const notes = selected ? [selected] : rangeNotes
   if (notes.length === 0 || !lookup) {
     selectedNoteRects.value = []
@@ -493,6 +719,111 @@ function refreshSelectionRects() {
     }
   }
   selectedNoteRects.value = rects
+}
+
+// ---- navigating with the cursor --------------------------------------------
+
+// Navigation is NOT an edit: it writes nothing, so it is not gated on playback
+// and never goes near `propagate`. It returns the same result shape anyway, so
+// a caller cannot tell the two apart at the call site and a refusal still
+// carries its reason.
+function moved() {
+  cursorMoves.value += 1
+  return { ok: true, changed: true, reason: null }
+}
+
+function stalled(reason) {
+  return { ok: false, changed: false, reason }
+}
+
+// Where a bare arrow starts from.
+//
+// Usually the cursor. With a dragged range and no cursor, it collapses onto the
+// range and moves from there: the LAST note going right, the FIRST going left,
+// which is the edge the arrow is travelling away from. Up and down have no such
+// side, so they take the first note - the beat the drag started on.
+function cursorAnchor(delta) {
+  if (cursorBeat) return { beat: cursorBeat, string: cursorString }
+  if (rangeNotes.length === 0) return null
+
+  // By TICK, not by array order: `notesInTickRange` walks staff by staff, so on
+  // a two-staff track its order groups by staff rather than running in time.
+  let anchor = rangeNotes[0]
+  for (const note of rangeNotes) {
+    const tick = note.beat?.absolutePlaybackStart ?? 0
+    const best = anchor.beat?.absolutePlaybackStart ?? 0
+    if (delta > 0 ? tick > best : tick < best) anchor = note
+  }
+  return { beat: anchor.beat, string: anchor.isStringed ? anchor.string : null }
+}
+
+// The beat before or after this one, crossing bars.
+//
+// Stays on the same staff and the same voice index, which is what makes the
+// walk predictable: a voice is a line someone is reading along, and stepping
+// sideways into another one mid-bar would be a different gesture.
+//
+// Empty bars are walked THROUGH rather than stopped at. A bar with no beats in
+// this voice is a hole in the line, not the end of it, and stopping there would
+// look like the arrow key had died.
+function neighbourBeat(beat, delta) {
+  const voice = beat?.voice ?? null
+  const bar = voice?.bar ?? null
+  const staff = bar?.staff ?? null
+  if (!voice || !staff) return null
+
+  const within = voice.beats?.[beat.index + delta] ?? null
+  if (within) return within
+
+  for (let index = bar.index + delta; index >= 0 && index < staff.bars.length; index += delta) {
+    const nextBar = staff.bars[index]
+    const nextVoice = nextBar.voices?.[voice.index] ?? nextBar.voices?.[0] ?? null
+    const beats = nextVoice?.beats ?? []
+    if (beats.length === 0) continue
+    return delta > 0 ? beats[0] : beats[beats.length - 1]
+  }
+  return null
+}
+
+// Left and right: the previous or next beat, keeping the string.
+//
+// Running off either end is left SILENT, like running out of frets or strings:
+// it is the natural end of a repeatable key, and a message per press would be
+// noise. Creating a bar past the end is a WRITE and belongs to the writing
+// palier, not here.
+function moveCursorBeat(delta) {
+  const anchor = cursorAnchor(delta)
+  if (!anchor) return stalled('Click a note or a bar in the score first.')
+
+  const next = neighbourBeat(anchor.beat, delta)
+  if (!next) return stalled(delta > 0 ? 'End of the score.' : 'Start of the score.')
+
+  setCursor(next, anchor.string)
+  return moved()
+}
+
+// Up and down: the next string of the same beat.
+//
+// Up means the higher-pitched string, which is also the higher line on the
+// tablature, so the cursor moves the way the key points - the same convention
+// Alt+arrow already uses for moving a note.
+//
+// From a position with no string yet (a click on a standard staff), the first
+// press enters the fretboard from the far edge in the direction of travel: up
+// starts at the lowest string, down at the highest, so the next press continues
+// the same way instead of doubling back.
+function moveCursorString(delta) {
+  const anchor = cursorAnchor(delta)
+  if (!anchor) return stalled('Click a note or a bar in the score first.')
+
+  const strings = anchor.beat?.voice?.bar?.staff?.tuning?.length ?? 0
+  if (strings === 0) return stalled('This staff has no strings to move between.')
+
+  const target = anchor.string == null ? (delta > 0 ? 1 : strings) : anchor.string + delta
+  if (target < 1 || target > strings) return stalled(`There is no string ${target}.`)
+
+  setCursor(anchor.beat, target)
+  return moved()
 }
 
 export function useScoreEdit() {
@@ -647,7 +978,7 @@ export function useScoreEdit() {
 
     const result = setNoteFret(selected, fret)
     if (result.changed) {
-      selectedNote.value = describeNote(selected)
+      refreshSelection()
       if (typeof trackIndex === 'number') scoreEditHost.syncTrack(trackIndex)
       // Sound the new pitch. Straight from the model, so it is already correct
       // by this point and needs no midi rebuild - which is exactly why the
@@ -690,10 +1021,18 @@ export function useScoreEdit() {
       ? (selectedNote.value?.barIndex ?? null)
       : (selectedRange.value?.startBar ?? null)
 
+    // Where the cursor was, so a single-note delete can stay there. Silencing a
+    // note does not remove its beat - `Beat.isRest` is a getter over
+    // `notes.length` - so the position outlives the note and is exactly where
+    // someone would want to be next.
+    const wasAt = selected && cursorBeat ? { beat: cursorBeat, string: cursorString } : null
+
     const result = deleteNotes(notes, scoreEditHost.api?.settings)
     if (result.changed) {
       clearSelection()
       clearRange()
+      // A range delete has nowhere to go back to; a single note does.
+      if (wasAt) setCursor(wasAt.beat, wasAt.string)
       if (typeof trackIndex === 'number') scoreEditHost.syncTrack(trackIndex)
     }
     // `deleteNotes` already ran finish(), which recomputes the tick grid - but it
@@ -735,7 +1074,7 @@ export function useScoreEdit() {
 
     const result = shiftNoteString(selected, delta)
     if (result.changed) {
-      selectedNote.value = describeNote(selected)
+      refreshSelection()
       if (typeof trackIndex === 'number') scoreEditHost.syncTrack(trackIndex)
       // No preview here, deliberately: this move keeps the pitch, so there
       // would be nothing new to hear. The silence is the tell that separates it
@@ -802,9 +1141,71 @@ export function useScoreEdit() {
     return setSelectedFret(target)
   }
 
-  // Re-read the selected note after an edit that may have moved it.
+  // Alt + PageUp / PageDown: a whole octave, re-fingered.
+  //
+  // Not a fret shift. Measured on two real files, going DOWN an octave is
+  // physically impossible for 22 % of the notes of one and 85 % of the other -
+  // the instrument does not reach that low - so an octave has to aim at a pitch
+  // and look for a string and fret that can hold it. See `shiftNotesOctave`.
+  //
+  // On a range this is the one operation that is best effort rather than all or
+  // nothing, and the message afterwards is the only place that shows it. It is
+  // posted AFTER `propagate`, which clears the message on a success: nothing in
+  // the result contract changes, an existing channel is simply used by a caller,
+  // which any caller can already do.
+  function shiftSelectedOctave(direction) {
+    if (!canEdit.value) return refusePlayback()
+
+    const isRange = rangeNotes.length > 0
+    const notes = isRange ? rangeNotes : selected ? [selected] : []
+    if (notes.length === 0) return { ok: false, changed: false, reason: 'No note selected.' }
+
+    const trackIndex = isRange
+      ? (selectedRange.value?.trackIndex ?? null)
+      : (selectedNote.value?.trackIndex ?? null)
+    const bar = isRange
+      ? (selectedRange.value?.startBar ?? null)
+      : (selectedNote.value?.barIndex ?? null)
+
+    const result = shiftNotesOctave(notes, direction)
+    if (result.changed) {
+      if (typeof trackIndex === 'number') scoreEditHost.syncTrack(trackIndex)
+      refreshSelection()
+      refreshSelectionRects()
+      // An octave changes the pitch, so it sounds - unlike the string move,
+      // which keeps it. One note, or the chord a range starts on: sounding forty
+      // notes at once would be noise.
+      if (isRange) scoreEditHost.previewBeat(notes[0]?.beat)
+      else scoreEditHost.previewNote(selected)
+    }
+
+    const outcome = propagate(result, {
+      render: true,
+      midi: 'onPlay',
+      firstChangedBar: bar,
+      label: direction > 0 ? 'Up an octave' : 'Down an octave',
+    })
+
+    if (outcome.ok && outcome.blockedCount) {
+      const n = outcome.blockedCount
+      message('info', `${n} ${n === 1 ? 'note was' : 'notes were'} already as ${direction > 0 ? 'high' : 'low'} as this tuning goes, and stayed put.`)
+    }
+    return outcome
+  }
+
+  // Re-read the selected note after an edit that may have moved it, and bring
+  // the cursor with it.
+  //
+  // The cursor has to follow, not just the descriptor: `Alt` + up moves the note
+  // to another string, and a cursor still pointing at the old one would make the
+  // next bare arrow start from a place the note has left. They are one notion,
+  // so they move together.
   function refreshSelection() {
-    if (selected) selectedNote.value = describeNote(selected)
+    if (!selected) return
+    selectedNote.value = describeNote(selected)
+    if (cursorBeat !== selected.beat) return
+    cursorString = selected.isStringed ? selected.string : null
+    cursorInfo.value = describeCursor(cursorBeat, cursorString)
   }
 
   // ---- undo ---------------------------------------------------------------
@@ -936,6 +1337,22 @@ export function useScoreEdit() {
     selectTrack,
     clearSelection,
 
+    // the cursor: a position, which may or may not hold a note
+    cursor: cursorInfo,
+    cursorRects,
+    cursorMoves,
+    moveCursorBeat,
+    moveCursorString,
+    // Whether a bare arrow key has anywhere to navigate FROM. Read by the
+    // shortcut table rather than by a component, because `appliesTo` has to
+    // answer before `preventDefault()` runs: deciding inside `run` would be too
+    // late and the page would have stopped scrolling either way.
+    canNavigate: computed(() => cursorInfo.value !== null || selectedRange.value !== null),
+
+    // bar filling
+    cursorBarFill,
+    overfullRects,
+
     // reads for the UI
     tuningOptions,
     tempo,
@@ -954,6 +1371,7 @@ export function useScoreEdit() {
     setSelectedFret,
     nudgeSelectedFret,
     nudgeSelectedString,
+    shiftSelectedOctave,
     deleteSelection,
 
     // undo / redo

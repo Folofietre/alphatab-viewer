@@ -19,6 +19,9 @@ import {
   transposeTrackByTuning,
   tuningChoices,
   tuningForString,
+  BAR_OVER,
+  barFill,
+  shiftNotesOctave,
 } from '@/utils/scoreEdits'
 import {
   loadFile,
@@ -378,6 +381,82 @@ describe.skipIf(scores.length === 0)('invariants on real scores', () => {
           for (const staff of track.staves) {
             expect(fretRange(staff)).toEqual({ count: 0, min: 0, max: 0 })
             expect(tuningChoices(staff)).toEqual([])
+          }
+        }
+      })
+
+      it('reads every bar as under, exact or over, and never crashes on one', () => {
+        // Measured across 17 real files and 11682 bars: exactly ONE bar was
+        // overfull (a 2/4 bar holding 2880 ticks against 1920) and one was
+        // incomplete. So this is not a false-positive machine - which is the
+        // real risk of a per-bar tick comparison against tuplets and anacruses.
+        const score = loadFile(file)
+        let counted = 0
+        for (const track of score.tracks) {
+          for (const staff of track.staves) {
+            for (const bar of staff.bars) {
+              const fill = barFill(bar)
+              expect(fill, `track ${track.index} bar ${bar.index}`).not.toBeNull()
+              expect(fill.capacity).toBeGreaterThan(0)
+              counted += 1
+            }
+          }
+        }
+        expect(counted).toBeGreaterThan(0)
+      })
+
+      it('an overfull bar survives the .gp round trip, which is why it is flagged', () => {
+        // Nothing in alphaTab objects to it. Made here rather than looked for,
+        // since almost no real file has one.
+        const score = loadFile(file)
+        // A bar someone actually wrote into. A bar whose every voice alphaTab
+        // auto-filled is an implicit whole-bar rest and is complete by
+        // definition, so lengthening one of its generated beats proves nothing.
+        const staff = score.tracks[0].staves[0]
+        const found = staff.bars.find((bar) =>
+          bar.voices.some((voice) => !voice.isEmpty && voice.beats.length > 0),
+        )
+        if (!found) return
+        const voice = found.voices.find((v) => !v.isEmpty && v.beats.length > 0)
+        voice.beats[0].duration = alphaTab.model.Duration.QuadrupleWhole
+        score.finish(settings)
+        expect(barFill(found).state).toBe(BAR_OVER)
+
+        const back = roundTrip(score)
+        expect(barFill(back.tracks[0].staves[0].bars[found.index]).state).toBe(BAR_OVER)
+      })
+
+      it('an octave never leaves a note anywhere but where it was or an octave away', () => {
+        // The best-effort rule, checked on real tunings. Measured over the same
+        // 17 files: going UP is blocked for 1.8 % of notes and DOWN for 36.8 %,
+        // which is why the octave cannot be all or nothing the way the frets
+        // and the strings are.
+        for (const direction of [1, -1]) {
+          const score = loadFile(file)
+          for (const track of stringedTracks(score)) {
+            for (const staff of track.staves) {
+              if (!staff.isStringed) continue
+              const notes = [...stringedNotes(staff)]
+              if (notes.length === 0) continue
+              const before = notes.map((n) => n.calculateRealValue(false, false))
+
+              const result = shiftNotesOctave(notes, direction)
+              if (!result.ok) continue
+              expect(result.movedCount + result.blockedCount).toBe(notes.length)
+
+              notes.forEach((note, i) => {
+                const now = note.calculateRealValue(false, false)
+                expect([before[i], before[i] + direction * 12]).toContain(now)
+                expect(note.fret).toBeGreaterThanOrEqual(0)
+                expect(note.fret).toBeLessThanOrEqual(24)
+              })
+
+              // And no beat ever ends up with two notes on one string.
+              for (const beat of new Set(notes.map((n) => n.beat))) {
+                const strings = beat.notes.map((n) => n.string)
+                expect(new Set(strings).size).toBe(strings.length)
+              }
+            }
           }
         }
       })

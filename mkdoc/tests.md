@@ -24,5 +24,12 @@ ALPHATAB_SCORES="/path/to/a/folder" npm test
 That suite makes no assumption about track order, string counts or fret windows.
 It is skipped, not failed, when the variable is unset.
 
+Two suites render for real rather than stubbing. `noteSelection.test.js` and
+`scoreGeometry.test.js` drive `ScoreRenderer` directly - no `AlphaTabApi`, no DOM
+- which is what lets a Node test reach `boundsLookup` and assert against where
+alphaTab actually drew things. Stubbing a lookup there would only assert that two
+stubs agree; the claims being made are about alphaTab's own layout.
+
 Not covered by any test, and needing a browser: whether the incremental render is
-visibly faster on a large score, and how a held `Alt`+arrow feels.
+visibly faster on a large score, how a held `Alt`+arrow feels, and whether the
+view follows the cursor comfortably when an arrow walks it off the screen.

@@ -1019,3 +1019,266 @@ export function setNoteFret(note, fret) {
   note.fret = value
   return applied({ undo })
 }
+
+// ---------------------------------------------------------------------------
+// Bar filling
+// ---------------------------------------------------------------------------
+
+// The three states a bar can be in, and there really are three rather than two.
+//
+// `under` is NORMAL: a bar being written into is incomplete for most of its
+// life, and painting that red would paint the whole score red. `over` is the
+// one that matters, because it is the one nothing else catches - see pitfall 8
+// in the gotchas: alphaTab's model, its midi generator and its .gp exporter all
+// accept a bar holding more than its time signature allows, in silence, and
+// write it straight to the file.
+export const BAR_UNDER = 'under'
+export const BAR_EXACT = 'exact'
+export const BAR_OVER = 'over'
+
+// How full one bar is, in midi ticks, against what its time signature allows.
+//
+// Three things about this are not obvious, all verified against alphaTab 1.8.4:
+//
+//  1. `masterBar.calculateDuration()` is the CAPACITY, and it already handles
+//     the anacrusis: for a normal bar it returns
+//     `numerator * valueToTicks(denominator)` (3840 for 4/4), and for a pickup
+//     bar it returns the longest bar actually written at that index, which is
+//     the only sane capacity for a bar that is deliberately short.
+//  2. `voice.calculateDuration()` returns 0 for a voice alphaTab marked EMPTY.
+//     `finish()` fills unwritten voices with auto-generated rests and leaves
+//     `isEmpty` true, so counting them would report every multi-voice bar as
+//     empty. They are skipped, and a bar whose every voice is empty is an
+//     implicit whole-bar rest rather than an incomplete bar.
+//  3. Tick arithmetic DRIFTS on tuplets, downwards. A bar of seven
+//     sixteenth-septuplets plus three quarters measures 3839 against a capacity
+//     of 3840 (137 x 7 = 959, not 960) because each beat's tick count is
+//     truncated. So the comparison carries a tolerance of one tick per beat,
+//     which is the exact bound on that truncation, rather than being an
+//     arbitrary fudge factor.
+//
+// The bar is judged by its FULLEST voice: one voice overflowing is enough to
+// make the bar invalid, whatever the others do.
+export function barFill(bar) {
+  const masterBar = bar?.masterBar ?? null
+  if (!masterBar) return null
+
+  const capacity = masterBar.calculateDuration()
+
+  let filled = -1
+  let tolerance = 0
+  let voiceCount = 0
+  for (const voice of bar.voices ?? []) {
+    if (voice.isEmpty) continue
+    voiceCount += 1
+    const duration = voice.calculateDuration()
+    if (duration <= filled) continue
+    filled = duration
+    tolerance = voice.beats?.length ?? 0
+  }
+
+  // Every voice auto-filled: a whole-bar rest, which is complete by definition.
+  if (voiceCount === 0) return { capacity, filled: capacity, tolerance: 0, state: BAR_EXACT }
+
+  let state = BAR_EXACT
+  if (filled > capacity + tolerance) state = BAR_OVER
+  else if (filled < capacity - tolerance) state = BAR_UNDER
+  return { capacity, filled, tolerance, state }
+}
+
+// The same reading, flattened for the UI and expressed in BEATS rather than in
+// ticks: `3 / 4` says something to a musician where `2880 / 3840` does not.
+//
+// The beat unit is the time signature's denominator, taken from the NOMINAL
+// duration (`calculateDuration(false)`) so that a pickup bar is measured in the
+// same beats as the bars around it and simply reports fewer of them.
+export function describeBarFill(bar) {
+  const fill = barFill(bar)
+  const masterBar = bar?.masterBar ?? null
+  if (!fill || !masterBar) return null
+
+  const numerator = masterBar.timeSignatureNumerator
+  const nominal = masterBar.calculateDuration(false)
+  const unit = numerator > 0 ? nominal / numerator : 0
+
+  return {
+    barIndex: masterBar.index,
+    state: fill.state,
+    filledTicks: fill.filled,
+    capacityTicks: fill.capacity,
+    // Rounded to two decimals: a tuplet does not land on a whole beat, and
+    // `2.67 / 4` is still readable while the raw float is not.
+    beats: unit > 0 ? Math.round((fill.filled / unit) * 100) / 100 : null,
+    beatCapacity: unit > 0 ? Math.round((fill.capacity / unit) * 100) / 100 : null,
+    numerator,
+    denominator: masterBar.timeSignatureDenominator,
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 7e. The octave
+// ---------------------------------------------------------------------------
+
+export const OCTAVE_SEMITONES = 12
+
+// Why this cannot be "add or subtract 12 frets", measured on two real files:
+//
+//   | file                | +12 same string | -12 same string | -12 IMPOSSIBLE |
+//   | Le Chant des Forges |            99 % |             2 % |           22 % |
+//   | Morbid Angel (.gpx) |            95 % |             7 % |           85 % |
+//
+// Going up an octave almost always stays on the same string. Going DOWN one is
+// physically impossible for most notes - the instrument does not reach that
+// low - and on a detuned seven-string it is impossible for 85 % of them. So an
+// octave is a change of PITCH with a re-fingering, not a fret arithmetic: aim
+// at the same note twelve semitones away, try the current string, then the
+// others.
+//
+// Strings are tried in the direction of travel first, nearest to farthest, then
+// back the other way: going up an octave when the fret would run off the neck
+// means moving to a HIGHER string, which needs a lower fret for the same pitch.
+function stringPreference(current, strings, step) {
+  const order = []
+  const forward = step > 0 ? 1 : -1
+  for (let s = current + forward; s >= 1 && s <= strings; s += forward) order.push(s)
+  for (let s = current - forward; s >= 1 && s <= strings; s -= forward) order.push(s)
+  return order
+}
+
+// Where one note would go, or null when nowhere on this neck can hold it.
+//
+// The pitch target is computed from `fret + tuningForString(...)` rather than
+// from `note.realValue`: both sides of the subtraction then use the same
+// convention, so any capo or track transposition cancels out instead of
+// having to be reasoned about.
+//
+// Landing on another string is allowed only onto a string that is EMPTY in this
+// beat, even when the note currently there is also part of the batch. That is
+// deliberately conservative: it refuses a few placements that a solver could
+// find by moving two notes at once, and in exchange no note can ever be dropped
+// by two notes claiming one entry of `beat.noteStringLookup` (pitfall 5).
+//
+// "Empty" has to mean empty AFTER the moves already planned, not just in the
+// model as it stands. `claimed` carries those: without it two notes of one chord
+// both find the same free string and the second silently erases the first, which
+// is exactly what the real-score invariant caught.
+function planOctaveMove(note, semitones, claimed) {
+  if (!note?.isStringed) return null
+  // Pitfall 4: a natural harmonic sounds at its node, not at its fret, so no
+  // fret can express a transposition of it.
+  if (note.harmonicType === alphaTab.model.HarmonicType.Natural) return null
+
+  const staff = note.beat?.voice?.bar?.staff ?? null
+  const strings = staff?.tuning?.length ?? 0
+  if (!staff || strings === 0) return null
+
+  // The same string, which is the 95-99 % case going up and needs no lookup.
+  const sameString = note.fret + semitones
+  if (sameString >= MIN_FRET && sameString <= MAX_FRET) {
+    return { note, string: note.string, fret: sameString }
+  }
+
+  const target = note.fret + tuningForString(staff.tuning, note.string) + semitones
+  for (const string of stringPreference(note.string, strings, semitones)) {
+    if (note.beat.getNoteOnString(string) || claimed?.has(string)) continue
+    const fret = target - tuningForString(staff.tuning, string)
+    if (fret < MIN_FRET || fret > MAX_FRET) continue
+    return { note, string, fret }
+  }
+  return null
+}
+
+// Move notes by a whole octave, up or down.
+//
+// AT ITS BEST, not all or nothing - and this is the ONE exception to the rule
+// that holds everywhere else in this file. The reason it is tenable, and the
+// reason it does not spread:
+//
+//   Clipping produces a WRONG value. Not moving keeps a RIGHT one.
+//
+// A fret transposition that clips leaves a note at fret 0 where it needed -2:
+// that note now sounds wrong, and it has lost its interval with its neighbours,
+// which is the whole content of a transposition. A note that could not drop an
+// octave keeps the pitch it always had. The passage is no longer the passage an
+// octave down, but no note carries an incorrect value. So the frets and the
+// strings stay all or nothing, and only this is best effort.
+//
+// `movedCount` and `blockedCount` are facts about what happened, of the same
+// kind as the `noteCount` the other operations return - not a fourth result
+// state. The score is on screen: a note that did not move is visible, with its
+// fret number unchanged, which is a better channel than any flag.
+export function shiftNotesOctave(notes, direction) {
+  const list = [...(notes ?? [])]
+  if (list.length === 0) return refused('No notes selected.')
+
+  const step = Math.sign(Math.round(Number(direction)))
+  if (!Number.isFinite(step) || step === 0) return noop({ movedCount: 0, blockedCount: 0 })
+  const semitones = step * OCTAVE_SEMITONES
+
+  // One claim set per beat, so two notes of a chord cannot both be sent to the
+  // same free string. Notes are visited in the order they were given, so the
+  // result is at least deterministic where it cannot be order-independent.
+  const claimedByBeat = new Map()
+  const moves = []
+  for (const note of list) {
+    let claimed = claimedByBeat.get(note.beat)
+    if (!claimed) {
+      claimed = new Set()
+      claimedByBeat.set(note.beat, claimed)
+    }
+    const move = planOctaveMove(note, semitones, claimed)
+    if (!move) continue
+    claimed.add(move.string)
+    moves.push(move)
+  }
+
+  const blockedCount = list.length - moves.length
+  if (moves.length === 0) {
+    return refused(octaveRefusal(list, step), { movedCount: 0, blockedCount })
+  }
+
+  // The same two-phase writer the string move uses, in both directions: an undo
+  // that puts a chord back has exactly the ordering hazard the move had.
+  const from = moves.map(({ note }) => ({ note, string: note.string, fret: note.fret }))
+  const to = moves.map(({ note, string, fret }) => ({ note, string, fret }))
+  applyNoteStringMoves(moves)
+
+  let next = from
+  return applied({
+    noteCount: moves.length,
+    movedCount: moves.length,
+    blockedCount,
+    undo: () => {
+      applyNoteStringMoves(next)
+      next = next === from ? to : from
+    },
+  })
+}
+
+// Why nothing moved. Worded per case, because "one note is too low" and "none of
+// these forty notes can move" need different sentences - and because a single
+// note is the keyboard's case, where the message is the only feedback.
+function octaveRefusal(list, step) {
+  const way = step > 0 ? 'up' : 'down'
+  if (list.length > 1) {
+    return `None of these ${list.length} notes can move ${way} an octave: on this tuning there is no string and fret that reaches ${way === 'up' ? 'that high' : 'that low'}.`
+  }
+
+  const note = list[0]
+  if (!note?.isStringed) {
+    return 'That note has no string: percussion, or a staff without tablature.'
+  }
+  if (note.harmonicType === alphaTab.model.HarmonicType.Natural) {
+    return naturalHarmonicRefusal(1, 'moving by an octave')
+  }
+  const target = alphaTab.model.Tuning.getTextForTuning(note.realValue + step * OCTAVE_SEMITONES, true)
+  const current = alphaTab.model.Tuning.getTextForTuning(note.realValue, true)
+  return `${current} cannot move ${way} an octave: ${target} is ${way === 'up' ? 'above' : 'below'} anything this tuning reaches within frets ${MIN_FRET}-${MAX_FRET}.`
+}
+
+// One note, which is the keyboard's case. A wrapper for the same reason
+// `shiftNoteString` is one: the placement logic must not exist twice.
+export function shiftNoteOctave(note, direction) {
+  if (!note) return refused('No note selected.')
+  return shiftNotesOctave([note], direction)
+}

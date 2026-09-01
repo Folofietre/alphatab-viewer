@@ -70,10 +70,32 @@ describe('binding resolution', () => {
     }
   })
 
-  it('a BARE arrow key resolves to nothing, so scrolling still works', () => {
-    expect(resolve(key('ArrowUp'))).toBeNull()
-    expect(resolve(key('ArrowDown'))).toBeNull()
+  it('a BARE arrow key now moves the CURSOR, not the note', () => {
+    expect(resolve(key('ArrowUp'))?.label).toMatch(/cursor up one string/)
+    expect(resolve(key('ArrowDown'))?.label).toMatch(/cursor down one string/)
+    expect(resolve(key('ArrowLeft'))?.label).toMatch(/previous beat/)
+    expect(resolve(key('ArrowRight'))?.label).toMatch(/next beat/)
+  })
+
+  it('and it still leaves the page scrolling when there is no cursor', () => {
+    // This is the whole reason taking the bare arrows is acceptable. The
+    // decision has to be reachable from `appliesTo`, because the handler calls
+    // preventDefault() BEFORE run - deciding inside run would have killed the
+    // scroll either way.
+    const idle = { canNavigate: { value: false } }
+    const armed = { canNavigate: { value: true } }
+    for (const code of ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight']) {
+      const binding = resolve(key(code))
+      expect(binding.appliesTo({ tagName: 'BUTTON' }, null, idle), code).toBe(false)
+      expect(binding.appliesTo({ tagName: 'BUTTON' }, null, armed), code).toBe(true)
+    }
+  })
+
+  it('Shift does not turn a bare arrow into something else', () => {
+    // `shift: false` on the two vertical ones keeps them distinct from
+    // Alt+Shift+arrow; the horizontal pair declares nothing and ignores it.
     expect(resolve(key('ArrowUp', { shift: true }))).toBeNull()
+    expect(resolve(key('ArrowRight', { shift: true }))?.label).toMatch(/next beat/)
   })
 
   it('does NOT resolve when Ctrl or Meta is also held', () => {
@@ -432,29 +454,36 @@ describe('binding options', () => {
     expect(matchesKey({}, key('KeyZ'))).toBe(false)
   })
 
-  it('only the document-wide bindings consult the player', () => {
-    // appliesTo(element, player). Save and Undo stand down when no score is
-    // open, so they need the player; every other binding only looks at the
-    // focused element and must not break when the second argument is absent.
-    // Keyed on the character: Save, Undo and Redo are the document-wide ones.
+  it('each binding consults only the arguments it declares a reason for', () => {
+    // appliesTo(element, player, edit). Save and Undo stand down when no score
+    // is open, so they need the player. The four bare arrows stand down when
+    // there is no cursor, so they need the edit state. Everything else looks at
+    // the focused element only and must not break when the rest is absent.
     const NEEDS_PLAYER = new Set(['s', 'z', 'y'])
+    const NEEDS_EDIT = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'])
     for (const binding of BINDINGS) {
       const name = binding.code ?? binding.key
       const call = () => binding.appliesTo({ tagName: 'BUTTON' })
-      if (NEEDS_PLAYER.has(binding.key)) expect(call, name).toThrow()
+      // The bare arrows are the ones with no Alt: Alt+arrow needs nothing.
+      const needsEdit = NEEDS_EDIT.has(binding.code) && !binding.modifiers?.alt
+      if (NEEDS_PLAYER.has(binding.key) || needsEdit) expect(call, name).toThrow()
       else expect(call, name).not.toThrow()
     }
-    // And with the player, all of them answer.
+    // And given both, all of them answer.
     const player = { isScoreLoaded: { value: true } }
+    const edit = { canNavigate: { value: true } }
     for (const binding of BINDINGS) {
-      expect(typeof binding.appliesTo({ tagName: 'BUTTON' }, player)).toBe('boolean')
+      expect(typeof binding.appliesTo({ tagName: 'BUTTON' }, player, edit)).toBe('boolean')
     }
   })
 
-  it('only the note nudges repeat on a held key', () => {
+  it('the keys that walk somewhere repeat, and no others', () => {
+    // Moving a note across the neck, moving the cursor along a line, jumping an
+    // octave: all three are gestures someone holds the key for. Play/pause,
+    // save, undo and delete are not.
+    const WALKS = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'PageUp', 'PageDown'])
     for (const binding of BINDINGS) {
-      const shouldRepeat = binding.code === 'ArrowUp' || binding.code === 'ArrowDown'
-      expect(!!binding.allowRepeat).toBe(shouldRepeat)
+      expect(!!binding.allowRepeat, binding.label).toBe(WALKS.has(binding.code))
     }
   })
 
@@ -464,8 +493,9 @@ describe('binding options', () => {
     // in. Standing down here would make "type a tempo, click a note, Alt+arrow"
     // silently do nothing. No text field owns Alt+Up/Down anyway - word-wise
     // caret movement is Alt+Left/Right.
+    // Four arrows and the two octave keys.
     const nudges = BINDINGS.filter((b) => b.modifiers?.alt)
-    expect(nudges).toHaveLength(4)
+    expect(nudges).toHaveLength(6)
     for (const binding of nudges) {
       expect(binding.appliesTo({ tagName: 'INPUT', type: 'text' })).toBe(true)
       expect(binding.appliesTo({ tagName: 'INPUT', type: 'number' })).toBe(true)

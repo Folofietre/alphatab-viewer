@@ -92,9 +92,17 @@ function saveScore(_player, _event, edit) {
 //
 // Comparison is case-insensitive, so a stray Shift cannot break it.
 //
-// `appliesTo(element, player)` decides whether the binding acts; when it returns
-// false the key is left entirely alone. Most bindings only care about the focused
-// element, but the save shortcut also needs to know whether a score is open.
+// `appliesTo(element, player, edit)` decides whether the binding acts; when it
+// returns false the key is left entirely alone. Most bindings only care about
+// the focused element; the save shortcut also needs to know whether a score is
+// open, and the four bare arrows need to know whether there is anything to
+// navigate FROM.
+//
+// The third argument is not a convenience. A bare arrow either moves the cursor
+// or scrolls the page, and the handler calls `preventDefault()` BEFORE `run` -
+// so a binding that decided inside `run` would have killed the scroll either
+// way. The decision has to be reachable from `appliesTo` or it is not a
+// decision at all.
 //
 // `modifiers` declares which of Alt, Ctrl and Meta the binding WANTS, and is
 // matched exactly. Declaring it per binding rather than excluding modifiers
@@ -122,6 +130,53 @@ export const BINDINGS = [
     // Enter keeps working normally on buttons and links.
     appliesTo: isCheckbox,
     run: (_player, event) => event.target.click(),
+  },
+  // The four bare arrows MOVE THE CURSOR, and only when there is a cursor to
+  // move: with nothing selected they are left alone and keep scrolling the page,
+  // which is the only reason taking them is acceptable at all. Clicking a note
+  // or a bar arms them; clicking away disarms them again.
+  //
+  // Left and right walk the beats, crossing bars. Up and down walk the strings
+  // of the same beat, in the direction the key points - the same convention
+  // Alt+arrow already uses for moving a note, so the pair reads as "the arrow
+  // moves the cursor, Alt makes it move the note".
+  //
+  // They repeat: walking along a line or across the neck with the key held is
+  // the point, and nothing is written, so a repeat costs a lookup and a
+  // rectangle.
+  {
+    code: 'ArrowRight',
+    label: 'Move the cursor to the next beat',
+    allowRepeat: true,
+    appliesTo: (el, _player, edit) => !ownsTypingKeys(el) && edit.canNavigate.value,
+    run: (_player, _event, edit) => edit.moveCursorBeat(1),
+  },
+  {
+    code: 'ArrowLeft',
+    label: 'Move the cursor to the previous beat',
+    allowRepeat: true,
+    appliesTo: (el, _player, edit) => !ownsTypingKeys(el) && edit.canNavigate.value,
+    run: (_player, _event, edit) => edit.moveCursorBeat(-1),
+  },
+  {
+    code: 'ArrowUp',
+    label: 'Move the cursor up one string',
+    // `shift: false` and no Alt, so this stays distinct from the three other
+    // things the up arrow does. The modifier match is exact for Alt, Ctrl and
+    // Meta already; Shift is declared because Alt+Shift+Up is a binding too and
+    // an undeclared Shift would let a stray capital resolve here.
+    modifiers: { shift: false },
+    allowRepeat: true,
+    appliesTo: (el, _player, edit) => !ownsTypingKeys(el) && edit.canNavigate.value,
+    run: (_player, _event, edit) => edit.moveCursorString(1),
+  },
+  {
+    code: 'ArrowDown',
+    label: 'Move the cursor down one string',
+    modifiers: { shift: false },
+    allowRepeat: true,
+    appliesTo: (el, _player, edit) => !ownsTypingKeys(el) && edit.canNavigate.value,
+    run: (_player, _event, edit) => edit.moveCursorString(-1),
   },
   // Alt + arrow moves the note to the NEXT STRING, keeping the pitch: the fret
   // changes to compensate, so the score sounds identical and only the fingering
@@ -280,6 +335,33 @@ export const BINDINGS = [
     appliesTo: (el) => !ownsAltArrows(el),
     run: (_player, _event, edit) => edit.nudgeSelectedFret(-1),
   },
+  // Alt + PageUp / PageDown: a whole octave.
+  //
+  // A separate key rather than a third arrow combination, because it is a
+  // separate KIND of move: the fret and the string are both recomputed to land
+  // on a pitch, so unlike the two above it can be impossible - going down an
+  // octave is off the bottom of the instrument for most notes of a real score.
+  //
+  // Same `ownsAltArrows` stand-down as the arrows: nothing but a <select> and a
+  // rich-text surface owns Alt + a paging key, and standing down for text fields
+  // would break "type a tempo, click a note, press the key", since alphaTab's
+  // preventDefault keeps focus in the field.
+  {
+    code: 'PageUp',
+    label: 'Up one octave',
+    modifiers: { alt: true },
+    allowRepeat: true,
+    appliesTo: (el) => !ownsAltArrows(el),
+    run: (_player, _event, edit) => edit.shiftSelectedOctave(1),
+  },
+  {
+    code: 'PageDown',
+    label: 'Down one octave',
+    modifiers: { alt: true },
+    allowRepeat: true,
+    appliesTo: (el) => !ownsAltArrows(el),
+    run: (_player, _event, edit) => edit.shiftSelectedOctave(-1),
+  },
 ]
 
 // Exact match on Alt, Ctrl and Meta, always. Shift only when the binding says so.
@@ -317,6 +399,8 @@ const KEY_NAMES = {
   ArrowDown: '\u2193',
   ArrowLeft: '\u2190',
   ArrowRight: '\u2192',
+  PageUp: 'PageUp',
+  PageDown: 'PageDown',
 }
 
 export function describeBinding(binding) {
@@ -379,7 +463,7 @@ export function useShortcuts() {
       (b) => matchesKey(b, event) && matchesModifiers(b, event),
     )
     if (!binding) return
-    if (!binding.appliesTo(event.target, player)) return
+    if (!binding.appliesTo(event.target, player, edit)) return
 
     // Swallow the key so it neither scrolls the page nor triggers a focused
     // button, then drop auto-repeat unless the binding asked for it.

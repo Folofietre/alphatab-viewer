@@ -70,6 +70,49 @@
   will-change: transform;
 }
 
+// The cursor on an empty position.
+//
+// Deliberately NOT the same visual as `.note-marker`. The solid ring means "this
+// note will change"; a dashed outline on nothing means "this is where you are".
+// One place, one marker: the two are never drawn together, because the cursor
+// and the selected note are the same notion.
+.cursor-marker {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 1001;
+  pointer-events: none;
+  box-sizing: border-box;
+  border: 2px dashed var(--accent);
+  border-radius: $radius-control;
+  box-shadow: 0 0 0 1px var(--bg-surface);
+  transform-origin: top left;
+  will-change: transform;
+}
+
+// A bar holding more than its time signature allows.
+//
+// Underneath the two markers (z-index 1001) but above alphaTab's own layers, and
+// an outline rather than a wash: this has to stay readable ON TOP of the
+// notation it is accusing, and the notation has to stay readable through it.
+//
+// Red is reserved for this one state. An INCOMPLETE bar is normal - it is what
+// every bar looks like while it is being written - so only the overflow, the
+// state nothing else in the stack reports, gets a colour.
+.bar-overfull {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 1000;
+  pointer-events: none;
+  box-sizing: border-box;
+  border: 2px solid var(--warn-border);
+  border-radius: $radius-control;
+  background: var(--warn-bg);
+  transform-origin: top left;
+  will-change: transform;
+}
+
 .alphatab-host {
   // alphaTab draws the notation in this element's `color`.
   color: var(--score-ink);

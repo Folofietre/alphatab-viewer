@@ -208,6 +208,24 @@
             <kbd>Alt + &#8679; + &uarr;&darr;</kbd>
           </div>
 
+          <!-- A whole octave, which is a re-fingering and not a fret shift: the
+               string moves too when the fret alone cannot reach. -->
+          <div class="row">
+            <button
+              type="button"
+              :disabled="!canEdit"
+              title="Move every note in the selection up an octave, changing string where the fret alone cannot reach"
+              @click="shiftSelectedOctave(1)"
+            >Octave +1</button>
+            <button
+              type="button"
+              :disabled="!canEdit"
+              title="Move every note in the selection down an octave. Notes already at the bottom of the tuning stay where they are."
+              @click="shiftSelectedOctave(-1)"
+            >Octave -1</button>
+            <kbd>Alt + PageUp/Dn</kbd>
+          </div>
+
           <div class="row">
             <button
               type="button"
@@ -220,9 +238,13 @@
           </div>
 
           <p class="hint">
-            Applied to <strong>every</strong> note at once, or to none: if one
-            would run off the neck, the whole selection is refused. Drag on the
-            score to change the range, or click a note to leave it.
+            <strong>String</strong> and <strong>Pitch</strong> apply to
+            <strong>every</strong> note at once, or to none: if one would run off
+            the neck, the whole selection is refused.
+            <strong>Octave</strong> is the exception, and does what it can: a
+            note the tuning cannot reach stays at the pitch it had rather than
+            being moved to a wrong one. Drag on the score to change the range, or
+            click a note to leave it.
             <strong>Silence</strong> cannot be undone: use <strong>Revert</strong>
             in the Score tab to get the file back.
           </p>
@@ -273,6 +295,26 @@
             >Pitch -1</button>
             <kbd title="Alt, Shift and the up or down arrow transpose the note by a semitone">Alt + &#8679; + &uarr;&darr;</kbd>
           </div>
+
+          <!-- Twelve semitones, which is often a different STRING and not just
+               a different fret: an octave down is off the bottom of the
+               instrument for most notes of a real score. -->
+          <div class="row">
+            <button
+              type="button"
+              :disabled="!canEdit"
+              title="Up an octave. Moves to another string when the fret alone cannot reach."
+              @click="shiftSelectedOctave(1)"
+            >Octave +1</button>
+            <button
+              type="button"
+              :disabled="!canEdit"
+              title="Down an octave. Refused when the tuning does not go that low."
+              @click="shiftSelectedOctave(-1)"
+            >Octave -1</button>
+            <kbd title="Alt and PageUp or PageDown move the note by a whole octave">Alt + PageUp/Dn</kbd>
+          </div>
+
           <div class="row">
             <button
               type="button"
@@ -288,6 +330,9 @@
             <strong>String</strong> keeps the pitch and only moves the fingering,
             so it stays silent. <strong>Pitch</strong> moves the note by a
             semitone on the same string, and plays it.
+            <strong>Octave</strong> moves it twelve semitones and re-fingers it,
+            changing string when the fret alone cannot reach - and refuses when
+            no string can.
             <strong>Silence</strong> removes it, leaving a rest of the same
             length, and cannot be undone.
           </p>
@@ -319,6 +364,7 @@ const {
   retune,
   nudgeSelectedFret,
   nudgeSelectedString,
+  shiftSelectedOctave,
   deleteSelection,
   MIN_FRET,
   MAX_FRET,

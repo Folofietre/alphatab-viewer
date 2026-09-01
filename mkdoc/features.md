@@ -86,6 +86,7 @@ the score selects its track too):
 | Retune, `Keep pitches` / `Keep frets` | `staff.stringTuning`, and the frets in the first mode |
 | Notes across the strings | `note.string` + `note.fret`, via the buttons or `Alt` + up/down |
 | Notes by a semitone | `note.fret`, via the buttons or `Alt` + `Shift` + up/down |
+| Notes by an octave | `note.string` + `note.fret`, via the buttons or `Alt` + PageUp/PageDown |
 | Notes replaced by silence | removes them from their beats, via `Silence` or `Delete` |
 
 Then `Save .gp` downloads the result - or **`Ctrl+S`** / **`Cmd+S`**, which
@@ -104,7 +105,7 @@ moved and three stayed is not a re-fingering of anything. And unlike the
 single-note case the refusal is loud: with twelve notes selected there is no
 guessing which one blocked it, and a repeated key will not walk out of it.
 
-The two note-level moves are deliberately different things, and the keyboard says
+The note-level moves are deliberately different things, and the keyboard says
 which is which:
 
 - **`Alt` + up/down** moves the note to the **adjacent string**, keeping the
@@ -113,13 +114,29 @@ which is which:
   higher line on the tablature, so the note moves the way the key points.
 - **`Alt` + `Shift` + up/down** is the one that **changes the pitch**, by a
   semitone, on the same string.
+- **`Alt` + `PageUp`/`PageDown`** moves it a whole **octave**, and that is a
+  re-fingering rather than twelve frets: it changes string when the fret alone
+  cannot reach.
 
-Both repeat when held, and both refuse silently at the edge of the fretboard,
-because a message per press on a repeatable key is noise. Every other refusal (an
-occupied string, a fret that would land off the neck, a natural harmonic) is
-explained in the panel.
+All three repeat when held, and the first two refuse silently at the edge of the
+fretboard, because a message per press on a repeatable key is noise. Every other
+refusal (an occupied string, a fret that would land off the neck, a natural
+harmonic) is explained in the panel.
 
-Whatever is selected is **ringed on the score**, once per staff it is drawn on
+**The octave is the one batch operation that is not all or nothing.** Going down
+an octave is physically impossible for a lot of real music - measured across
+seventeen real files, 37 % of notes cannot go down and 1.8 % cannot go up,
+because the instrument does not reach that far. All or nothing would make the
+downward direction refuse almost every time. So on a passage it does what it can:
+the notes that can move do, the rest **stay at the pitch they had**, and the
+panel says how many. On a single note it still refuses, naming both pitches.
+
+That exception is allowed here and nowhere else, for one reason: clipping a fret
+produces a *wrong* value, while not moving keeps a *right* one. A clipped
+transposition leaves a note sounding wrong and out of interval with its
+neighbours; a note that did not drop an octave is simply where it always was.
+
+Whatever is selected is **ringed on the score**, once per row it is drawn on
 (the note head on the standard staff and the fret number on the tablature), so
 there is never a doubt about what an edit will touch. One rule: **a ring means
 this note will be edited**. Clicking a bar rather than a note clears it. See the
@@ -166,13 +183,50 @@ action bar carries an icon-only undo button whose tooltip names what would go
 and how many steps are left. It sits there rather than in a sidebar panel because
 it reaches edits made from either of them, and the bar stays visible with the
 sidebar collapsed. Every one
-of the ten operations can be taken back, the delete included.
+of the eleven operations can be taken back, the delete included.
 
 **`Ctrl+Y` / `Cmd+Y` redoes**, and so does `Ctrl+Shift+Z` for people who reach
 for that instead. A new edit throws away the redo branch, as everywhere else.
 
+## Moving around the score
+
+**Clicking an empty string puts a cursor there.** A click on a note selects it,
+as before; a click that lands on a bar but on no note head now marks the place it
+landed rather than just clearing the selection. The cursor and the selected note
+are the same thing - a position - and it is drawn as a dashed outline where a
+fret number would go. On a standard-notation staff, where a vertical position
+carries no string information, it marks the beat and leaves the string open.
+
+**The bare arrow keys move it**: left and right along the beats, crossing bars,
+up and down across the strings of the same beat. The view follows when the cursor
+walks off the edge.
+
+With **nothing selected the arrows still scroll the page**, which is the only
+reason they could be taken at all. They are claimed once you have clicked
+something, and released again when you click away. A dragged passage collapses
+onto its far edge - right carries on from the last note, left from the first.
+
+Running off either end of the score does nothing. Adding a bar there is a write,
+and is not part of this tier.
+
+## Bars that hold too much
+
+The action bar shows **how full the cursor's bar is**, in beats of its own time
+signature: `3 / 4` for a 4/4 bar with a quarter note missing. Incomplete is not
+marked as a problem - it is what every bar looks like while it is being written.
+
+A bar holding **more** than its time signature allows is outlined in red on the
+score. That is worth having because alphaTab will not tell you: its model, its
+midi generator and its `.gp` exporter all accept an overfull bar in silence and
+write it straight to the file. Nothing else in the chain reports it.
+
+Being honest about how much this finds today: across seventeen real files and
+11682 bars, exactly one bar was overfull and one incomplete. On music someone
+else wrote it will almost never fire. It earns its place when note entry arrives,
+which is why it was built first.
+
 **Deliberately out of scope for this tier:** entering notes, adding or removing
-bars, changing the number of strings, and any validation of note durations.
+bars, changing durations, changing the number of strings.
 
 ## What is NOT saved with the score
 

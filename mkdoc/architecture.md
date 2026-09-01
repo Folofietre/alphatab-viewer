@@ -19,6 +19,7 @@ src/
     HelpDialog.vue           the "?" modal: shortcuts, generated from BINDINGS
     TransportBar.vue         play, stop, scrub, speed, volume, loop, click (in the action bar)
     BarsPerRow.vue           force a fixed number of bars per system
+    BarFill.vue              how full the cursor's bar is, in beats
     FileDropzone.vue         window-wide drag & drop + file picker
   assets/
     loop.png metronome.png   monochrome toggle icons, used as CSS masks
@@ -31,6 +32,7 @@ src/
     gmPrograms.js            the 128 GM programs and their 16 families
     trackSound.js            applyTrackProgram() - see the alphaTab gotchas
     scoreEdits.js            every model write for the editing features
+    scoreGeometry.js         the reverse: bounds -> a position, a position -> a rect
     scoreHistory.js          the bounded undo stack
     exportScore.js           Gp7Exporter -> Blob -> download
     format.js                formatTime()
@@ -41,6 +43,7 @@ test/
   scoreEdits.test.js         the model writes and their undos, on the fixture
   scoreHistory.test.js       the stack: bound, ordering, the clean flag
   noteSelection.test.js      why selection needs core.includeNoteBounds
+  scoreGeometry.test.js      the hit-test and the markers, on a real headless render
   useShortcuts.test.js       which key combination resolves to which action
   useUnsavedGuard.test.js    when the page refuses to leave
   exportScore.test.js        filenames and the .gp round trip
@@ -152,9 +155,13 @@ and would risk breaking alphaTab internals. They live in plain variables, and th
 UI reads flat descriptors instead - `tracks` for the panels, `selectedNote` for
 the note inspector.
 
-`useScoreEdit` needs three things `usePlayer` keeps module-private: the api, the
-raw `Track` objects, and the `pendingRestore` dance that puts the playhead back
-after a midi rebuild. They are reached through one explicit named export,
+`useScoreEdit` needs four things `usePlayer` keeps module-private: the api, the
+raw `Track` objects, the `pendingRestore` dance that puts the playhead back after
+a midi rebuild, and the **host element** - alphaTab dispatches a DOM
+`alphaTab.beatMouseDown` CustomEvent on it alongside the typed one, and only the
+DOM one carries the original `MouseEvent`. Nothing else in its API hands over the
+coordinates of a click, and without them a click on an empty string has nothing
+to resolve: there is no `Beat` of its own to be given. They are reached through one explicit named export,
 `scoreEditHost`, rather than by duplicating the restore logic in a second
 composable or widening the public `usePlayer()` surface with model internals no
 component may touch.

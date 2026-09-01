@@ -1,9 +1,9 @@
 # alphaTab gotchas
 
 
-All six were found by running code against alphaTab **1.8.4** in Node, not by
-reading the docs, and each one silently corrupts an edit if you do the obvious
-thing. They are the reason
+All eight were found by running code against alphaTab **1.8.4** in Node, not by
+reading the docs, and each one silently corrupts an edit - or lets a corrupt one
+through - if you do the obvious thing. They are the reason
 [src/utils/scoreEdits.js](../src/utils/scoreEdits.js) exists as its own module.
 
 ## 1. `score.tempo` is read-only
@@ -168,6 +168,53 @@ corruption if skipped:
 3. **Calls `score.finish()`**, to rebuild the per-beat `noteValueLookup` and
    re-resolve or clear the links that just lost their target. Measured at 12ms on
    the same file, so ~24ms for a delete on the largest test score.
+
+## 7. `playbackDuration` is stale until `finish()`
+
+`beat.duration` is the **input**; `playbackDuration` and `displayDuration` are
+**derived** from it, and nothing recomputes them on assignment:
+
+```
+set beat0 to Duration.Whole
+  BEFORE finish() : playbackDuration = 960    (the value from before)
+  AFTER  finish() : playbackDuration = 3840
+```
+
+So any reading of how long a beat really is - which is every calculation of how
+full a bar is - has to come after `finish()`, or recompute the value itself from
+`duration`, `dots` and the tuplet. `barFill()` reads
+`voice.calculateDuration()`, which sums `playbackDuration`, so a fill read
+between a duration change and `finish()` reports the bar as it was.
+
+Nothing in this app changes a duration yet, so this is not on any live path -
+but a test pins it, because it is the trap waiting for the first one that does.
+
+## 8. An overfull bar passes through the whole chain in silence
+
+```
+capacity 3840 ticks, filled 6720  ->  OVERFULL
+export to .gp and re-import       ->  fine
+```
+
+Not the model, not `finish()`, not `MidiFileGenerator`, not `Gp7Exporter`: none
+of them objects to a bar holding more than its time signature allows. It renders,
+it plays, and it is written to the file exactly as it is.
+
+So the red rectangle on the score and the counter in the action bar are not a
+convenience. They are the **only** thing in the stack that will ever say a bar is
+invalid, which is why they were built before anything that can create one.
+
+Two details worth keeping:
+
+- **Three states, not two.** A bar being written into is *incomplete* for most of
+  its life, so marking that red would paint the whole score red. Only the
+  overflow is coloured.
+- **The tick arithmetic drifts downwards on tuplets.** Seven sixteenth-septuplets
+  measure 137 ticks each, so 959 where a quarter note is 960. The comparison
+  therefore carries a tolerance of one tick per beat, which is the exact bound on
+  that truncation rather than a fudge factor. Measured across 17 real files and
+  11682 bars with that tolerance in place: exactly **one** bar came out overfull
+  (a 2/4 bar holding 2880 ticks against 1920) and one incomplete, both genuine.
 
 ## And one non-gotcha: `finish()` is not needed after the OTHER edits
 

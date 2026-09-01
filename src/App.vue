@@ -43,6 +43,10 @@
       <p v-else class="bar-placeholder">Drop a score to begin</p>
 
       <div class="bar-side bar-side-end">
+        <!-- How full the cursor's bar is. Next to the transport rather than in
+             a sidebar panel, because it is read WHILE typing and the sidebar is
+             collapsible. It shows itself only when there is a cursor. -->
+        <BarFill v-if="isScoreLoaded" />
         <BarsPerRow v-if="isScoreLoaded" />
         <!-- Always present, score or not: the shortcuts are worth reading before
              opening anything, and a help button that comes and goes is a help
@@ -176,6 +180,7 @@ import ScoreEditPanel from '@/components/ScoreEditPanel.vue'
 import TransportBar from '@/components/TransportBar.vue'
 import FileDropzone from '@/components/FileDropzone.vue'
 import BarsPerRow from '@/components/BarsPerRow.vue'
+import BarFill from '@/components/BarFill.vue'
 import HelpDialog from '@/components/HelpDialog.vue'
 
 const { loadFile, clearScore, isScoreLoaded, isDirty, scoreInfo, fileName, loadError } =
