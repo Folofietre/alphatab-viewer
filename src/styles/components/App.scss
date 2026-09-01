@@ -128,7 +128,6 @@
   position: absolute;
   top: 0;
   bottom: 0;
-  left: 0;
   z-index: 1;
   width: $rail-w;
   display: flex;
@@ -138,7 +137,6 @@
   padding: $gap-sm 0;
   background: var(--chrome);
   border: none;
-  border-right: 1px solid var(--chrome-border);
   border-radius: $radius-block;
   color: var(--chrome-text-muted);
   cursor: pointer;
@@ -148,6 +146,16 @@
     background: var(--chrome-raised);
     color: var(--chrome-text);
   }
+}
+.rail-left {
+  left: 0;
+  border-right: 1px solid var(--chrome-border);
+}
+// The mirror, at the other edge of the workspace. Same rail, same rules, the
+// border simply moves to the side that actually touches the score.
+.rail-right {
+  right: 0;
+  border-left: 1px solid var(--chrome-border);
 }
 .rail-icon {
   font-size: 0.8rem;
@@ -165,19 +173,31 @@
   position: absolute;
   top: 0;
   bottom: 0;
-  left: 0;
   z-index: 2;
   width: $sidebar-w;
   overflow-y: auto;
   background: var(--chrome);
   color: var(--chrome-text);
-  // The single vertical line separating panel from score.
-  border-right: 1px solid var(--chrome-border);
   transform: translateX(0);
   transition: transform $transition-slide;
+}
+.sidebar-left {
+  left: 0;
+  // The single vertical line separating panel from score.
+  border-right: 1px solid var(--chrome-border);
 
   &.closed {
     transform: translateX(-100%);
+  }
+}
+// The mirror. Slides off to the RIGHT when closed, not the left - it is
+// leaving toward its own edge of the workspace, same as the rail behind it.
+.sidebar-right {
+  right: 0;
+  border-left: 1px solid var(--chrome-border);
+
+  &.closed {
+    transform: translateX(100%);
   }
 }
 
@@ -203,9 +223,13 @@
   min-width: 0;
 }
 
-// Four tabs in a 290px sidebar is tight, so the label never wraps: a tab broken
-// over two lines would distort the whole strip, where a hair of horizontal
-// overflow would not.
+// The right strip has no tabs to switch between - SelectionEditPanel is the
+// only thing on this side - so it holds just the collapse control, and puts it
+// at the edge nearest the score rather than the outer edge, mirroring where the
+// left one sits relative to ITS tabs.
+.panel-tabs-right {
+  justify-content: flex-start;
+}
 
 // A tab is marked by an underline on the active one rather than by a filled
 // pill: it reads as "you are here in this structure" instead of as a button
@@ -252,18 +276,24 @@
   min-width: 0;
   display: flex;
   flex-direction: column;
-  // Leaves room for the overlaying panel. Intentionally NOT transitioned, see
-  // the note above.
-  margin-left: $sidebar-w;
+  // Leaves room for the overlaying panels on BOTH sides. Intentionally NOT
+  // transitioned, see the note above: collapsed is the resting assumption on
+  // each side independently, so opening either one is the exception that
+  // widens its own margin.
+  margin-left: $rail-w;
+  margin-right: $rail-w;
 
-  // Panel collapsed: only the rail still takes space.
-  &.railed {
-    margin-left: $rail-w;
+  &.left-open {
+    margin-left: $sidebar-w;
+  }
+  &.right-open {
+    margin-right: $sidebar-w;
   }
 
-  // No score open, so neither panel nor rail exists.
+  // No score open, so no panel and no rail exist on either side.
   &.full {
     margin-left: 0;
+    margin-right: 0;
   }
 }
 
@@ -289,12 +319,18 @@
     flex-direction: column;
     overflow: visible;
   }
-  .sidebar {
+  // Both sidebars collapse to the same rule: static, full width, capped
+  // height. Only the divider moves - each one keeps a border on the edge that
+  // actually touches the stage between them, left's bottom and right's top,
+  // now that stacking has turned "left of the score" and "right of the score"
+  // into "above" and "below" it.
+  .sidebar-left,
+  .sidebar-right {
     position: static;
     width: auto;
     max-height: 40vh;
+    border-left: none;
     border-right: none;
-    border-bottom: 1px solid var(--chrome-border);
     transform: none;
     transition: none;
 
@@ -302,22 +338,35 @@
       display: none;
     }
   }
+  .sidebar-left {
+    border-bottom: 1px solid var(--chrome-border);
+  }
+  .sidebar-right {
+    border-top: 1px solid var(--chrome-border);
+  }
   // No horizontal room for a vertical rail; the panel's own header button and
-  // this rail collapse into a plain full-width strip instead.
-  .rail {
+  // these rails collapse into plain full-width strips instead.
+  .rail-left,
+  .rail-right {
     position: static;
     width: auto;
     height: $rail-w;
     flex-direction: row;
     justify-content: center;
+    border-left: none;
     border-right: none;
-    border-bottom: 1px solid var(--chrome-border);
 
-    // In the stacked layout the rail cannot hide behind the panel, so it has
-    // to step aside explicitly while the panel is open.
+    // In the stacked layout a rail cannot hide behind its panel, so it has to
+    // step aside explicitly while the panel is open.
     &.covered {
       display: none;
     }
+  }
+  .rail-left {
+    border-bottom: 1px solid var(--chrome-border);
+  }
+  .rail-right {
+    border-top: 1px solid var(--chrome-border);
   }
   .rail-label {
     writing-mode: horizontal-tb;
@@ -325,8 +374,10 @@
   }
   .stage,
   .stage.full,
-  .stage.railed {
+  .stage.left-open,
+  .stage.right-open {
     margin-left: 0;
+    margin-right: 0;
   }
 }
 

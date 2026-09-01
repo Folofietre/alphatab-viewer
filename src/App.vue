@@ -73,15 +73,15 @@
       <button
         v-if="isScoreLoaded"
         type="button"
-        class="rail"
-        :class="{ covered: isTracksOpen }"
-        :aria-expanded="isTracksOpen"
-        :inert="isTracksOpen ? true : undefined"
-        :title="`Show the ${activePanelLabel.toLowerCase()} panel`"
-        @click="isTracksOpen = true"
+        class="rail rail-left"
+        :class="{ covered: isLeftOpen }"
+        :aria-expanded="isLeftOpen"
+        :inert="isLeftOpen ? true : undefined"
+        :title="`Show the ${activeLeftPanelLabel.toLowerCase()} panel`"
+        @click="isLeftOpen = true"
       >
         <span class="rail-icon" aria-hidden="true">&raquo;</span>
-        <span class="rail-label">{{ activePanelLabel }}</span>
+        <span class="rail-label">{{ activeLeftPanelLabel }}</span>
       </button>
 
       <!-- `inert` rather than aria-hidden: the panel keeps focusable controls
@@ -91,16 +91,16 @@
            inert, and Vue only omits an attribute when it is null/undefined. -->
       <aside
         v-if="isScoreLoaded"
-        class="sidebar"
-        :class="{ closed: !isTracksOpen }"
-        :inert="isTracksOpen ? undefined : true"
+        class="sidebar sidebar-left"
+        :class="{ closed: !isLeftOpen }"
+        :inert="isLeftOpen ? undefined : true"
       >
-        <!-- Four panels, one at a time, split by SCOPE rather than by feature:
-             Mixer is what you see and hear and is never saved; Track edits one
-             whole track; Score edits the document; Edit acts on whatever is
-             selected in the score. Mixing a tempo field in among a track's name
-             and tuning was the confusion this replaces, and a note nudge sitting
-             under a track's tuning was the same mistake one level down.
+        <!-- GLOBAL settings only: what is displayed and heard, one whole track,
+             the document. Split by SCOPE rather than by feature - mixing a tempo
+             field in among a track's name and tuning was the confusion this
+             replaces. What is currently SELECTED lives on the other side, in the
+             independent Edit panel: those two kinds of control do not compete
+             for the same 290px, and opening one no longer hides the other.
 
              Tabs rather than a stack: the sidebar is 290px wide and the track
              list is arbitrarily long, so a panel below it would be unreachable
@@ -133,7 +133,7 @@
             class="panel-collapse"
             title="Hide this panel"
             aria-label="Hide the sidebar panel"
-            @click="isTracksOpen = false"
+            @click="isLeftOpen = false"
           >&laquo;</button>
         </div>
 
@@ -143,12 +143,15 @@
         <TrackList v-show="panel === 'mixer'" />
         <TrackEditPanel v-show="panel === 'track'" />
         <ScoreEditPanel v-show="panel === 'score'" />
-        <SelectionEditPanel v-show="panel === 'edit'" />
       </aside>
 
       <div
         class="stage"
-        :class="{ full: !isScoreLoaded, railed: isScoreLoaded && !isTracksOpen }"
+        :class="{
+          full: !isScoreLoaded,
+          'left-open': isScoreLoaded && isLeftOpen,
+          'right-open': isScoreLoaded && isRightOpen,
+        }"
       >
         <!-- ScoreViewer owns the alphaTab instance, so it stays mounted even
              before a file is dropped: `loadFile` needs a live api, and alphaTab
@@ -158,6 +161,45 @@
           <FileDropzone @file="openFile" />
         </div>
       </div>
+
+      <!-- The mirror of the left sidebar, holding ONLY what is selected: one
+           note, a dragged passage, or the cursor. It is a single panel rather
+           than another tab strip, because there is nothing else at this scope
+           to switch to - the label lives in SelectionEditPanel's own header,
+           and this outer strip carries just the collapse control, exactly like
+           the left one already does alongside its tabs. -->
+      <aside
+        v-if="isScoreLoaded"
+        class="sidebar sidebar-right"
+        :class="{ closed: !isRightOpen }"
+        :inert="isRightOpen ? undefined : true"
+      >
+        <div class="panel-tabs panel-tabs-right">
+          <button
+            type="button"
+            class="panel-collapse"
+            title="Hide the edit panel"
+            aria-label="Hide the edit panel"
+            @click="isRightOpen = false"
+          >&raquo;</button>
+        </div>
+        <SelectionEditPanel />
+      </aside>
+
+      <button
+        v-if="isScoreLoaded"
+        type="button"
+        class="rail rail-right"
+        :class="{ covered: isRightOpen }"
+        :aria-expanded="isRightOpen"
+        :inert="isRightOpen ? true : undefined"
+        title="Show the edit panel"
+        aria-label="Show the edit panel"
+        @click="isRightOpen = true"
+      >
+        <span class="rail-icon" aria-hidden="true">&laquo;</span>
+        <span class="rail-label">Edit</span>
+      </button>
     </div>
 
     <HelpDialog />
@@ -217,33 +259,34 @@ function closeScore() {
   clearScore()
 }
 
-// The sidebar slides away on request. State lives here because the panel and the
-// rail both drive it, and App owns the layout.
-const isTracksOpen = ref(true)
+// Both sidebars slide away independently: they hold different SCOPES of
+// control (global settings on the left, whatever is selected on the right), so
+// there is no reason opening one should require closing the other. State lives
+// here because a rail, a panel and App's own layout all need it.
+const isLeftOpen = ref(true)
+const isRightOpen = ref(true)
 
-// Which sidebar panel is showing.
+// Which LEFT panel is showing. The right side has exactly one panel
+// (SelectionEditPanel) and so needs no tab state of its own.
 //
 // Named for the SCOPE each one acts on. "Mixer" rather than "Tracks", because
 // "Tracks" next to "Track" reads as the same thing, and what that panel does is
 // choose what is displayed and mix what is heard - none of which is saved.
 //
-// Each panel now holds ONE scope and nothing else: Track carries no note
-// controls, Score carries no track controls.
+// Each panel holds ONE scope and nothing else: Track carries no note controls,
+// Score carries no track controls, and nothing here acts on a selection - that
+// moved out to the right, which is what freed three tabs to fit comfortably
+// again instead of four squeezed ones.
 const PANELS = [
   { id: 'mixer', label: 'Mixer' },
   { id: 'track', label: 'Track' },
   { id: 'score', label: 'Score' },
-  // Named for the ACT rather than the scope, unlike the other three: what it
-  // works on is a note, or a passage, or a position on an empty string,
-  // depending on what was last clicked, and none of those is a short noun that
-  // covers the others.
-  { id: 'edit', label: 'Edit' },
 ]
 const panel = ref('mixer')
 
-// The rail names the panel it will reveal, so collapsing does not lose the
-// user's place.
-const activePanelLabel = computed(
+// The left rail names the panel it will reveal, so collapsing does not lose the
+// user's place. The right rail needs no such lookup: it only ever says "Edit".
+const activeLeftPanelLabel = computed(
   () => PANELS.find((p) => p.id === panel.value)?.label ?? PANELS[0].label,
 )
 
