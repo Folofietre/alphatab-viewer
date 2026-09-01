@@ -157,8 +157,11 @@
   right: 0;
   border-left: 1px solid var(--chrome-border);
 }
+// The direction glyph, and the only thing on the rail that says which way it
+// will move. Sized up from 0.8rem: a guillemet draws small for its point size,
+// and at 12px it read as punctuation rather than as an affordance.
 .rail-icon {
-  font-size: 0.8rem;
+  font-size: 1.1rem;
   line-height: 1;
 }
 .rail-label {
@@ -217,6 +220,15 @@
   padding: 0 $gap-sm;
   background: var(--chrome);
   border-bottom: 1px solid var(--chrome-border);
+  // Pinned, so the two strips line up across the score.
+  //
+  // Without it each side is only as tall as what it happens to hold: the left
+  // is driven by its tabs (0.68rem text on 0.42rem padding plus the 2px
+  // underline, ~29px at the 15px root), the right by its lone collapse button
+  // (~17px). That is a 12px step between two bands that read as one horizontal
+  // rule. 2rem clears the taller of the two, so both land on the same line and
+  // stay there when the glyph inside either one changes size.
+  min-height: 2rem;
 }
 .tabs {
   display: flex;
@@ -265,8 +277,11 @@
 .panel-collapse {
   @include button-chrome;
   align-self: center;
-  padding: 0.1rem 0.34rem;
-  font-size: 0.8rem;
+  // Matches .rail-icon: this is the same affordance as the rail's glyph, one
+  // closing and one opening, so the two must not be different sizes. The
+  // padding widens with it to keep the guillemet off the border.
+  padding: 0.1rem 0.4rem;
+  font-size: 1.1rem;
   line-height: 1;
 }
 
