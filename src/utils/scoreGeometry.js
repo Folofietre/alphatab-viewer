@@ -11,6 +11,23 @@
 // relative to the top-left of the alphaTab host element, needing no scroll
 // maths because the overlay lives inside the scrolled content.
 
+// The `Bar` a rendered row belongs to - NEVER `barBounds.bar` directly.
+//
+// That field is empty in the running app, and this is the trap this whole module
+// has to be written around. alphaTab renders in a WORKER by default
+// (`core.useWorkers` is true and nothing here overrides it), and the worker hands
+// the bounds back as JSON: `BoundsLookup.fromJson` rebuilds each `BarBounds` with
+// its two rectangles and its beats, and **never assigns `bar`**. Rendering
+// synchronously through `ScoreRenderer` keeps it, which is exactly why a test
+// suite can pass while the feature is dead in the browser.
+//
+// `BeatBounds.beat` IS restored - `fromJson` resolves it back out of the score by
+// track / staff / bar / voice / beat index - so the beat is the reliable route to
+// the model, in both paths.
+function barOf(barBounds) {
+  return barBounds?.bar ?? barBounds?.beats?.[0]?.beat?.voice?.bar ?? null
+}
+
 // A bar is drawn once per NOTATION, not once per staff.
 //
 // `staff.showStandardNotation` and `staff.showTablature` can both be true on one
@@ -25,7 +42,7 @@
 // `showNumbered` included. Sorting by Y - which `MasterBarBounds.finish()`
 // already does - therefore puts it last.
 function rendersOfBar(masterBarBounds, bar) {
-  return (masterBarBounds?.bars ?? []).filter((bounds) => bounds.bar === bar)
+  return (masterBarBounds?.bars ?? []).filter((bounds) => barOf(bounds) === bar)
 }
 
 // The vertical band the click fell in, or the nearest one.
@@ -159,7 +176,7 @@ export function positionAtPoint(lookup, x, y) {
   const beatBounds = beatBoundsAtX(barBounds, x)
   if (!beatBounds) return null
 
-  const bar = barBounds.bar
+  const bar = barOf(barBounds)
   const staff = bar?.staff ?? null
   const strings = staff?.tuning?.length ?? 0
   const renders = rendersOfBar(masterBarBounds, bar)
@@ -201,7 +218,7 @@ export function cursorRects(lookup, beat, string) {
 
   // The tablature is the last render of the bar. See rendersOfBar.
   const bounds = list[list.length - 1]
-  const staff = bounds.barBounds?.bar?.staff ?? null
+  const staff = barOf(bounds.barBounds)?.staff ?? null
   const barVisual = bounds.barBounds?.visualBounds ?? null
   const strings = staff?.tuning?.length ?? 0
   if (!barVisual || strings === 0 || !staff.showTablature) return []
@@ -227,7 +244,7 @@ export function barRects(lookup, accept) {
     for (const masterBarBounds of system.bars ?? []) {
       const merged = new Map()
       for (const barBounds of masterBarBounds.bars ?? []) {
-        const bar = barBounds.bar
+        const bar = barOf(barBounds)
         if (!bar || !accept(bar)) continue
         const b = barBounds.visualBounds
         const current = merged.get(bar)

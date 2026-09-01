@@ -239,6 +239,22 @@ guessed: `StaveProfile._createDefaultStaveProfiles` lists the renderers as
 `Slash, Score, Numbered, Tab`, so the tablature is drawn below every other
 notation of the same staff, `showSlash` and `showNumbered` included.
 
+### Never `barBounds.bar` - it is empty in the browser
+
+Everything above depends on getting from a rectangle back to a `Bar`, and the
+obvious field does not work in the running app: alphaTab renders in a worker and
+`BoundsLookup.fromJson` never restores `BarBounds.bar`. Rendering synchronously
+through `ScoreRenderer`, which is what a Node test must do, keeps it - so this is
+green in every test and `undefined` on screen. `BeatBounds.beat` is restored, so
+the beat is the route:
+
+```js
+const bar = barBounds?.bar ?? barBounds?.beats?.[0]?.beat?.voice?.bar ?? null
+```
+
+Full details, and what it broke, in
+[gotcha 9](alphatab-gotchas.md#9-barboundsbar-is-empty-in-the-browser-and-full-in-your-tests).
+
 ### A click anywhere in the bar is projected onto that row
 
 This started as "a click on the standard staff has no string", which is honest

@@ -1,9 +1,9 @@
 # alphaTab gotchas
 
 
-All eight were found by running code against alphaTab **1.8.4** in Node, not by
-reading the docs, and each one silently corrupts an edit - or lets a corrupt one
-through - if you do the obvious thing. They are the reason
+All nine were found by running code against alphaTab **1.8.4**, not by reading
+the docs, and each one silently corrupts an edit - or lets a corrupt one
+through, or quietly disables a feature - if you do the obvious thing. They are the reason
 [src/utils/scoreEdits.js](../src/utils/scoreEdits.js) exists as its own module.
 
 ## 1. `score.tempo` is read-only
@@ -215,6 +215,46 @@ Two details worth keeping:
   that truncation rather than a fudge factor. Measured across 17 real files and
   11682 bars with that tolerance in place: exactly **one** bar came out overfull
   (a 2/4 bar holding 2880 ticks against 1920) and one incomplete, both genuine.
+
+## 9. `BarBounds.bar` is empty in the browser, and full in your tests
+
+The one that cost the most, because everything was green while three features
+were dead on screen.
+
+alphaTab renders in a **worker** by default (`core.useWorkers` is true) and posts
+the bounds lookup back as JSON. `BoundsLookup.fromJson` rebuilds each `BarBounds`
+with its two rectangles and its beats, and never assigns `bar`:
+
+```js
+const b = new BarBounds();
+b.visualBounds = BoundsLookup._boundsFromJson(bar.get("visualBounds"));
+b.realBounds   = BoundsLookup._boundsFromJson(bar.get("realBounds"));
+mb.addBar(b);            // <- no b.bar anywhere, and toJson() never wrote one
+```
+
+Rendering synchronously through `ScoreRenderer` - which is what a Node test does,
+because it is the only way to reach a lookup without an `AlphaTabApi` and a DOM -
+keeps the field. So `barBounds.bar` is a `Bar` in every test and `undefined` in
+the app.
+
+What that silently broke: the string a click resolves to (always null, so half
+the score placed a cursor with no string), the cursor rectangle on a tablature
+(never drawn), and the red outline on an overfull bar (never found). No error
+anywhere - each one just read `undefined?.staff` and took the empty branch.
+
+`BeatBounds.beat` **is** restored, resolved back out of the score by track /
+staff / bar / voice / beat index, and so is `NoteBounds.note`. So the beat is the
+reliable route to the model:
+
+```js
+const bar = barBounds?.bar ?? barBounds?.beats?.[0]?.beat?.voice?.bar ?? null
+```
+
+The lesson beyond this field: **a test that renders through `ScoreRenderer` is
+not testing the lookup the app gets.** `scoreGeometry.test.js` now runs every
+assertion twice, once against the direct lookup and once against
+`BoundsLookup.fromJson(direct.toJson(), score)`, which is exactly the shape the
+worker delivers.
 
 ## And one non-gotcha: `finish()` is not needed after the OTHER edits
 

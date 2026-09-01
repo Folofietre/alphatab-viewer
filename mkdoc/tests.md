@@ -30,6 +30,15 @@ Two suites render for real rather than stubbing. `noteSelection.test.js` and
 alphaTab actually drew things. Stubbing a lookup there would only assert that two
 stubs agree; the claims being made are about alphaTab's own layout.
 
+**But rendering directly is not what the app does**, and that gap once let three
+features ship dead with a green suite: alphaTab renders in a worker and posts the
+bounds back as JSON, and `BoundsLookup.fromJson` does not restore
+`BarBounds.bar`. See
+[gotcha 9](alphatab-gotchas.md#9-barboundsbar-is-empty-in-the-browser-and-full-in-your-tests).
+`scoreGeometry.test.js` therefore runs every assertion **twice**, once against
+the direct lookup and once against `BoundsLookup.fromJson(direct.toJson(),
+score)`, which is the shape the worker delivers.
+
 Not covered by any test, and needing a browser: whether the incremental render is
 visibly faster on a large score, how a held `Alt`+arrow feels, and whether the
 view follows the cursor comfortably when an arrow walks it off the screen.

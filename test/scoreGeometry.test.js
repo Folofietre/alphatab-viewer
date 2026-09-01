@@ -21,7 +21,7 @@ import { loadFixture, settings } from './helpers'
 // Rendered through `ScoreRenderer` directly, exactly like noteSelection.test.js:
 // no AlphaTabApi and no DOM, which is what lets a Node test reach the bounds.
 
-function render(score, tracks) {
+function renderDirect(score, tracks) {
   const renderSettings = new alphaTab.Settings()
   renderSettings.core.engine = 'svg'
   renderSettings.core.enableLazyLoading = false
@@ -34,6 +34,44 @@ function render(score, tracks) {
   return renderer.boundsLookup
 }
 
+// The lookup as the APP receives it, which is not the one above.
+//
+// `core.useWorkers` defaults to true and nothing in playerSettings() turns it
+// off, so alphaTab renders in a worker and posts the bounds back as JSON.
+// `BoundsLookup.fromJson` rebuilds each `BarBounds` with its rectangles and its
+// beats and NEVER assigns `bar` - the field is simply absent in the browser.
+//
+// That gap cost three features at once, all of them green in this file:
+// the string a click resolves to, the cursor rectangle on a tablature, and the
+// red outline on an overfull bar. Every one of them read `barBounds.bar`.
+//
+// So every test here runs against BOTH lookups. A test that only ever sees the
+// direct one is testing a code path the app does not use.
+function renderViaWorker(score, tracks) {
+  const direct = renderDirect(score, tracks)
+  const rebuilt = alphaTab.rendering.BoundsLookup.fromJson(direct.toJson(), score)
+  rebuilt.finish()
+  return rebuilt
+}
+
+const LOOKUPS = [
+  ['rendered directly', renderDirect],
+  ['round-tripped through the worker', renderViaWorker],
+]
+
+// Runs one body once per lookup shape, so a claim has to hold in both.
+function forEachLookup(name, body) {
+  for (const [label, make] of LOOKUPS) {
+    it(`${name} (${label})`, () => body(make))
+  }
+}
+
+// The same rule the module under test follows: never read `barBounds.bar`, which
+// the worker's lookup does not carry. The beat is the reliable route.
+function barOf(barBounds) {
+  return barBounds?.bar ?? barBounds?.beats?.[0]?.beat?.voice?.bar ?? null
+}
+
 // Every note that was drawn on a tablature row, with the rectangle it was drawn
 // in and the row it belongs to.
 function tabNotes(lookup) {
@@ -42,8 +80,9 @@ function tabNotes(lookup) {
     for (const masterBarBounds of system.bars) {
       const byBar = new Map()
       for (const barBounds of masterBarBounds.bars) {
-        if (!byBar.has(barBounds.bar)) byBar.set(barBounds.bar, [])
-        byBar.get(barBounds.bar).push(barBounds)
+        const bar = barOf(barBounds)
+        if (!byBar.has(bar)) byBar.set(bar, [])
+        byBar.get(bar).push(barBounds)
       }
       for (const [bar, renders] of byBar) {
         const staff = bar.staff
@@ -61,7 +100,7 @@ function tabNotes(lookup) {
 }
 
 describe('reading a string off a Y coordinate', () => {
-  it('is exact for every note of every stringed track, all six displayed', () => {
+  forEachLookup('is exact for every note of every stringed track, all six displayed', (render) => {
     // The claim the whole click-on-an-empty-string feature rests on. Not "close
     // enough": if this were off by one line, clicking would place the cursor on
     // the wrong string with no way for the user to tell why.
@@ -78,7 +117,7 @@ describe('reading a string off a Y coordinate', () => {
     }
   })
 
-  it('covers staves with 4, 6 and 7 strings, not just the common one', () => {
+  forEachLookup('covers staves with 4, 6 and 7 strings, not just the common one', (render) => {
     const lookup = render(loadFixture())
     const counts = new Set(tabNotes(lookup).map((n) => n.strings))
     expect([...counts].sort((a, b) => a - b)).toEqual([4, 6, 7])
@@ -104,7 +143,7 @@ describe('reading a string off a Y coordinate', () => {
 })
 
 describe('turning a click into a position', () => {
-  it('lands on the track that was clicked, which the beat lookup alone does not', () => {
+  forEachLookup('lands on the track that was clicked, which the beat lookup alone does not', (render) => {
     // alphaTab's own `getBeatAtPos` picks the bar by X only, so with several
     // tracks on screen it can hand back a beat from a different one. Selecting a
     // note hides that (the note hit-test uses Y); an empty string has no such
@@ -118,11 +157,11 @@ describe('turning a click into a position', () => {
       expect(position).not.toBeNull()
       expect(position.beat).toBe(noteBounds.note.beat)
       expect(position.string).toBe(noteBounds.note.string)
-      expect(position.bar).toBe(tab.bar)
+      expect(position.bar).toBe(barOf(tab))
     }
   })
 
-  it('projects a click on the standard row onto the tablature, clamped', () => {
+  forEachLookup('projects a click on the standard row onto the tablature, clamped', (render) => {
     // Interpolating a string against the standard row is not merely imprecise,
     // it is wrong: measured, it answers string 3 for a note on string 4. But
     // answering "no string" made half of every bar unclickable, so the click is
@@ -134,17 +173,17 @@ describe('turning a click into a position', () => {
     const masterBarBounds = lookup.staffSystems[0].bars[0]
     const standard = masterBarBounds.bars[0]
     const tab = masterBarBounds.bars[masterBarBounds.bars.length - 1]
-    expect(standard.bar).toBe(tab.bar)
+    expect(barOf(standard)).toBe(barOf(tab))
     expect(standard).not.toBe(tab)
 
     const y = standard.visualBounds.y + standard.visualBounds.h / 2
     const position = positionAtPoint(lookup, standard.visualBounds.x + 20, y)
     expect(position.isTablature).toBe(false)
-    expect(position.string).toBe(standard.bar.staff.tuning.length)
+    expect(position.string).toBe(barOf(standard).staff.tuning.length)
     expect(position.beat).not.toBeNull()
   })
 
-  it('so every pixel of a bar with a tablature resolves to a string', () => {
+  forEachLookup('so every pixel of a bar with a tablature resolves to a string', (render) => {
     // The regression this replaced: swept pixel by pixel down one system, HALF
     // the height of a bar used to place a cursor carrying no string at all.
     const score = loadFixture()
@@ -162,7 +201,7 @@ describe('turning a click into a position', () => {
     expect(none).toBe(0)
   })
 
-  it('but reports no string where there is no tablature to project onto', () => {
+  forEachLookup('but reports no string where there is no tablature to project onto', (render) => {
     // A stringed staff with its tab hidden, which a real .gp file can carry:
     // standard notation only. There is nothing to read a string off, and
     // inventing one would be a lie rather than an approximation.
@@ -180,7 +219,7 @@ describe('turning a click into a position', () => {
     expect(position.string).toBeNull()
   })
 
-  it('takes the NEAREST row, because the gap between two staves belongs to none', () => {
+  forEachLookup('takes the NEAREST row, because the gap between two staves belongs to none', (render) => {
     // Measured on the fixture: the standard staff ends at y+36 and the tablature
     // starts 56px lower. A click in between must not do nothing.
     const score = loadFixture()
@@ -197,7 +236,7 @@ describe('turning a click into a position', () => {
     expect(position.string).toBe(6)
   })
 
-  it('resolves a note sitting exactly on its beat edge to ITS beat', () => {
+  forEachLookup('resolves a note sitting exactly on its beat edge to ITS beat', (render) => {
     // alphaTab's own `findBeatAtPos` compares with a strict `<`, so a note head
     // drawn exactly at its beat's left edge - which the Ties track really does -
     // resolves to the previous beat. One pixel wide, but it is the pixel the
@@ -224,7 +263,7 @@ describe('turning a click into a position', () => {
 })
 
 describe('drawing the cursor', () => {
-  it('puts it on the tablature row, at the string it was asked for', () => {
+  forEachLookup('puts it on the tablature row, at the string it was asked for', (render) => {
     const score = loadFixture()
     const lookup = render(score, [0])
     const note = score.tracks[0].staves[0].bars[0].voices[0].beats[0].notes[0]
@@ -246,7 +285,7 @@ describe('drawing the cursor', () => {
     expect(Math.abs(centre.x - (tabHead.x + tabHead.w / 2))).toBeLessThan(8)
   })
 
-  it('draws a caret on every row when the position has no string yet', () => {
+  forEachLookup('draws a caret on every row when the position has no string yet', (render) => {
     const score = loadFixture()
     const lookup = render(score, [0])
     const beat = score.tracks[0].staves[0].bars[0].voices[0].beats[0]
@@ -261,7 +300,7 @@ describe('drawing the cursor', () => {
     expect(rects[0].y).not.toBe(rects[1].y)
   })
 
-  it('draws nothing for a beat that was not rendered', () => {
+  forEachLookup('draws nothing for a beat that was not rendered', (render) => {
     const score = loadFixture()
     const lookup = render(score, [0])
     // A beat of a track that is not displayed.
@@ -271,7 +310,7 @@ describe('drawing the cursor', () => {
 })
 
 describe('marking the overfull bars', () => {
-  it('produces one rectangle per bar, covering all of its notation rows', () => {
+  forEachLookup('produces one rectangle per bar, covering all of its notation rows', (render) => {
     const score = loadFixture()
     const bar = score.tracks[0].staves[0].bars[1]
     bar.voices[0].beats[0].duration = alphaTab.model.Duration.Whole
@@ -287,7 +326,7 @@ describe('marking the overfull bars', () => {
     const rows = lookup.staffSystems
       .flatMap((system) => system.bars)
       .flatMap((masterBarBounds) => masterBarBounds.bars)
-      .filter((barBounds) => barBounds.bar === bar)
+      .filter((barBounds) => barOf(barBounds) === bar)
     expect(rows.length).toBe(2)
     const top = Math.min(...rows.map((r) => r.visualBounds.y))
     const bottom = Math.max(...rows.map((r) => r.visualBounds.y + r.visualBounds.h))
@@ -295,7 +334,7 @@ describe('marking the overfull bars', () => {
     expect(rects[0].y + rects[0].h).toBe(bottom)
   })
 
-  it('marks nothing on a score whose bars are all correct', () => {
+  forEachLookup('marks nothing on a score whose bars are all correct', (render) => {
     const lookup = render(loadFixture())
     expect(barRects(lookup, (bar) => barFill(bar)?.state === BAR_OVER)).toEqual([])
   })
