@@ -38,8 +38,9 @@ import { createHistory } from '@/utils/scoreHistory'
 // The division of labour, which is the point of the whole design:
 //   scoreEdits.js       writes the model, and nothing else. Pure, named, tested.
 //   this file           decides what the write invalidates, and tracks selection.
-//   TrackEditPanel.vue  render flat reactive data and call the functions below.
-//   ScoreEditPanel.vue  Split by SCOPE: one edits a track, the other the score.
+//   TrackEditPanel.vue      render flat reactive data and call the functions
+//   ScoreEditPanel.vue      below. Split by SCOPE, one panel each: a whole
+//   SelectionEditPanel.vue  track, the document, and whatever is selected.
 //
 // No component ever touches the alphaTab model, so a command stack could be
 // added later by giving each function in scoreEdits.js an inverse, without

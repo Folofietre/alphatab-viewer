@@ -43,10 +43,6 @@
       <p v-else class="bar-placeholder">Drop a score to begin</p>
 
       <div class="bar-side bar-side-end">
-        <!-- How full the cursor's bar is. Next to the transport rather than in
-             a sidebar panel, because it is read WHILE typing and the sidebar is
-             collapsible. It shows itself only when there is a cursor. -->
-        <BarFill v-if="isScoreLoaded" />
         <BarsPerRow v-if="isScoreLoaded" />
         <!-- Always present, score or not: the shortcuts are worth reading before
              opening anything, and a help button that comes and goes is a help
@@ -99,10 +95,12 @@
         :class="{ closed: !isTracksOpen }"
         :inert="isTracksOpen ? undefined : true"
       >
-        <!-- Three panels, one at a time, split by SCOPE rather than by feature:
+        <!-- Four panels, one at a time, split by SCOPE rather than by feature:
              Mixer is what you see and hear and is never saved; Track edits one
-             track; Score edits the document. Mixing a tempo field in among a
-             track's name and tuning was the confusion this replaces.
+             whole track; Score edits the document; Edit acts on whatever is
+             selected in the score. Mixing a tempo field in among a track's name
+             and tuning was the confusion this replaces, and a note nudge sitting
+             under a track's tuning was the same mistake one level down.
 
              Tabs rather than a stack: the sidebar is 290px wide and the track
              list is arbitrarily long, so a panel below it would be unreachable
@@ -145,6 +143,7 @@
         <TrackList v-show="panel === 'mixer'" />
         <TrackEditPanel v-show="panel === 'track'" />
         <ScoreEditPanel v-show="panel === 'score'" />
+        <SelectionEditPanel v-show="panel === 'edit'" />
       </aside>
 
       <div
@@ -177,10 +176,10 @@ import ScoreHeader from '@/components/ScoreHeader.vue'
 import TrackList from '@/components/TrackList.vue'
 import TrackEditPanel from '@/components/TrackEditPanel.vue'
 import ScoreEditPanel from '@/components/ScoreEditPanel.vue'
+import SelectionEditPanel from '@/components/SelectionEditPanel.vue'
 import TransportBar from '@/components/TransportBar.vue'
 import FileDropzone from '@/components/FileDropzone.vue'
 import BarsPerRow from '@/components/BarsPerRow.vue'
-import BarFill from '@/components/BarFill.vue'
 import HelpDialog from '@/components/HelpDialog.vue'
 
 const { loadFile, clearScore, isScoreLoaded, isDirty, scoreInfo, fileName, loadError } =
@@ -227,10 +226,18 @@ const isTracksOpen = ref(true)
 // Named for the SCOPE each one acts on. "Mixer" rather than "Tracks", because
 // "Tracks" next to "Track" reads as the same thing, and what that panel does is
 // choose what is displayed and mix what is heard - none of which is saved.
+//
+// Each panel now holds ONE scope and nothing else: Track carries no note
+// controls, Score carries no track controls.
 const PANELS = [
   { id: 'mixer', label: 'Mixer' },
   { id: 'track', label: 'Track' },
   { id: 'score', label: 'Score' },
+  // Named for the ACT rather than the scope, unlike the other three: what it
+  // works on is a note, or a passage, or a position on an empty string,
+  // depending on what was last clicked, and none of those is a short noun that
+  // covers the others.
+  { id: 'edit', label: 'Edit' },
 ]
 const panel = ref('mixer')
 

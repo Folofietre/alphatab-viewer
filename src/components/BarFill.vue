@@ -29,6 +29,10 @@ import { useScoreEdit } from '@/composables/useScoreEdit'
 // rectangle on the score tells you which bars are wrong; this tells you how far
 // off the one under the cursor is, which is what you need before it goes wrong
 // rather than after.
+//
+// It lives centred in the document strip, next to what bar and what tempo the
+// score is - the same kind of fact about the document - rather than in the
+// action bar among the global controls.
 const { cursorBarFill: fill } = useScoreEdit()
 
 const title = computed(() => {

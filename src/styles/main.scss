@@ -50,7 +50,13 @@
   // both (the load error above the workspace, the edit refusals in the sidebar).
   --warn-bg:           rgba(190, 74, 52, 0.1);
   --warn-border:       rgba(190, 74, 52, 0.4);
-  --warn-text:         #9c3a26; // on the light working area
+  // The warning colour at full strength, for a FILLED chip rather than text.
+  // Needed on the mid-tone document strip, where every tinted text colour above
+  // falls under the AA threshold (measured against #67778c: the muted chrome
+  // text is 1.90:1 and the chrome warning text 2.34:1). White on this is
+  // 6.89:1, so the contrast moves into the fill instead of the glyphs.
+  --warn-solid:        #9c3a26;
+  --warn-text:         var(--warn-solid); // on the light working area
   --warn-text-chrome:  #f2a795; // on the dark chrome
 
   // -- Score rendering -----------------------------------------------------

@@ -12,14 +12,15 @@ src/
     useUnsavedGuard.js       warn before leaving the page with unsaved edits
   components/
     ScoreViewer.vue          owns the alphaTab host + scroll wrapper, calls init()
-    ScoreHeader.vue          document strip: title / artist / tempo / bars + close
+    ScoreHeader.vue          document strip: title / tempo / bars, the bar fill, close
+    BarFill.vue              how full the cursor's bar is, in beats (in the strip)
     TrackList.vue            "Mixer": display checkboxes, solo/mute/volume/pan
-    TrackEditPanel.vue       "Track": name, instrument, transpose, tuning, note
+    TrackEditPanel.vue       "Track": name, instrument, transpose, tuning
     ScoreEditPanel.vue       "Score": tempo, save, revert
+    SelectionEditPanel.vue   "Edit": the selected note or passage, and the cursor
     HelpDialog.vue           the "?" modal: shortcuts, generated from BINDINGS
     TransportBar.vue         play, stop, scrub, speed, volume, loop, click (in the action bar)
     BarsPerRow.vue           force a fixed number of bars per system
-    BarFill.vue              how full the cursor's bar is, in beats
     FileDropzone.vue         window-wide drag & drop + file picker
   assets/
     loop.png metronome.png   monochrome toggle icons, used as CSS masks

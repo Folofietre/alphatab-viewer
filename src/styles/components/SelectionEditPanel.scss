@@ -1,0 +1,65 @@
+@use '@/styles/mixins' as *;
+
+// Everything that acts on what is SELECTED: one note, a dragged passage, or the
+// cursor's position. Sits on the dark chrome supplied by .sidebar.
+//
+// Shares its visual language with the other edit panels through the edit-*
+// mixins, rather than by copying rules: three components, one look.
+.selection-edit-panel {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+header {
+  @include edit-header;
+}
+
+.message {
+  @include edit-message;
+}
+
+.legend {
+  @include edit-hint;
+  padding: $gap-sm;
+  font-size: 0.72rem;
+}
+
+.field {
+  @include edit-field;
+}
+
+hr {
+  @include edit-divider;
+}
+
+.row {
+  @include edit-row;
+}
+
+.hint {
+  @include edit-hint;
+}
+
+.danger {
+  @include edit-danger;
+}
+
+.inspector {
+  @include edit-inspector;
+}
+
+.badge {
+  @include edit-badge;
+
+  // The bar-fill read-out reuses the badge, and needs the one state that is
+  // worth a colour. Full-strength warning rather than the tinted text used
+  // elsewhere on this surface: a badge is a fill, so the contrast belongs in it.
+  &.over {
+    background: var(--warn-solid);
+  }
+}
+
+kbd {
+  @include edit-kbd;
+}

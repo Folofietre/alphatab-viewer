@@ -387,7 +387,16 @@ that is the reason it was built first: the net is hung before anyone walks on th
 wire.
 
 The counter beside it reads in **beats of the time signature** rather than ticks,
-because `3 / 4` says something to a musician where `2880 / 3840` does not.
+because `3 / 4` says something to a musician where `2880 / 3840` does not. It is
+centred in the document strip, among the other facts about the document.
+
+Its palette is not the chrome one it started with, and the reason is measured.
+The strip is `#67778c`, which gives pure white only 4.57:1, so anything tinted or
+below full opacity falls under AA: the muted chrome text scores **1.90:1** there
+and the chrome warning text **2.34:1**. So every glyph is full-opacity white,
+hierarchy comes from weight and size - the rule `ScoreHeader.scss` already
+documents for the metadata beside it - and the overfull state moves its contrast
+into a filled chip, where white on `--warn-solid` measures 6.89:1.
 
 ## The octave is a re-fingering, not a fret shift
 

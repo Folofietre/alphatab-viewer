@@ -76,7 +76,8 @@
 
     <p class="legend">
       Names, instruments, tunings and transposition belong to a single track, and
-      live in the <strong>Track</strong> tab.
+      live in the <strong>Track</strong> tab. Anything acting on the note or the
+      passage you have selected is in <strong>Edit</strong>.
     </p>
   </section>
 </template>

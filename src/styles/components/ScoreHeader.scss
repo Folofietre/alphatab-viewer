@@ -5,14 +5,31 @@
 // delimiting line at the bottom.
 .score-header {
   flex: none;
-  display: flex;
-  align-items: baseline;
+  display: grid;
+  // Same three-column trick as the action bar: the middle stays optically
+  // centred in the STRIP however wide the title or the button get, which a
+  // flex row with `flex: 1` on the left could not do.
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
   gap: $gap-md;
   padding: 0.45rem $gap-md;
   background: var(--docstrip);
   border-bottom: 1px solid var(--docstrip-border);
   border-radius: $radius-block;
   color: var(--docstrip-text);
+}
+
+// What is open: title and metadata, kept on one baseline together.
+.doc {
+  display: flex;
+  align-items: baseline;
+  gap: $gap-md;
+  min-width: 0;
+}
+
+.centre {
+  display: flex;
+  justify-content: center;
 }
 
 .title {
@@ -51,6 +68,7 @@
 // an outline on it rather than another filled shape.
 .close {
   flex: none;
+  justify-self: end;
   background: rgba(255, 255, 255, 0.12);
   border-color: rgba(255, 255, 255, 0.35);
   color: var(--docstrip-text);

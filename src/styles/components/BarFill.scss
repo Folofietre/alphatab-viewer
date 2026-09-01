@@ -1,46 +1,47 @@
 @use '@/styles/mixins' as *;
 
-// Sits in the dark action bar, so it draws no surface of its own - except in
-// the one state that has to be seen without being looked for.
+// Sits in the document strip, centred, so it draws no surface of its own -
+// except in the one state that has to be seen without being looked for.
+//
+// EVERY colour here is at full opacity, and that is not a style choice. The
+// strip is #67778c, which gives pure white only 4.57:1: any tint or opacity
+// below 100% drops small text under the AA threshold. Measured against it, the
+// muted chrome text this used to borrow scores 1.90:1 and the chrome warning
+// text 2.34:1 - both unreadable here. So hierarchy comes from WEIGHT and SIZE,
+// exactly as ScoreHeader.scss already documents for the metadata beside it, and
+// the one state that needs a colour gets a filled chip instead of tinted
+// glyphs.
 .bar-fill {
   display: flex;
   align-items: baseline;
-  gap: 0.35rem;
-  padding: 0.15rem 0.4rem;
+  gap: 0.4rem;
+  padding: 0.1rem 0.45rem;
   border: 1px solid transparent;
   border-radius: $radius-control;
   font-size: 0.72rem;
   white-space: nowrap;
-  color: var(--chrome-text-muted);
-}
-
-.where {
-  color: var(--chrome-text-muted);
+  color: var(--docstrip-text);
 }
 
 .count {
   @include tabular;
-  font-size: 0.78rem;
-  color: var(--chrome-text);
+  font-size: 0.82rem;
+  font-weight: 700;
 }
 
 .unit {
   @include tabular;
-  opacity: 0.6;
 }
 
 // Incomplete is NORMAL - it is what every bar looks like while it is being
-// written - so it is not marked at all. Only the two ends say anything.
-.exact .count {
-  color: var(--accent-soft);
-}
+// written - and complete needs no announcement either. Neither is marked: the
+// numbers say it, and the only state worth a colour is the one nothing else in
+// the stack reports.
 
+// Over its time signature. A filled chip rather than red text, because red text
+// on this strip cannot reach AA; white on the solid warning colour is 6.89:1.
 .over {
-  border-color: var(--warn-border);
-  background: var(--warn-bg);
-
-  .count,
-  .where {
-    color: var(--warn-text-chrome);
-  }
+  background: var(--warn-solid);
+  border-color: var(--warn-solid);
+  color: var(--text-inverse);
 }

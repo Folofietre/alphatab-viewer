@@ -25,9 +25,15 @@ live setter, so it goes through the data model and a midi rebuild; the slider
 previews while dragging and commits once on release. See
 [the mixer gotcha](alphatab-gotchas.md#the-model-side-mixer-gotcha).
 
-**Collapsible sidebar, three tabs** - `Mixer`, `Track`, `Score`, named for the
-scope each one acts on. `Mixer` rather than `Tracks`, because "Tracks" next to
-"Track" reads as the same thing.
+**Collapsible sidebar, four tabs** - `Mixer`, `Track`, `Score`, `Edit`, named
+for the scope each one acts on. `Mixer` rather than `Tracks`, because "Tracks"
+next to "Track" reads as the same thing. Each panel holds one scope and nothing
+else: `Track` carries no note controls and `Score` carries no track controls,
+and everything acting on what is currently selected is in `Edit`.
+
+`Edit` is the one named for the act rather than the scope, because what it works
+on has no short noun that covers all of it: a note, a dragged passage, or a
+position on an empty string, depending on what was last clicked.
 
 Tabs rather than a stack: the sidebar is 290px wide and the track list is
 arbitrarily long, so a panel below it would be unreachable on a nine-track score.
@@ -47,9 +53,9 @@ The panels are toggled with `v-show`, not `v-if`: switching tabs must not throw
 away a half-typed name or a chosen tuning, and none of them is expensive enough
 to unmount.
 
-`ScoreEditPanel` and `TrackEditPanel` are two components with one visual
-language, so their shared pieces are `edit-*` **mixins** in `_mixins.scss` rather
-than copied rules. Mixins, not a shared rule block: that partial must never emit
+`TrackEditPanel`, `ScoreEditPanel` and `SelectionEditPanel` are three components
+with one visual language, so their shared pieces are `edit-*` **mixins** in
+`_mixins.scss` rather than copied rules. Mixins, not a shared rule block: that partial must never emit
 CSS, since every SFC style block is its own Sass compilation unit and a rule
 placed there would be duplicated into all of them.
 
@@ -73,8 +79,9 @@ The one exception used to live there and moved out - the instrument picker, sinc
 a program number IS saved. The mixer still shows each track's instrument as a
 read-out, so the overview survives.
 
-Seven operations, all on the track selected in the Track tab (clicking a note in
-the score selects its track too):
+Eleven operations. The track-wide ones act on the track selected in the Track
+tab (clicking a note in the score selects its track too); the note-level ones act
+on what is selected, from the Edit tab:
 
 | Operation | What it writes |
 | --- | --- |
@@ -220,9 +227,12 @@ and is not part of this tier.
 
 ## Bars that hold too much
 
-The action bar shows **how full the cursor's bar is**, in beats of its own time
-signature: `3 / 4` for a 4/4 bar with a quarter note missing. Incomplete is not
-marked as a problem - it is what every bar looks like while it is being written.
+The document strip shows **how full the cursor's bar is**, centred, in beats of
+its own time signature: `3 / 4` for a 4/4 bar with a quarter note missing. It
+sits there rather than in the action bar because it is a fact about the
+document, like the tempo and the bar count beside it. Incomplete is not marked
+as a problem - it is what every bar looks like while it is being written; only
+the overflow turns into a red chip.
 
 A bar holding **more** than its time signature allows is outlined in red on the
 score. That is worth having because alphaTab will not tell you: its model, its
@@ -242,8 +252,8 @@ bars, changing durations, changing the number of strings.
 This is what the tab split encodes. The transport's **playback speed** and the
 **master volume** are listening preferences and are never written to the model,
 and neither are the Mixer tab's **volume**, **mute** and **solo**. Everything in
-the **Track** and **Score** tabs is written into the score and goes out with the
-file.
+the **Track**, **Score** and **Edit** tabs is written into the score and goes out
+with the file.
 
 One control sits on the wrong side of that line and stays there: **panning** is
 in the Mixer tab but IS model-side and does get saved, because alphaTab has no

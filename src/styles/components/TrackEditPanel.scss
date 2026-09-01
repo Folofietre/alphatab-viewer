@@ -1,10 +1,11 @@
 @use '@/styles/mixins' as *;
 
-// Track-level editing: name, instrument, transposition, tuning, and the
-// selected note. Sits on the dark chrome supplied by .sidebar.
+// Track-level editing, and ONLY that: name, instrument, transposition, tuning.
+// What is selected in the score is edited from the Edit tab instead. Sits on the
+// dark chrome supplied by .sidebar.
 //
-// Shares its visual language with ScoreEditPanel through the edit-* mixins,
-// rather than by copying rules: two components, one look.
+// Shares its visual language with the other edit panels through the edit-*
+// mixins, rather than by copying rules: three components, one look.
 .track-edit-panel {
   display: flex;
   flex-direction: column;
@@ -58,45 +59,8 @@ select {
   @include edit-hint;
 }
 
-// The one irreversible action in this panel, so it does not look like the
-// others. A warning tint rather than a red fill: it is a normal edit that
-// happens to be unrecoverable, not a hazard to be feared into avoiding.
-.danger {
-  border-color: var(--warn-border);
-  color: var(--warn-text-chrome);
-
-  &:hover:not(:disabled) {
-    background: var(--warn-bg);
-    border-color: var(--warn-text-chrome);
-    color: var(--warn-text-chrome);
-  }
-}
-
-// A read-out rather than a control: the selected note, or a percussion track's
-// fixed kit. Tabular so the numbers do not jitter as the selection moves.
+// A percussion track's fixed kit: a read-out where the other tracks get a
+// picker.
 .inspector {
-  @include tabular;
-  display: flex;
-  align-items: center;
-  gap: 0.35rem;
-  flex-wrap: wrap;
-  font-size: 0.7rem;
-  color: var(--chrome-text);
-}
-
-.badge {
-  padding: 0.06rem 0.3rem;
-  font-weight: 700;
-  background: var(--accent);
-  border-radius: $radius-control;
-  color: var(--text-inverse);
-}
-
-kbd {
-  @include tabular;
-  font-size: 0.62rem;
-  padding: 0.12rem 0.32rem;
-  border: 1px solid var(--chrome-divider);
-  border-radius: $radius-control;
-  color: var(--chrome-text-muted);
+  @include edit-inspector;
 }

@@ -203,12 +203,17 @@
   min-width: 0;
 }
 
+// Four tabs in a 290px sidebar is tight, so the label never wraps: a tab broken
+// over two lines would distort the whole strip, where a hair of horizontal
+// overflow would not.
+
 // A tab is marked by an underline on the active one rather than by a filled
 // pill: it reads as "you are here in this structure" instead of as a button
 // that is currently pressed.
 .tab {
   @include section-label;
-  padding: 0.42rem 0.55rem;
+  padding: 0.42rem 0.4rem;
+  white-space: nowrap;
   background: none;
   border: none;
   border-bottom: 2px solid transparent;

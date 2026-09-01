@@ -250,6 +250,52 @@
   }
 }
 
+// The one irreversible action in a panel, so it does not look like the others.
+// A warning tint rather than a red fill: it is a normal edit that happens to be
+// unrecoverable, not a hazard to be feared into avoiding.
+@mixin edit-danger {
+  border-color: var(--warn-border);
+  color: var(--warn-text-chrome);
+
+  &:hover:not(:disabled) {
+    background: var(--warn-bg);
+    border-color: var(--warn-text-chrome);
+    color: var(--warn-text-chrome);
+  }
+}
+
+// A read-out rather than a control: what is selected, or a value that cannot be
+// edited here. Tabular so the numbers do not jitter as the selection moves.
+@mixin edit-inspector {
+  @include tabular;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+  font-size: 0.7rem;
+  color: var(--chrome-text);
+}
+
+// The one value in a read-out that identifies what is selected.
+@mixin edit-badge {
+  padding: 0.06rem 0.3rem;
+  font-weight: 700;
+  background: var(--accent);
+  border-radius: $radius-control;
+  color: var(--text-inverse);
+}
+
+// The keyboard equivalent of a button, shown beside it. Quiet: the button is
+// the control, this only says there is another way in.
+@mixin edit-kbd {
+  @include tabular;
+  font-size: 0.62rem;
+  padding: 0.12rem 0.32rem;
+  border: 1px solid var(--chrome-divider);
+  border-radius: $radius-control;
+  color: var(--chrome-text-muted);
+}
+
 // Separates control groups without the weight of a border on each one.
 @mixin edit-divider {
   height: 0;
