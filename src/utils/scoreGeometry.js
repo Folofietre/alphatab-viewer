@@ -129,10 +129,23 @@ export function yOfString(visualBounds, string, strings) {
 // is a rectangle and does use Y. Placing a cursor on an EMPTY string has no such
 // second chance.
 //
-// `string` is null when the click landed on a notation that has no strings - the
-// standard staff of a guitar track, or a percussion staff. The interpolation is
-// meaningless there (it answers "string 3" for a note on string 4, measured), so
-// the honest answer is that this position has no string yet.
+// The string is always resolved against the TABLATURE row of the bar that was
+// clicked, whichever row the click actually landed in.
+//
+// This started out as "a click on the standard staff has no string", which is
+// true - the interpolation is not merely imprecise there, it answers string 3
+// for a note on string 4, measured. But it made half the score unusable to click
+// on: swept pixel by pixel down one bar of a real six-track score, 128 of the
+// 254 vertical pixels of a system belong to the standard row or to the gap above
+// the tablature, so HALF of every bar placed a cursor with no string on it.
+//
+// So a click outside the tablature row is projected onto it and clamped to the
+// nearest line - above the tab gives the top string, below gives the bottom.
+// `isTablature` still reports whether the click landed on the tab itself, which
+// is the difference between an exact reading and a nearest one.
+//
+// `string` stays null for a bar with no tablature at all: percussion, or a
+// stringed staff whose tab is hidden. There is nothing there to project onto.
 export function positionAtPoint(lookup, x, y) {
   const system = nearestByY(lookup?.staffSystems ?? [], y, (s) => s.realBounds)
   if (!system) return null
@@ -150,14 +163,14 @@ export function positionAtPoint(lookup, x, y) {
   const staff = bar?.staff ?? null
   const strings = staff?.tuning?.length ?? 0
   const renders = rendersOfBar(masterBarBounds, bar)
-  const isTablature =
-    strings > 0 && !!staff?.showTablature && renders[renders.length - 1] === barBounds
+  // The tablature is the last render of the bar. See rendersOfBar.
+  const tab = strings > 0 && !!staff?.showTablature ? renders[renders.length - 1] : null
 
   return {
     beat: beatBounds.beat,
     bar,
-    isTablature,
-    string: isTablature ? stringAtY(barBounds.visualBounds, y, strings) : null,
+    isTablature: !!tab && tab === barBounds,
+    string: tab ? stringAtY(tab.visualBounds, y, strings) : null,
   }
 }
 

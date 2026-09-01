@@ -194,8 +194,17 @@ for that instead. A new edit throws away the redo branch, as everywhere else.
 as before; a click that lands on a bar but on no note head now marks the place it
 landed rather than just clearing the selection. The cursor and the selected note
 are the same thing - a position - and it is drawn as a dashed outline where a
-fret number would go. On a standard-notation staff, where a vertical position
-carries no string information, it marks the beat and leaves the string open.
+fret number would go.
+
+Clicking anywhere in the bar lands on a string, not only the tablature itself: a
+click on the standard staff, or in the gap between the two, is carried down to
+the nearest tab line. Only a staff with **no** tablature at all - percussion, or
+a guitar part shown as notation only - gives a position with no string, marked
+with a full-height caret instead.
+
+**alphaTab's own playback bar is hidden while nothing is playing**, so there is
+only ever one vertical marker to read. It comes back the moment you press play,
+already in the right place.
 
 **The bare arrow keys move it**: left and right along the beats, crossing bars,
 up and down across the strings of the same beat. The view follows when the cursor

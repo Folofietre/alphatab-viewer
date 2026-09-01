@@ -233,13 +233,30 @@ is at.
 alphaTab then renders two rows and produces two `BarBounds` carrying the **same**
 `Bar`. Only on the tablature does a Y coordinate mean a string: measured, the
 same interpolation on the standard staff answers string 3 for a note on string 4.
-So a click there gives a beat and a **null** string, which is an honest position
-rather than a wrong one.
 
 The tablature is the last row, and that is read from alphaTab rather than
 guessed: `StaveProfile._createDefaultStaveProfiles` lists the renderers as
 `Slash, Score, Numbered, Tab`, so the tablature is drawn below every other
 notation of the same staff, `showSlash` and `showNumbered` included.
+
+### A click anywhere in the bar is projected onto that row
+
+This started as "a click on the standard staff has no string", which is honest
+and was unusable. Swept pixel by pixel down one system of a real six-track score,
+**128 of its 254 vertical pixels** belong to the standard row or to the gap above
+the tablature - so half of every bar placed a cursor with no string on it and a
+full-height caret to show for it.
+
+So the string is always read against the **tablature row of the bar that was
+clicked**, wherever the click landed, clamped to the nearest line: above the tab
+gives the top string, below gives the bottom. `isTablature` still reports whether
+the click was on the tab itself, which is the difference between an exact reading
+and a nearest one.
+
+A null string survives in exactly one place: a bar with no tablature at all -
+percussion, or a stringed staff whose tab is hidden. There is nothing there to
+project onto, and inventing a string would be a lie rather than an
+approximation.
 
 ### The interpolation, and how exactly it was checked
 
@@ -265,8 +282,19 @@ never on screen together: the ring already marks the position whenever it holds 
 note, and a second marker on the same place would read as two positions.
 
 On an empty string there is no note head to measure, so the rectangle is invented
-from the string spacing rather than read from the lookup. With no string at all,
-it becomes a full-height caret on every row of the beat.
+from the string spacing rather than read from the lookup. With no string at all -
+a staff with no tablature - it becomes a full-height caret on every row of the
+beat.
+
+**alphaTab's own beat cursor is hidden while nothing is playing.** It is a solid
+2px bar parked wherever the playhead was left, which on a freshly opened score is
+the very start of the piece: next to the dashed edit cursor that is two vertical
+markers speaking the same visual language about different things, and the loud
+one is the one that is not about editing. Done from CSS, which is safe because
+alphaTab sets `position`, `left`, `top`, `willChange` and a `transform` inline on
+that element but never `display`. It keeps updating the transform of a hidden
+element while paused, so the cursor is already in the right place the moment
+playback resumes. The soft bar wash stays - it is quiet enough not to compete.
 
 ## Navigating with the arrows, and giving them back
 
@@ -290,9 +318,10 @@ Three smaller rules, each of which would otherwise look like a broken key:
   The range then goes, because a cursor and a range are the two notions and only
   one at a time.
 
-From a position with no string yet, the first press enters the fretboard from the
-far edge in the direction of travel: up starts at the lowest string, down at the
-highest, so the next press continues the same way instead of doubling back.
+From a position with no string yet - only possible on a staff with no tablature -
+the first press enters the fretboard from the far edge in the direction of
+travel: up starts at the lowest string, down at the highest, so the next press
+continues the same way instead of doubling back.
 
 **The view follows, driven by a move counter and nothing else.** The rectangles
 are also rebuilt after every render, with the same values, so watching them would

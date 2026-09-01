@@ -1533,9 +1533,11 @@ describe('the cursor', () => {
     expect(edit.selectedNote.value).toBeNull()
   })
 
-  it('a click on the standard-notation row gives a beat and NO string', async () => {
-    // Interpolating a string there answers the wrong one, measured. So the
-    // position holds the beat and leaves the string open.
+  it('a click on the standard-notation row still lands on a string', async () => {
+    // A Y on the standard staff carries no string information, so it is
+    // projected onto the tablature row and clamped. Above the tab, that is the
+    // top string. Answering "no string" instead left half of every bar placing a
+    // cursor nothing could be done with.
     const bar = score.tracks[LEAD].staves[0].bars[0]
     host.api.boundsLookup.staffSystems = fakeStaffSystems(bar)
 
@@ -1545,35 +1547,25 @@ describe('the cursor', () => {
     })
     await Promise.resolve()
 
-    expect(edit.cursor.value).toMatchObject({ beatIndex: 0, string: null, hasNote: false })
-    // A caret on every row, since no string was chosen.
-    expect(edit.cursorRects.value.length).toBe(2)
+    expect(edit.cursor.value).toMatchObject({ beatIndex: 0, string: 6 })
+    // One marker on the tablature, not a caret across both rows.
+    expect(edit.cursorRects.value.length).toBe(1)
   })
 
-  it('and the first arrow then enters the fretboard from the far edge', async () => {
-    // Up starts at the lowest string and down at the highest, so the next press
-    // continues the same way instead of doubling back.
+  it('and clicking down the tablature reads the string exactly', async () => {
+    // The tab row of the stub runs 120..185 over six strings, so 13px a line.
     const bar = score.tracks[LEAD].staves[0].bars[0]
     host.api.boundsLookup.staffSystems = fakeStaffSystems(bar)
-    // A DIFFERENT beat each time: two presses on the same one inside 400ms are a
-    // double click, which selects the bar instead.
-    const land = async (index) => {
-      host.api.beatMouseDown.emit(bar.voices[0].beats[index])
+
+    for (const [y, string] of [[120, 6], [133, 5], [172, 2], [185, 1]]) {
+      // A different beat each time, so two presses are never a double click.
+      host.api.beatMouseDown.emit(bar.voices[0].beats[string % 4])
       host.hostElement.fire('alphaTab.beatMouseDown', {
-        originalEvent: { clientX: 110 + index * 50, clientY: 55 },
+        originalEvent: { clientX: 110 + (string % 4) * 50, clientY: y },
       })
       await Promise.resolve()
+      expect(edit.cursor.value.string, `y=${y}`).toBe(string)
     }
-
-    await land(0)
-    expect(edit.cursor.value.string).toBeNull()
-    edit.moveCursorString(1)
-    expect(edit.cursor.value.string).toBe(1)
-
-    await land(1)
-    expect(edit.cursor.value.string).toBeNull()
-    edit.moveCursorString(-1)
-    expect(edit.cursor.value.string).toBe(edit.cursor.value.stringCount)
   })
 
   it('the arrows walk the beats, crossing into the next bar', () => {
@@ -1628,6 +1620,36 @@ describe('the cursor', () => {
     while (edit.cursor.value.string < stringCount) edit.moveCursorString(1)
     expect(edit.moveCursorString(1)).toMatchObject({ ok: false, changed: false })
     expect(edit.cursor.value.string).toBe(stringCount)
+  })
+
+  it('enters the fretboard from the far edge where there is no tablature', async () => {
+    // A stringed staff with its tab hidden - standard notation only, which a
+    // real .gp file can carry. There is nothing to project a click onto, so the
+    // position has no string, and the first arrow starts from the edge it is
+    // travelling away from rather than doubling back.
+    const bar = score.tracks[LEAD].staves[0].bars[0]
+    bar.staff.showTablature = false
+    host.api.boundsLookup.staffSystems = fakeStaffSystems(bar)
+
+    // A DIFFERENT beat each time: two presses on the same one inside 400ms are a
+    // double click, which selects the bar instead.
+    const land = async (index) => {
+      host.api.beatMouseDown.emit(bar.voices[0].beats[index])
+      host.hostElement.fire('alphaTab.beatMouseDown', {
+        originalEvent: { clientX: 110 + index * 50, clientY: 55 },
+      })
+      await Promise.resolve()
+    }
+
+    await land(0)
+    expect(edit.cursor.value.string).toBeNull()
+    edit.moveCursorString(1)
+    expect(edit.cursor.value.string).toBe(1)
+
+    await land(1)
+    expect(edit.cursor.value.string).toBeNull()
+    edit.moveCursorString(-1)
+    expect(edit.cursor.value.string).toBe(edit.cursor.value.stringCount)
   })
 
   it('refuses to walk strings on a staff that has none', () => {

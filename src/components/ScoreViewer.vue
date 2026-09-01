@@ -12,7 +12,11 @@
            so `scroller` stays a distinct ANCESTOR of the alphaTab container and
            alphaTab's getOffset() maths is untouched. -->
       <div class="alphatab-stack">
-        <div ref="host" class="alphatab-host" />
+        <!-- `idle` hides alphaTab's own beat cursor while nothing is playing.
+             Two vertical markers on one score is one too many: the dashed
+             cursor says where you are editing, and a playback bar parked at the
+             start of the piece competes with it for the same reading. -->
+        <div ref="host" class="alphatab-host" :class="{ idle: !isPlaying }" />
 
         <!-- Bars holding more ticks than their time signature allows.
              Underneath the selection markers, because this is a property of the
@@ -86,7 +90,7 @@ const FOLLOW_MARGIN = 48
 
 const host = ref(null)
 const scroller = ref(null)
-const { init, destroy, isRendering, isScoreLoaded } = usePlayer()
+const { init, destroy, isRendering, isScoreLoaded, isPlaying } = usePlayer()
 const { selectedNoteRects, cursorRects, overfullRects, cursorMoves } = useScoreEdit()
 
 // Keep the cursor in view when the arrows walk it off the edge.

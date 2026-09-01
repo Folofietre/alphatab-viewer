@@ -808,10 +808,16 @@ function moveCursorBeat(delta) {
 // tablature, so the cursor moves the way the key points - the same convention
 // Alt+arrow already uses for moving a note.
 //
-// From a position with no string yet (a click on a standard staff), the first
-// press enters the fretboard from the far edge in the direction of travel: up
-// starts at the lowest string, down at the highest, so the next press continues
-// the same way instead of doubling back.
+// From a position with no string yet, the first press enters the fretboard from
+// the far edge in the direction of travel: up starts at the lowest string, down
+// at the highest, so the next press continues the same way instead of doubling
+// back.
+//
+// That is a narrower case than it used to be. A click is now projected onto the
+// tablature row whatever notation it landed on, so the only positions left
+// without a string are on staves that have NO tablature - and of those, only a
+// stringed staff with its tab hidden gets here at all, since a percussion staff
+// has no strings to move between and is refused above.
 function moveCursorString(delta) {
   const anchor = cursorAnchor(delta)
   if (!anchor) return stalled('Click a note or a bar in the score first.')

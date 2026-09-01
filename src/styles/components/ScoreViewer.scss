@@ -122,6 +122,23 @@
   :deep(.at-surface)       { color: var(--score-ink); }
   :deep(.at-cursor-bar)    { background: var(--score-cursor-bar); }
   :deep(.at-cursor-beat)   { background: var(--score-cursor-beat); width: 2px; }
+
+  // Nothing playing: alphaTab's beat cursor goes away.
+  //
+  // It is a solid 2px bar and it sits wherever the playhead was left, which on
+  // a freshly opened score is the very start. Next to the dashed edit cursor
+  // that is two vertical markers saying different things in the same visual
+  // language, and the loud one is the one that is not about editing.
+  //
+  // Safe to do from CSS: alphaTab sets `position`, `left`, `top`, `willChange`
+  // and a `transform` inline on that element, but never `display`, so nothing
+  // inline competes with this. It keeps updating the transform of a hidden
+  // element while paused, which costs nothing and means the cursor is already
+  // in the right place the moment playback resumes.
+  //
+  // The soft bar wash (`.at-cursor-bar`) stays: it is quiet enough not to
+  // compete, and it keeps a trace of where playback would resume from.
+  &.idle :deep(.at-cursor-beat) { display: none; }
   :deep(.at-selection div) { background: var(--accent-bg); }
   :deep(.at-highlight) *   { fill: var(--score-highlight); stroke: var(--score-highlight); }
 }

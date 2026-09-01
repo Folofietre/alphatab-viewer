@@ -122,9 +122,13 @@ describe('turning a click into a position', () => {
     }
   })
 
-  it('reports NO string on a standard-notation row, where Y means nothing', () => {
-    // Interpolating there is not merely imprecise, it is wrong: measured, it
-    // answers string 3 for a note on string 4. So the honest answer is null.
+  it('projects a click on the standard row onto the tablature, clamped', () => {
+    // Interpolating a string against the standard row is not merely imprecise,
+    // it is wrong: measured, it answers string 3 for a note on string 4. But
+    // answering "no string" made half of every bar unclickable, so the click is
+    // projected onto the tab row instead. Above it, that clamps to the top
+    // string - a nearest reading rather than an exact one, which `isTablature`
+    // is what distinguishes.
     const score = loadFixture()
     const lookup = render(score, [0])
     const masterBarBounds = lookup.staffSystems[0].bars[0]
@@ -136,9 +140,44 @@ describe('turning a click into a position', () => {
     const y = standard.visualBounds.y + standard.visualBounds.h / 2
     const position = positionAtPoint(lookup, standard.visualBounds.x + 20, y)
     expect(position.isTablature).toBe(false)
-    expect(position.string).toBeNull()
-    // The beat is still found, so the cursor lands on the bar either way.
+    expect(position.string).toBe(standard.bar.staff.tuning.length)
     expect(position.beat).not.toBeNull()
+  })
+
+  it('so every pixel of a bar with a tablature resolves to a string', () => {
+    // The regression this replaced: swept pixel by pixel down one system, HALF
+    // the height of a bar used to place a cursor carrying no string at all.
+    const score = loadFixture()
+    const lookup = render(score, [0])
+    const system = lookup.staffSystems[0]
+    const masterBarBounds = system.bars[0]
+    const x = masterBarBounds.realBounds.x + masterBarBounds.realBounds.w / 2
+
+    let none = 0
+    const top = Math.round(system.realBounds.y)
+    const bottom = Math.round(system.realBounds.y + system.realBounds.h)
+    for (let y = top; y < bottom; y += 1) {
+      if (positionAtPoint(lookup, x, y)?.string == null) none += 1
+    }
+    expect(none).toBe(0)
+  })
+
+  it('but reports no string where there is no tablature to project onto', () => {
+    // A stringed staff with its tab hidden, which a real .gp file can carry:
+    // standard notation only. There is nothing to read a string off, and
+    // inventing one would be a lie rather than an approximation.
+    const score = loadFixture()
+    score.tracks[0].staves[0].showTablature = false
+    const lookup = render(score, [0])
+    const barBounds = lookup.staffSystems[0].bars[0].bars[0]
+
+    const position = positionAtPoint(
+      lookup,
+      barBounds.visualBounds.x + 20,
+      barBounds.visualBounds.y + barBounds.visualBounds.h / 2,
+    )
+    expect(position.beat).not.toBeNull()
+    expect(position.string).toBeNull()
   })
 
   it('takes the NEAREST row, because the gap between two staves belongs to none', () => {
