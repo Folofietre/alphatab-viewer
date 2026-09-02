@@ -303,6 +303,58 @@
   }
 }
 
+// ---------------------------------------------------------------------------
+// Mixer dock
+// ---------------------------------------------------------------------------
+//
+// A sibling of .workspace in the app's flex column, so it takes its height off
+// the stage rather than overlaying it. That is safe here in a way it would not
+// be on a side: alphaTab re-lays out the score when its container WIDTH changes
+// and only then, so a dock that changes the stage's height costs nothing.
+//
+// CONTENT height, not a fixed one. The first version pinned it to a token and
+// the token was wrong: a range input is taller than its font suggests, the
+// strips overflowed, and `overflow-y: hidden` quietly cut the S/M buttons in
+// half. There is nothing to gain by guessing the number - a strip is the same
+// four rows whatever the score holds, since the name ellipsises and the
+// readouts never wrap - so letting it measure itself is both simpler and the
+// only version that cannot be off by ten pixels.
+.mixer-dock {
+  flex: none;
+  background: var(--chrome);
+  border-top: 1px solid var(--chrome-border);
+  color: var(--chrome-text);
+}
+
+// The collapsed state, mirroring the side rails: the same idea turned through
+// ninety degrees, so it reads as a full-width edge rather than a button.
+.mixer-rail {
+  flex: none;
+  height: $rail-w;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: $gap-sm;
+  padding: 0;
+  background: var(--chrome);
+  border: none;
+  border-top: 1px solid var(--chrome-border);
+  border-radius: $radius-block;
+  color: var(--chrome-text-muted);
+  cursor: pointer;
+  transition: background-color $transition-fast, color $transition-fast;
+
+  &:hover {
+    background: var(--chrome-raised);
+    color: var(--chrome-text);
+  }
+}
+
+.mixer-rail-label {
+  @include section-label;
+  letter-spacing: 0.14em;
+}
+
 .empty-overlay {
   position: absolute;
   inset: 0;

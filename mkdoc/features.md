@@ -25,15 +25,33 @@ live setter, so it goes through the data model and a midi rebuild; the slider
 previews while dragging and commits once on release. See
 [the mixer gotcha](alphatab-gotchas.md#the-model-side-mixer-gotcha).
 
-**Collapsible sidebar, four tabs** - `Mixer`, `Track`, `Score`, `Edit`, named
-for the scope each one acts on. `Mixer` rather than `Tracks`, because "Tracks"
-next to "Track" reads as the same thing. Each panel holds one scope and nothing
-else: `Track` carries no note controls and `Score` carries no track controls,
-and everything acting on what is currently selected is in `Edit`.
+**Three docks, one per scope, each collapsible on its own.** What is written
+into the score is on the left (`Track` and `Score`, as two tabs); what is
+currently selected is on the right (`Edit`); what is only heard is along the
+bottom (`Mixer`). None of them hides another, and each holds one scope and
+nothing else - `Track` carries no note controls and no listening controls,
+`Score` carries no track controls.
 
 `Edit` is the one named for the act rather than the scope, because what it works
 on has no short noun that covers all of it: a note, a dragged passage, or a
 position on an empty string, depending on what was last clicked.
+
+The mixer is along the **bottom** for two reasons. It wants width - one narrow
+strip per track, side by side, the way a desk is laid out - and it is the
+cheapest edge to take: alphaTab re-lays out the whole score when its container
+*width* changes and only then, so a dock that changes the stage's height costs
+no re-layout, where each side panel costs one per toggle.
+
+**The strips size themselves to how many there are.** They split the dock
+evenly - three tracks each get a third of the window, twelve each get a twelfth -
+between a floor and a ceiling, so a two-track score does not get half-screen
+sliders and a twenty-track one does not get unusable slivers. Past the floor the
+dock scrolls sideways rather than wrapping; a wrapped mixer is two half-desks
+that stop lining up.
+
+Volume and pan are both horizontal and identically shaped. A vertical fader
+would have saved width, and was tried, but two controls a centimetre apart
+pointing different ways cost more in reading than they save in pixels.
 
 Tabs rather than a stack: the sidebar is 290px wide and the track list is
 arbitrarily long, so a panel below it would be unreachable on a nine-track score.

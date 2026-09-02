@@ -1,42 +1,43 @@
 @use '@/styles/mixins' as *;
 
-// The track panel sits on the dark chrome supplied by .sidebar, so nothing here
-// paints its own light surface. Every colour comes from the --chrome-* family.
-.track-panel {
+// The mixer, as a row of channel strips docked along the bottom of the window.
+// Sits on the dark chrome supplied by .mixer-dock, so nothing here paints its
+// own light surface.
+.mixer {
   display: flex;
   flex-direction: column;
-  min-width: 0;
 }
 
-// Sticky section header, so the label survives scrolling a long track list.
-// It also carries the panel's explanation in its tooltip - see edit-help.
 header[data-help] {
   @include edit-help;
 }
 
 header {
-
-  position: sticky;
-  top: 0;
-  z-index: 1;
+  flex: none;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: $gap-sm;
-  padding: 0.5rem $gap-sm;
+  padding: 0.35rem $gap-sm;
   background: var(--chrome-raised);
   border-bottom: 1px solid var(--chrome-border);
 
   h2 {
     @include section-label;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
     color: var(--chrome-text-muted);
   }
-  .count {
-    @include tabular;
-    margin-left: 0.3rem;
-    font-size: 0.68rem;
-    color: var(--chrome-text-muted);
-  }
+}
+
+.count {
+  @include tabular;
+  padding: 0.05rem 0.3rem;
+  background: var(--chrome);
+  border-radius: $radius-pill;
+  font-size: 0.62rem;
+  color: var(--chrome-text);
 }
 
 .bulk {
@@ -46,141 +47,177 @@ header {
 
   button {
     @include button-chrome;
-    padding: 0.16rem 0.42rem;
-    font-size: 0.68rem;
+    padding: 0.15rem 0.4rem;
+    font-size: 0.66rem;
   }
 }
 
+.collapse {
+  font-size: 0.7rem;
+  line-height: 1;
+}
 
-// Track rows: square, stacked, sharing a single divider so the list reads as
-// one delimited block rather than a stack of cards.
-.tracks {
-  list-style: none;
+// Scrolls sideways, never wraps: a wrapped mixer is two half-desks stacked, and
+// the strips stop lining up with each other.
+.strips {
+  display: flex;
+  align-items: stretch;
+  gap: 1px;
   margin: 0;
-  padding: 0;
+  list-style: none;
+  overflow-x: auto;
+  overflow-y: hidden;
+  background: var(--chrome-border);
 
-  > li {
-    display: flex;
-    flex-direction: column;
-    gap: 0.3rem;
-    padding: 0.5rem $gap-sm;
-    border-bottom: 1px solid var(--chrome-divider);
-    transition: background-color $transition-fast;
+  // Room under the last row, and the horizontal scrollbar's lane.
+  //
+  // Both at once, deliberately: a scrollbar on an auto-height box is drawn
+  // inside the padding, so without this it would sit on top of the S and M
+  // buttons on any score wide enough to scroll - the same clipping this
+  // replaced, arriving by a different route. With no scrollbar it simply reads
+  // as the bottom margin the dock was missing.
+  padding: 0 0 0.85rem;
+}
 
-    &.rendered {
-      background: var(--chrome-selected);
-      // A solid left edge is the clearest "this one is on screen" marker that
-      // does not fight the square geometry.
-      box-shadow: inset 3px 0 0 0 var(--accent-soft);
-    }
+// One track, sized by how many there are.
+//
+// `flex: 1 1 0` is the whole mechanism, and it needs no JS and no observer: a
+// zero basis means the strips ignore their content and split the dock evenly,
+// so three tracks each get a third of the window and twelve each get a twelfth.
+//
+// The two bounds are what keep that from becoming silly at either end. Without
+// `max-width` a two-track score would give each fader half a screen; without
+// `min-width` a twenty-track score would grind them to a few pixels each.
+// Hitting the floor is what makes the row overflow, and `.strips` scrolls
+// sideways from there.
+.strip {
+  flex: 1 1 0;
+  min-width: 96px;
+  max-width: 220px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.4rem 0.4rem;
+  background: var(--chrome);
+
+  // Displayed on the score, as opposed to merely audible. The two are
+  // deliberately different things here, so the cue is a quiet edge rather than
+  // a whole highlighted strip.
+  &.rendered {
+    box-shadow: inset 0 2px 0 var(--accent);
   }
 }
 
-.row-main {
+.top {
   display: flex;
   align-items: center;
-  gap: $gap-sm;
+  gap: 0.2rem;
+  width: 100%;
   min-width: 0;
+
+  input[type='checkbox'] {
+    flex: none;
+    margin: 0;
+    cursor: pointer;
+  }
 }
 
-// The primary control of the row: clicking it shows this track alone. It is a
-// real <button> for keyboard and screen-reader support, so the global button
-// styling from main.scss has to be undone to leave it reading as plain text.
 .name {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
   flex: 1;
   min-width: 0;
-  padding: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.1rem 0.15rem;
   background: none;
   border: none;
-  text-align: left;
-  cursor: pointer;
-  font-size: 0.85rem;
-  font-weight: 600;
+  border-radius: $radius-control;
   color: var(--chrome-text);
+  cursor: pointer;
+  text-align: left;
 
-  // Beats `button:hover:not(:disabled)` on specificity, so the inherited
-  // background and border never appear.
   &:hover:not(:disabled) {
-    background: none;
-    border: none;
-    color: var(--accent-soft);
+    background: var(--chrome-raised);
+    border-color: transparent;
+    color: var(--chrome-text);
   }
 }
+
+.dot {
+  flex: none;
+  width: 0.45rem;
+  height: 0.45rem;
+  border-radius: $radius-pill;
+  background: var(--accent-soft);
+}
+
 .name-text {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-size: 0.66rem;
 }
 
-// Track colour comes from the score file, so this stays a plain swatch. Square,
-// like everything structural.
-.dot {
-  width: 0.5rem;
-  height: 0.8rem;
-  flex: none;
-  background: var(--accent-soft);
-  border: 1px solid rgba(255, 255, 255, 0.3);
+// Volume and pan, identical in shape. The label and the value share a line
+// above the slider rather than flanking it: at the narrow end of the strip's
+// range there is no room for three things side by side, and a layout that only
+// works when the score has four tracks is not a layout.
+.control {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  width: 100%;
+  min-width: 0;
+
+  input[type='range'] {
+    width: 100%;
+    margin: 0;
+    cursor: pointer;
+  }
 }
 
-.row-sound {
+.control-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.25rem;
   min-width: 0;
 }
 
-// The instrument, as a read-out. The picker moved to the Track tab, because the
-// program is written into the score while everything else in this panel is a
-// listening setting.
-.program {
-  display: block;
-  font-size: 0.74rem;
+.control-label {
+  @include section-label;
+  font-size: 0.52rem;
   color: var(--chrome-text-muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
+}
+
+.read {
+  @include tabular;
+  font-size: 0.58rem;
+  color: var(--chrome-text-muted);
   white-space: nowrap;
 }
 
-// One grid shared by the volume row and the pan row, so the two sliders and the
-// two readouts line up exactly. The first column is sized to hold the S and M
-// buttons (2 x 1.5rem + the gap).
-.row-mix {
-  display: grid;
-  grid-template-columns: 3.3rem minmax(0, 1fr) 2.5rem;
-  align-items: center;
-  gap: 0.3rem;
-
-  input[type='range'] {
-    min-width: 0;
-  }
+.vol {
+  color: var(--chrome-text);
 }
+
 .flags {
   display: flex;
-  gap: 0.3rem;
-}
-.pan-label {
-  @include section-label;
-  font-size: 0.6rem;
-  color: var(--chrome-text-muted);
+  gap: 0.15rem;
+  width: 100%;
 }
 
 .flag {
   @include button-chrome;
-  width: 1.5rem;
-  padding: 0.12rem 0;
-  font-size: 0.66rem;
+  flex: 1;
+  padding: 0.1rem 0;
+  font-size: 0.6rem;
   font-weight: 700;
-  text-align: center;
+  line-height: 1.2;
 
   &.on {
     @include control-active;
   }
-}
-
-.vol {
-  @include tabular;
-  width: 2.5rem;
-  font-size: 0.64rem;
-  text-align: right;
-  color: var(--chrome-text-muted);
 }

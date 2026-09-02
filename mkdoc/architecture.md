@@ -14,10 +14,11 @@ src/
     ScoreViewer.vue          owns the alphaTab host + scroll wrapper, calls init()
     ScoreHeader.vue          document strip: title / tempo / bars, the bar fill, close
     BarFill.vue              how full the cursor's bar is, in beats (in the strip)
-    TrackList.vue            "Mixer": display checkboxes, solo/mute/volume/pan
+    TrackList.vue            "Mixer": the bottom dock, one channel strip per track
     TrackEditPanel.vue       "Track": name, instrument, transpose, tuning
     ScoreEditPanel.vue       "Score": tempo, save, revert
     SelectionEditPanel.vue   "Edit": the selected note or passage, and the cursor
+    HelpTip.vue              the "?" marker beside a label that has a tooltip
     HelpDialog.vue           the "?" modal: shortcuts, generated from BINDINGS
     TransportBar.vue         play, stop, scrub, speed, volume, loop, click (in the action bar)
     BarsPerRow.vue           force a fixed number of bars per system

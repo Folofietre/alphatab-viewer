@@ -95,19 +95,20 @@
         :class="{ closed: !isLeftOpen }"
         :inert="isLeftOpen ? undefined : true"
       >
-        <!-- GLOBAL settings only: what is displayed and heard, one whole track,
-             the document. Split by SCOPE rather than by feature - mixing a tempo
-             field in among a track's name and tuning was the confusion this
-             replaces. What is currently SELECTED lives on the other side, in the
-             independent Edit panel: those two kinds of control do not compete
-             for the same 290px, and opening one no longer hides the other.
+        <!-- What is WRITTEN INTO the score, at its two scopes: one whole track,
+             and the whole document. Split by scope rather than by feature -
+             mixing a tempo field in among a track's name and tuning was the
+             confusion this replaces.
 
-             Tabs rather than a stack: the sidebar is 290px wide and the track
-             list is arbitrarily long, so a panel below it would be unreachable
-             on a nine-track score. The strip also owns the collapse control,
-             which is why TrackList no longer has one of its own. Undo is NOT
-             here: it reaches edits from both panels, so it belongs in the action
-             bar with the other document controls. -->
+             The other two scopes have their own edges of the window now. What is
+             SELECTED is in the Edit panel on the right, and what is merely HEARD
+             is in the mixer dock along the bottom: three kinds of control that
+             no longer compete for the same 290px, and opening one no longer
+             hides the others.
+
+             The strip owns the collapse control, which is why neither panel has
+             one of its own. Undo is NOT here: it reaches edits from both, so it
+             belongs in the action bar with the other document controls. -->
         <div class="panel-tabs">
           <!-- Toggle buttons with aria-pressed rather than role="tab": a real
                tablist promises arrow-key navigation between tabs and an
@@ -140,7 +141,6 @@
         <!-- v-show, not v-if: switching tabs must not throw away the panels'
              local state (a half-typed name, a chosen tuning) or re-run their
              setup, and none of them is expensive enough to unmount. -->
-        <TrackList v-show="panel === 'mixer'" />
         <TrackEditPanel v-show="panel === 'track'" />
         <ScoreEditPanel v-show="panel === 'score'" />
       </aside>
@@ -201,6 +201,32 @@
         <span class="rail-label">Edit</span>
       </button>
     </div>
+
+    <!-- The mixer, docked across the bottom.
+         Along the bottom rather than in a side tab for two reasons. It is a
+         different SCOPE from either sidebar - nothing in it is saved with the
+         score - and a mixer wants width: one narrow strip per track, side by
+         side, the way a desk is laid out.
+         It is also the cheapest edge to put it on. alphaTab re-lays out the
+         whole score when its container WIDTH changes and only then
+         (`AlphaTabApi` compares `container.width` to the renderer's), so a dock
+         that changes the stage's height costs no re-layout at all, where the
+         side panels each cost one per toggle. -->
+    <aside v-if="isScoreLoaded && isMixerOpen" class="mixer-dock">
+      <TrackList @collapse="isMixerOpen = false" />
+    </aside>
+
+    <button
+      v-else-if="isScoreLoaded"
+      type="button"
+      class="mixer-rail"
+      :aria-expanded="false"
+      title="Show the mixer"
+      @click="isMixerOpen = true"
+    >
+      <span aria-hidden="true">&#9650;</span>
+      <span class="mixer-rail-label">Mixer</span>
+    </button>
 
     <HelpDialog />
   </div>
@@ -266,23 +292,25 @@ function closeScore() {
 const isLeftOpen = ref(true)
 const isRightOpen = ref(true)
 
-// Which LEFT panel is showing. The right side has exactly one panel
-// (SelectionEditPanel) and so needs no tab state of its own.
+// The mixer dock. A plain show/hide rather than the slide the sidebars use:
+// this one changes the stage's HEIGHT, which alphaTab does not react to at all,
+// so there is no re-layout to spread over a transition and nothing to hide.
+const isMixerOpen = ref(true)
+
+// Which LEFT panel is showing. The other two docks hold exactly one panel each
+// (SelectionEditPanel on the right, TrackList at the bottom) and so need no tab
+// state of their own.
 //
-// Named for the SCOPE each one acts on. "Mixer" rather than "Tracks", because
-// "Tracks" next to "Track" reads as the same thing, and what that panel does is
-// choose what is displayed and mix what is heard - none of which is saved.
-//
-// Each panel holds ONE scope and nothing else: Track carries no note controls,
-// Score carries no track controls, and nothing here acts on a selection - that
-// moved out to the right, which is what freed three tabs to fit comfortably
-// again instead of four squeezed ones.
+// Named for the SCOPE each one acts on, and each holds one scope and nothing
+// else: Track carries no note controls and no listening controls, Score carries
+// no track controls. What is selected went right, what is only heard went to the
+// bottom, and what is left here is the two scopes that are written into the
+// file - which is also why two tabs now fit where four were squeezed.
 const PANELS = [
-  { id: 'mixer', label: 'Mixer' },
   { id: 'track', label: 'Track' },
   { id: 'score', label: 'Score' },
 ]
-const panel = ref('mixer')
+const panel = ref('track')
 
 // The left rail names the panel it will reveal, so collapsing does not lose the
 // user's place. The right rail needs no such lookup: it only ever says "Edit".

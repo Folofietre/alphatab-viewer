@@ -1,8 +1,5 @@
 <template>
-  <section class="track-panel">
-    <!-- The panel's own explanation rides on its header rather than sitting
-         under it as a paragraph: it is orientation, read once, and it was
-         costing six permanent lines above the track list. -->
+  <section class="mixer">
     <header v-help="PANEL_HELP">
       <h2>
         Mixer <span class="count">{{ tracks.length }}</span>
@@ -11,12 +8,28 @@
       <div class="bulk">
         <button type="button" title="Render every track" @click="showAllTracks">All</button>
         <button type="button" title="Reset volume, mute and solo" @click="resetMixer">Reset mix</button>
+        <button
+          type="button"
+          class="collapse"
+          title="Hide the mixer"
+          aria-label="Hide the mixer"
+          @click="$emit('collapse')"
+        >&#9660;</button>
       </div>
     </header>
 
-    <ul class="tracks">
-      <li v-for="track in tracks" :key="track.index" :class="{ rendered: track.rendered }">
-        <div class="row-main">
+    <!-- One strip per track, side by side, scrolling sideways when there are
+         more than fit. A desk rather than a list: the whole reason this moved to
+         the bottom edge is that width is what a mixer wants. -->
+    <ul class="strips">
+      <li
+        v-for="track in tracks"
+        :key="track.index"
+        class="strip"
+        :class="{ rendered: track.rendered }"
+        v-help="stripHelp(track)"
+      >
+        <div class="top">
           <input
             type="checkbox"
             :checked="track.rendered"
@@ -42,34 +55,16 @@
           </button>
         </div>
 
-        <!-- The instrument is shown but not editable here: it is written into
-             the score, so it belongs with the other track edits rather than
-             among the listening controls. The picker is in the Track tab. -->
-        <div class="row-sound">
-          <span v-if="!track.isPercussion" class="program" :title="`Instrument: ${track.programLabel}. Change it in the Track tab.`">
-            {{ track.programLabel }}
-          </span>
-          <span v-else class="program" title="Percussion plays on the drum channel">
-            🥁 Percussion kit
-          </span>
-        </div>
-
-        <div class="row-mix">
-          <span class="flags">
-            <button
-              type="button"
-              class="flag"
-              :class="{ on: track.isSolo }"
-              title="Solo"
-              @click="setTrackSolo(track.index, !track.isSolo)"
-            >S</button>
-            <button
-              type="button"
-              class="flag"
-              :class="{ on: track.isMute }"
-              title="Mute"
-              @click="setTrackMute(track.index, !track.isMute)"
-            >M</button>
+        <!-- Both sliders horizontal, and the same shape as each other: a
+             vertical fader would have saved width, but two controls a
+             centimetre apart pointing different ways cost more in reading than
+             they save in pixels. The label and the value share a line above
+             each one, which is what keeps them legible at the narrow end of the
+             strip's range. -->
+        <label class="control">
+          <span class="control-head">
+            <span class="control-label">Vol</span>
+            <span class="read vol">{{ Math.round(track.volume * 100) }}%</span>
           </span>
           <input
             type="range"
@@ -81,14 +76,15 @@
             title="Track volume"
             @input="setTrackVolume(track.index, Number($event.target.value))"
           />
-          <span class="vol">{{ Math.round(track.volume * 100) }}%</span>
-        </div>
+        </label>
 
-        <!-- Same grid as the row above, so this slider lines up under the
-             volume one. Panning has no live synth setter, so it previews on
-             `input` and only rebuilds the midi on `change` (release). -->
-        <div class="row-mix">
-          <span class="pan-label">Pan</span>
+        <!-- Panning has no live synth setter, so it previews on `input` and
+             only rebuilds the midi on `change` (release). -->
+        <label class="control">
+          <span class="control-head">
+            <span class="control-label">Pan</span>
+            <span class="read">{{ formatBalance(track.balance) }}</span>
+          </span>
           <input
             type="range"
             min="0"
@@ -100,7 +96,23 @@
             @input="setTrackBalance(track.index, Number($event.target.value), false)"
             @change="setTrackBalance(track.index, Number($event.target.value))"
           />
-          <span class="vol">{{ formatBalance(track.balance) }}</span>
+        </label>
+
+        <div class="flags">
+          <button
+            type="button"
+            class="flag"
+            :class="{ on: track.isSolo }"
+            title="Solo"
+            @click="setTrackSolo(track.index, !track.isSolo)"
+          >S</button>
+          <button
+            type="button"
+            class="flag"
+            :class="{ on: track.isMute }"
+            title="Mute"
+            @click="setTrackMute(track.index, !track.isMute)"
+          >M</button>
         </div>
       </li>
     </ul>
@@ -108,19 +120,18 @@
 </template>
 
 <script setup>
-import HelpTip from '@/components/HelpTip.vue'
-
-// Written once, read twice: the header carries it as a tooltip over the whole
-// strip, and the marker beside the title is the thing that says it is there.
-const PANEL_HELP =
-  'Click a track to show it alone, or tick its box to add it to the view. ' +
-  'Mute, solo and volume control what is heard: every track is audible whether ' +
-  'it is displayed or not, and none of it is saved with the score. Names, ' +
-  'instruments and tunings are, and they live in the Track panel.'
-
 import { computed } from 'vue'
 import { usePlayer } from '@/composables/usePlayer'
 import { formatBalance } from '@/utils/format'
+import HelpTip from '@/components/HelpTip.vue'
+
+defineEmits(['collapse'])
+
+const PANEL_HELP =
+  'Click a track name to show it alone, or tick its box to add it to the view. ' +
+  'Mute, solo and volume control what is heard: every track is audible whether ' +
+  'it is displayed or not, and none of it is saved with the score. Names, ' +
+  'instruments and tunings are, and they live in the Track panel.'
 
 const {
   tracks,
@@ -135,6 +146,17 @@ const {
 } = usePlayer()
 
 const renderedCount = computed(() => tracks.value.filter((t) => t.rendered).length)
+
+// The instrument used to have a line of its own in each row. A strip is narrow
+// and gets narrower as tracks are added, so it moved into the strip's tooltip -
+// which is the better place for it anyway, since it is shown here but edited in
+// the Track panel.
+function stripHelp(track) {
+  const sound = track.isPercussion
+    ? 'Percussion kit, playing on the drum channel.'
+    : `Instrument: ${track.programLabel}. Change it in the Track panel.`
+  return `${track.name}. ${sound}`
+}
 </script>
 
 <style scoped lang="scss" src="@/styles/components/TrackList.scss"></style>
