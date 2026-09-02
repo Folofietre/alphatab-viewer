@@ -39,6 +39,22 @@ bounds back as JSON, and `BoundsLookup.fromJson` does not restore
 the direct lookup and once against `BoundsLookup.fromJson(direct.toJson(),
 score)`, which is the shape the worker delivers.
 
+The real-score suite is **sampled** rather than swept for the writing tier, and
+the number is the reason: every write there runs `score.finish()`, so touching all
+7424 beats of the largest file would be tens of seconds of finishing. Twenty
+positions spread across the whole file is what it takes instead. That same cost is
+why none of the writing keys repeats - see
+[what finish() actually costs](editing.md#what-finish-on-every-keystroke-actually-costs).
+
+Two shapes of real file are worth knowing about, because both broke an invariant
+that looked safe. One carries a **stringed track whose every bar is still an
+untouched placeholder**, so "pick the first stringed staff and edit its first
+beat" finds nothing to edit - the suite now looks for voices somebody has actually
+written into and says so. And the fixture has no empty bar at all, so the
+placeholder path is reached in tests by adding a bar first, which is the same
+route a user takes.
+
 Not covered by any test, and needing a browser: whether the incremental render is
-visibly faster on a large score, how a held `Alt`+arrow feels, and whether the
-view follows the cursor comfortably when an arrow walks it off the screen.
+visibly faster on a large score, how a held `Alt`+arrow feels, whether the view
+follows the cursor comfortably when an arrow walks it off the screen, and whether
+the 800ms multi-digit window is the right length for real typing.

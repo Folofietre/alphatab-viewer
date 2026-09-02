@@ -5,7 +5,9 @@ A minimal, fully client-side score viewer, player and light editor built on
 
 Drop a Guitar Pro or MusicXML file, choose which tracks are displayed, 
 change the MIDI instrument each track is played with, 
-and make a handful of targeted edits - rename, retune, transpose, tempo, one note's fret - then save the result as a `.gp` file.
+and edit - rename, retune, transpose, tempo, a note's fret or string or octave -
+then write notes, rests, note lengths and bars from the keyboard, and save the
+result as a `.gp` file.
 
 Deployed at [github page](https://folofietre.github.io/alphatab-viewer/)
 
@@ -50,7 +52,7 @@ Everything about how the app works and why it is built the way it is lives in
 | [Architecture](mkdoc/architecture.md) | File layout, styling rules, the state singleton |
 | [Editing internals](mkdoc/editing.md) | Selection, propagation, undo and redo |
 | [Keyboard shortcuts](mkdoc/shortcuts.md) | The binding table and how the help is generated |
-| [alphaTab gotchas](mkdoc/alphatab-gotchas.md) | Six verified traps the editor is built around |
+| [alphaTab gotchas](mkdoc/alphatab-gotchas.md) | Eleven verified traps the editor is built around |
 | [Tests](mkdoc/tests.md) | What is covered, and what needs a browser |
 
 To read it as a site:

@@ -74,7 +74,7 @@ describe('binding resolution', () => {
     expect(resolve(key('ArrowUp'))?.label).toMatch(/cursor up one string/)
     expect(resolve(key('ArrowDown'))?.label).toMatch(/cursor down one string/)
     expect(resolve(key('ArrowLeft'))?.label).toMatch(/previous beat/)
-    expect(resolve(key('ArrowRight'))?.label).toMatch(/next beat/)
+    expect(resolve(key('ArrowRight'))?.label).toMatch(/Next beat/)
   })
 
   it('and it still leaves the page scrolling when there is no cursor', () => {
@@ -95,7 +95,7 @@ describe('binding resolution', () => {
     // `shift: false` on the two vertical ones keeps them distinct from
     // Alt+Shift+arrow; the horizontal pair declares nothing and ignores it.
     expect(resolve(key('ArrowUp', { shift: true }))).toBeNull()
-    expect(resolve(key('ArrowRight', { shift: true }))?.label).toMatch(/next beat/)
+    expect(resolve(key('ArrowRight', { shift: true }))?.label).toMatch(/Next beat/)
   })
 
   it('does NOT resolve when Ctrl or Meta is also held', () => {
@@ -417,6 +417,150 @@ describe('the help modal takes the keyboard', () => {
   })
 })
 
+// The keys that put something into the score, and the first ones in the table
+// that are plain characters.
+describe('the writing keys', () => {
+  const armed = {
+    canNavigate: { value: true },
+    canWriteNote: { value: true },
+    canChangeDuration: { value: true },
+    DURATION_SHORTER: 'shorter',
+    DURATION_LONGER: 'longer',
+  }
+  const idle = {
+    canNavigate: { value: false },
+    canWriteNote: { value: false },
+    canChangeDuration: { value: false },
+  }
+
+  function digit(character) {
+    return { code: `Digit${character}`, key: character, altKey: false, ctrlKey: false, metaKey: false, shiftKey: false }
+  }
+
+  it('all ten digits resolve to ONE action, not ten', () => {
+    const labels = new Set()
+    for (const character of '0123456789') {
+      const binding = resolve(digit(character))
+      expect(binding, character).not.toBeNull()
+      labels.add(binding.label)
+    }
+    expect(labels.size).toBe(1)
+    expect([...labels][0]).toMatch(/fret/)
+  })
+
+  it('and the help says "0-9" rather than listing them', () => {
+    const row = shortcutHelp().find((r) => /fret at the cursor/.test(r.label))
+    expect(row.keys).toEqual(['0-9'])
+  })
+
+  it('the digit that was typed is the one written', () => {
+    const edit = { ...armed, typeFret: vi.fn() }
+    resolve(digit('7')).run(null, digit('7'), edit)
+    expect(edit.typeFret).toHaveBeenCalledWith('7')
+  })
+
+  it('a digit under a modifier is left to the browser', () => {
+    expect(resolve({ ...digit('5'), ctrlKey: true })).toBeNull()
+    expect(resolve({ ...digit('5'), altKey: true })).toBeNull()
+  })
+
+  it('plus shortens and minus lengthens, matched by character so the keypad works too', () => {
+    const shorter = { ...armed, changeDuration: vi.fn() }
+    resolve(key('Equal', { types: '+' })).run(null, null, shorter)
+    expect(shorter.changeDuration).toHaveBeenCalledWith('shorter')
+
+    // The numeric keypad reports a different `code` and the same character.
+    const alsoShorter = { ...armed, changeDuration: vi.fn() }
+    resolve(key('NumpadAdd', { types: '+' })).run(null, null, alsoShorter)
+    expect(alsoShorter.changeDuration).toHaveBeenCalledWith('shorter')
+
+    const longer = { ...armed, changeDuration: vi.fn() }
+    resolve(key('Minus', { types: '-' })).run(null, null, longer)
+    expect(longer.changeDuration).toHaveBeenCalledWith('longer')
+  })
+
+  it('Shift is ignored on "+", which needs it on most layouts', () => {
+    expect(resolve(key('Equal', { types: '+', shift: true }))?.label).toBe('Shorter note')
+  })
+
+  it('Enter is the checkbox toggle on a checkbox and the rest everywhere else', () => {
+    // Both bindings match the key; the RESOLVER is what separates them, by
+    // asking appliesTo as part of the search. See onKeyDown.
+    const both = BINDINGS.filter((b) => b.code === 'Enter')
+    expect(both).toHaveLength(2)
+
+    const checkbox = { tagName: 'INPUT', type: 'checkbox' }
+    expect(both[0].appliesTo(checkbox)).toBe(true)
+    expect(both[1].appliesTo(checkbox, null, armed)).toBe(true)
+    // On anything else only the second one applies, which is why it has to come
+    // after the first and why appliesTo has to be part of the search.
+    expect(both[0].appliesTo({ tagName: 'BUTTON' })).toBe(false)
+    // Including a focused BUTTON, which therefore loses its native Enter - the
+    // same trade Space already makes, and deliberate: alphaTab's preventDefault
+    // keeps focus on whatever was last clicked.
+    expect(both[1].appliesTo({ tagName: 'BUTTON' }, null, armed)).toBe(true)
+  })
+
+  it('every writing key stands down with no cursor, leaving the character alone', () => {
+    for (const event of [digit('4'), key('Equal', { types: '+' }), key('Minus', { types: '-' })]) {
+      const binding = resolve(event)
+      expect(binding.appliesTo({ tagName: 'BUTTON' }, null, idle), String(event.key)).toBe(false)
+    }
+    const rest = BINDINGS.filter((b) => b.code === 'Enter')[1]
+    expect(rest.appliesTo({ tagName: 'BUTTON' }, null, idle)).toBe(false)
+  })
+
+  // The strictest bindings in the table, and they have to be: a digit typed into
+  // a tempo field is a digit.
+  it('and stands down for every element that owns typing keys', () => {
+    const fields = [
+      { tagName: 'INPUT', type: 'text' },
+      { tagName: 'INPUT', type: 'number' },
+      { tagName: 'TEXTAREA' },
+      { tagName: 'SELECT' },
+      { isContentEditable: true, tagName: 'DIV' },
+    ]
+    const writers = BINDINGS.filter(
+      (b) => Array.isArray(b.key) || b.key === '+' || b.key === '-' ||
+        b.label === 'Add a rest, or step along the bar',
+    )
+    expect(writers).toHaveLength(4)
+    for (const binding of writers) {
+      for (const field of fields) {
+        expect(binding.appliesTo(field, null, armed), `${binding.label} / ${field.tagName}`).toBe(false)
+      }
+    }
+  })
+
+  it('none of them repeats, because each one finishes the score', () => {
+    for (const binding of BINDINGS) {
+      const writes =
+        Array.isArray(binding.key) || binding.key === '+' || binding.key === '-' ||
+        binding.label === 'Add a rest, or step along the bar'
+      if (writes) expect(!!binding.allowRepeat, binding.label).toBe(false)
+    }
+  })
+
+  it('the right arrow only writes when the key is NOT repeating', () => {
+    // A held arrow walks. Without this it would insert a beat, or append a bar,
+    // at the keyboard's repeat rate for as long as the finger is down.
+    const binding = resolve(key('ArrowRight'))
+    const edit = { ...armed, moveCursorBeat: vi.fn() }
+
+    binding.run(null, { ...key('ArrowRight'), repeat: false }, edit)
+    expect(edit.moveCursorBeat).toHaveBeenLastCalledWith(1, { canWrite: true })
+
+    binding.run(null, { ...key('ArrowRight'), repeat: true }, edit)
+    expect(edit.moveCursorBeat).toHaveBeenLastCalledWith(1, { canWrite: false })
+  })
+
+  it('and the left arrow never writes at all', () => {
+    const edit = { ...armed, moveCursorBeat: vi.fn() }
+    resolve(key('ArrowLeft')).run(null, key('ArrowLeft'), edit)
+    expect(edit.moveCursorBeat).toHaveBeenLastCalledWith(-1)
+  })
+})
+
 describe('binding options', () => {
   it('declares exactly one of code or key, never both and never neither', () => {
     for (const binding of BINDINGS) {
@@ -457,21 +601,34 @@ describe('binding options', () => {
   it('each binding consults only the arguments it declares a reason for', () => {
     // appliesTo(element, player, edit). Save and Undo stand down when no score
     // is open, so they need the player. The four bare arrows stand down when
-    // there is no cursor, so they need the edit state. Everything else looks at
-    // the focused element only and must not break when the rest is absent.
+    // there is no cursor, and so do the writing keys, so they need the edit
+    // state. Everything else looks at the focused element only and must not
+    // break when the rest is absent.
     const NEEDS_PLAYER = new Set(['s', 'z', 'y'])
     const NEEDS_EDIT = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'])
+    // The three writing keys, which need a cursor: the digits, the two duration
+    // keys, and Enter - whose FIRST binding is the checkbox toggle and needs
+    // nothing.
+    const WRITES = new Set(['+', '-'])
     for (const binding of BINDINGS) {
-      const name = binding.code ?? binding.key
+      const name = String(binding.code ?? binding.key)
       const call = () => binding.appliesTo({ tagName: 'BUTTON' })
       // The bare arrows are the ones with no Alt: Alt+arrow needs nothing.
-      const needsEdit = NEEDS_EDIT.has(binding.code) && !binding.modifiers?.alt
+      const needsEdit =
+        (NEEDS_EDIT.has(binding.code) && !binding.modifiers?.alt) ||
+        Array.isArray(binding.key) ||
+        WRITES.has(binding.key) ||
+        binding.label === 'Add a rest, or step along the bar'
       if (NEEDS_PLAYER.has(binding.key) || needsEdit) expect(call, name).toThrow()
       else expect(call, name).not.toThrow()
     }
     // And given both, all of them answer.
     const player = { isScoreLoaded: { value: true } }
-    const edit = { canNavigate: { value: true } }
+    const edit = {
+      canNavigate: { value: true },
+      canWriteNote: { value: true },
+      canChangeDuration: { value: true },
+    }
     for (const binding of BINDINGS) {
       expect(typeof binding.appliesTo({ tagName: 'BUTTON' }, player, edit)).toBe('boolean')
     }
@@ -527,8 +684,16 @@ describe('binding options', () => {
 
   it('every binding declares the fields the resolver needs', () => {
     for (const binding of BINDINGS) {
-      // Either a physical key or a character, never neither.
-      expect(typeof (binding.code ?? binding.key), binding.label).toBe('string')
+      // Either a physical key, a character, or a LIST of characters - the digits
+      // are one action rather than ten - and never neither.
+      const named = binding.code ?? binding.key
+      const shape = Array.isArray(named)
+        ? named.every((k) => typeof k === 'string' && k.length === 1)
+        : typeof named === 'string'
+      expect(shape, binding.label).toBe(true)
+      // A binding matching several characters has to name itself, or the help
+      // table would print one token per character.
+      if (Array.isArray(named)) expect(typeof binding.keyName, binding.label).toBe('string')
       expect(typeof binding.label).toBe('string')
       expect(typeof binding.appliesTo).toBe('function')
       expect(typeof binding.run).toBe('function')

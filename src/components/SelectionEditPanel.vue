@@ -78,6 +78,26 @@
           <kbd>Alt + PageUp/Dn</kbd>
         </div>
 
+        <!-- The one operation here that is not about pitch. A dragged passage
+             has no single position, so the cursor field below is hidden while
+             one is selected - which is why this pair is repeated here rather
+             than living there only. -->
+        <div class="row">
+          <button
+            type="button"
+            :disabled="!canEdit"
+            title="Halve the length of every beat in the selection"
+            @click="changeDuration(DURATION_SHORTER)"
+          >Shorter</button>
+          <button
+            type="button"
+            :disabled="!canEdit"
+            title="Double the length of every beat in the selection"
+            @click="changeDuration(DURATION_LONGER)"
+          >Longer</button>
+          <kbd title="Plus shortens and minus lengthens, following the number that is written: a quarter is a 4 and an eighth an 8">+ / -</kbd>
+        </div>
+
         <div class="row">
           <button
             type="button"
@@ -187,6 +207,54 @@
           </span>
           beats of {{ cursorBarFill.numerator }}/{{ cursorBarFill.denominator }}
         </p>
+
+        <!-- What is written here, and how long it lasts. The duration is the
+             one the beat under the cursor already has, which is also the one a
+             new rest or a new bar's first note will take: one value, so the
+             panel cannot disagree with the score. -->
+        <p class="inspector">
+          <span class="badge">{{ cursor.durationName }}</span>
+          <template v-if="cursor.isUnwritten">nothing written here yet</template>
+          <template v-else-if="cursor.isRest">rest</template>
+          <template v-else-if="cursor.hasNote">note</template>
+          <template v-else>free string</template>
+        </p>
+
+        <div class="row">
+          <button
+            type="button"
+            :disabled="!canEdit"
+            title="Halve the length of this beat, and of every note in it"
+            @click="changeDuration(DURATION_SHORTER)"
+          >Shorter</button>
+          <button
+            type="button"
+            :disabled="!canEdit"
+            title="Double the length of this beat, and of every note in it"
+            @click="changeDuration(DURATION_LONGER)"
+          >Longer</button>
+          <kbd title="Plus shortens and minus lengthens, following the number that is written: a quarter is a 4 and an eighth an 8">+ / -</kbd>
+        </div>
+
+        <div class="row">
+          <button
+            type="button"
+            :disabled="!canEdit"
+            title="Place a rest of this length here, or move on along the bar when there is already something here"
+            @click="insertRest"
+          >Rest</button>
+          <kbd>Enter</kbd>
+        </div>
+
+        <p v-if="cursor.string" class="hint">
+          Type <kbd>0-9</kbd> to write a fret on this string.
+        </p>
+        <!-- No string means nowhere to write a fret: percussion, or a staff
+             whose tablature is hidden. Said out loud rather than leaving a
+             digit key that silently refuses. -->
+        <p v-else class="hint">
+          This staff has no tablature, so there is no string to write a fret on.
+        </p>
         <!-- Stays VISIBLE, unlike the rest of this panel's prose: it is not an
              explanation of a control, it is a fact about the bar the cursor is
              in, and it is the one thing nothing else in the chain reports. A
@@ -214,7 +282,13 @@ const PANEL_HELP =
 const CURSOR_HELP =
   'Click anywhere in a bar to put the cursor there. Left and right walk the ' +
   'beats, crossing bars; up and down walk the strings of this beat. With ' +
-  'nothing selected the arrows scroll the score instead.'
+  'nothing selected the arrows scroll the score instead. ' +
+  'Typing a digit writes that fret here, and a second digit within a moment ' +
+  'replaces it, so 1 then 2 is fret 12. Shorter and Longer act on the whole ' +
+  'beat, so on every note of a chord, and on every beat of a dragged passage. ' +
+  'The right arrow makes room: on the last beat of a bar that is not exactly ' +
+  'full it inserts a rest for the next note, and past the end of the score it ' +
+  'adds a bar.'
 
 // Everything that acts on what is SELECTED, split out of the Track panel.
 //
@@ -232,6 +306,7 @@ const CURSOR_HELP =
 const selectionHelp = computed(() =>
   selectedRange.value
     ? 'String and Pitch apply to every note at once, or to none: if one would run off the neck, the whole selection is refused. ' +
+      'Shorter and Longer act on every BEAT the passage covers, so on every note of a chord - and not on a rest inside it, which belongs to no note. ' +
       'Octave is the exception, and does what it can: a note the tuning cannot reach stays at the pitch it had rather than being moved to a wrong one. ' +
       'Drag on the score to change the range, or click a note to leave it. ' +
       'Silence cannot be undone: use Revert in the Score panel to get the file back.'
@@ -252,6 +327,10 @@ const {
   nudgeSelectedString,
   shiftSelectedOctave,
   deleteSelection,
+  changeDuration,
+  insertRest,
+  DURATION_SHORTER,
+  DURATION_LONGER,
 } = useScoreEdit()
 </script>
 

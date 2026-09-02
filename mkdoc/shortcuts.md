@@ -34,7 +34,47 @@ once. A test asserts exactly one binding matches each of the four combinations.
 Auto-repeat is also per binding. The keys that **walk somewhere** repeat - the
 arrows, whether they move a note across the neck or the cursor along a line, and
 the octave keys - because holding one is the gesture. Everything else swallows
-repeats, `Ctrl+S` included, and a test pins exactly which set is which.
+repeats, `Ctrl+S` and all four writing keys included, and a test pins exactly
+which set is which. For the writing keys that is not a preference: each one runs
+`score.finish()`, so a held key would re-derive the whole score at the keyboard's
+repeat rate.
+
+## One key, several meanings: the resolver asks `appliesTo` too
+
+`onKeyDown` looks for the first binding that matches the key **and applies to
+what is focused**, rather than finding a match and then checking it:
+
+```js
+BINDINGS.find((b) => matchesKey(b, event) && matchesModifiers(b, event) &&
+                     b.appliesTo(event.target, player, edit))
+```
+
+That is what lets `Enter` toggle a focused checkbox and, everywhere else, place a
+rest. With the check outside the search, whichever entry came first in the table
+would have swallowed the key for the other one - silently, and only in the
+situation the other one exists for.
+
+"Everywhere else" includes a focused **button**, which therefore loses its native
+`Enter`. That is the same trade `Space` already makes, and it is the useful way
+round: alphaTab calls `preventDefault()` on its mousedown, so focus stays on
+whatever was last clicked, and standing down for buttons would leave `Enter` dead
+for writing in the commonest state of the app. There are no focusable links in
+this UI, so nothing else loses a native `Enter`, and the handler stands down
+entirely while a `<dialog>` is open - so the help modal's own buttons keep it.
+
+## `key` may be a list of characters
+
+One binding needs it: the **ten digits are one action**, not ten. Declared as ten
+entries they would still work, and the generated help would print ten key tokens
+where it means to say `0-9`. So `key` accepts an array, and `keyName` is what the
+help prints instead:
+
+```js
+{ key: ['0', '1', ..., '9'], keyName: '0-9', label: 'Write a fret at the cursor' }
+```
+
+A test asserts that any binding matching several characters names itself, so the
+help cannot come out as a list of digits.
 
 ## `appliesTo(element, player, edit)`
 
@@ -47,15 +87,42 @@ for nothing. `Ctrl+Shift+S` is left alone too - that is Firefox's responsive
 design mode, and swallowing a devtools key to do the same thing as `Ctrl+S` is a
 bad trade.
 
-`edit` is for the four **bare arrows**, and the reason it has to be reachable
-from `appliesTo` is mechanical rather than tidy. A bare arrow either moves the
-cursor or scrolls the page; the handler calls `preventDefault()` **before**
-`run`, so a binding that decided inside `run` would have killed the scroll
-either way. With nothing selected, `edit.canNavigate` is false, the binding never
-applies, and the key is left entirely alone.
+`edit` is for the four **bare arrows** and for the four writing keys, and the
+reason it has to be reachable from `appliesTo` is mechanical rather than tidy. A
+bare arrow either moves the cursor or scrolls the page; the handler calls
+`preventDefault()` **before** `run`, so a binding that decided inside `run` would
+have killed the scroll either way. With nothing selected, `edit.canNavigate` is
+false, the binding never applies, and the key is left entirely alone.
 
 That is the whole reason taking the bare arrows is acceptable at all: they are
-only claimed once the user has clicked something.
+only claimed once the user has clicked something. The same goes for a digit,
+which is a character someone may simply be typing.
+
+Two predicates, not one, because the conditions really differ. A digit and a rest
+need a **position** to write at, which only a cursor is (`canWriteNote`); a
+duration belongs to a beat, and a dragged passage is a set of beats even with no
+cursor on any of them (`canChangeDuration`).
+
+## The writing keys are the strictest in the table
+
+`0-9`, `+`, `-` and `Enter` are the first bindings here that are plain
+**characters** rather than a combination, which is what makes them strict: a digit
+typed into a tempo field is a digit, so unlike `Alt`+arrow they stand down for
+every element that owns typing keys - text and number inputs, textareas,
+`<select>`, contentEditable.
+
+The consequence is worth knowing, because it looks like a bug. alphaTab calls
+`preventDefault()` on its mousedown, which **suppresses the focus change**, so
+clicking a note does not move focus out of the field you last typed in - and
+"type a tempo, click a note, type a fret" puts the fret in the tempo field.
+Clicking anywhere outside a field first is the way out. There is no fix available
+from here: taking a character key back from a focused text field would be a worse
+bug than this one.
+
+`+` and `-` match by **character**, which is what makes both the main row and the
+numeric keypad work - the keypad's plus reports `key: '+'` too. `+` needs Shift on
+most layouts, so Shift is deliberately not declared, the same reason as the `?`
+binding.
 
 One subtlety in the save shortcut: it **blurs the focused element first**. The
 edit panels commit their text and number fields on `change`, which fires on blur,
@@ -76,6 +143,14 @@ and each with an exact match so none of them is ambiguous:
 | `Alt` + arrow | the **note** | to the next string, keeping its pitch |
 | `Alt` + `Shift` + arrow | the **note** | one semitone, on the same string |
 | `Alt` + `PageUp` / `PageDown` | the **note** | a whole octave, re-fingered |
+
+One exception to "the bare arrow only navigates": the **right** arrow makes room.
+On the last beat of a bar that is not exactly full it inserts a rest, and past
+the last beat of the last bar it adds a bar. It is the only key in the table that
+both navigates and writes, so `run` reads `event.repeat` and passes
+`canWrite: false` for a held key - a finger left on the arrow only walks. It is
+also silent rather than refusing during playback, where it is a navigation key
+and nothing else.
 
 The reading is "the arrow moves the cursor, `Alt` makes it move the note". Up
 means the higher-pitched string in every row of that table, which is also the

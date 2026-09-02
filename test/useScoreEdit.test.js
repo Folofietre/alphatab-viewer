@@ -112,8 +112,14 @@ apiSettings.core.includeNoteBounds = true
 
 const { useScoreEdit } = await import('@/composables/useScoreEdit')
 const { loadFixture } = await import('./helpers')
-const { stringedNotes, MAX_FRET, RETUNE_KEEP_PITCH, RETUNE_REASSIGN } =
-  await import('@/utils/scoreEdits')
+const {
+  stringedNotes,
+  MAX_FRET,
+  RETUNE_KEEP_PITCH,
+  RETUNE_REASSIGN,
+  DURATION_SHORTER,
+  DURATION_LONGER,
+} = await import('@/utils/scoreEdits')
 
 const LEAD = 0
 const RHYTHM = 1
@@ -2073,5 +2079,591 @@ describe('the playhead follows the cursor', () => {
     host.api.seeks = []
     edit.clearSelection()
     expect(host.api.seeks).toEqual([])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// The writing tier: the first keys that put something into the score.
+// ---------------------------------------------------------------------------
+
+describe('typing a fret at the cursor', () => {
+  function beatAt(bar, index, track = LEAD) {
+    return score.tracks[track].staves[0].bars[bar].voices[0].beats[index]
+  }
+
+  // Put the cursor on an EMPTY string of a beat that has a note: click the note,
+  // then step down one string. The fixture's Lead beat 0 carries string 4.
+  function cursorOnEmptyString() {
+    clickAt(beatAt(0, 0).notes[0])
+    expect(edit.moveCursorString(-1).ok).toBe(true)
+    expect(edit.cursor.value).toMatchObject({ string: 3, hasNote: false })
+  }
+
+  it('creates the note, rings it, and sounds it', () => {
+    cursorOnEmptyString()
+    host.previews = []
+
+    const result = edit.typeFret('7')
+    expect(result).toMatchObject({ ok: true, changed: true, created: true })
+    expect(beatAt(0, 0).getNoteOnString(3).fret).toBe(7)
+    // The cursor and the selection are one notion, so the new note is selected.
+    expect(edit.selectedNote.value).toMatchObject({ string: 3, fret: 7 })
+    expect(edit.cursor.value).toMatchObject({ string: 3, hasNote: true })
+    expect(host.previews).toEqual([result.note])
+  })
+
+  it('renders from the bar that changed and defers the midi to the next play', () => {
+    // `onPlay` rather than `now`: adding a note moves no tick, and a rebuild
+    // calls stop() - which would cut off the preview above.
+    cursorOnEmptyString()
+    host.renders = []
+    host.midiStale = false
+    host.syncedTracks = []
+
+    edit.typeFret('7')
+    expect(host.renders).toEqual([{ reuseViewport: true, firstChangedMasterBar: 0 }])
+    expect(host.midiReloads).toBe(0)
+    expect(host.midiStale).toBe(true)
+    expect(host.syncedTracks).toEqual([LEAD])
+    expect(host.dirty).toBe(true)
+  })
+
+  it('a fret on a string that is taken changes that note instead of stacking one', () => {
+    clickAt(beatAt(0, 0).notes[0])
+    const result = edit.typeFret('9')
+    expect(result).toMatchObject({ ok: true, created: false })
+    expect(beatAt(0, 0).notes).toHaveLength(1)
+    expect(beatAt(0, 0).notes[0].fret).toBe(9)
+  })
+
+  describe('the second digit replaces rather than waits', () => {
+    it('1 then 2 is fret 12', () => {
+      cursorOnEmptyString()
+      edit.typeFret('1')
+      expect(beatAt(0, 0).getNoteOnString(3).fret).toBe(1)
+      edit.typeFret('2')
+      expect(beatAt(0, 0).getNoteOnString(3).fret).toBe(12)
+      // One note, corrected - not two.
+      expect(beatAt(0, 0).notes).toHaveLength(2)
+    })
+
+    it('and 2 then 4 is fret 24, the last one the neck has', () => {
+      cursorOnEmptyString()
+      edit.typeFret('2')
+      edit.typeFret('4')
+      expect(beatAt(0, 0).getNoteOnString(3).fret).toBe(24)
+      expect(MAX_FRET).toBe(24)
+    })
+
+    it('but 3 then 5 is fret 3 then fret 5, because 35 is off any neck', () => {
+      cursorOnEmptyString()
+      edit.typeFret('3')
+      edit.typeFret('5')
+      expect(beatAt(0, 0).getNoteOnString(3).fret).toBe(5)
+    })
+
+    it('a leading zero is not a number: 0 then 5 is fret 5', () => {
+      cursorOnEmptyString()
+      edit.typeFret('0')
+      edit.typeFret('5')
+      expect(beatAt(0, 0).getNoteOnString(3).fret).toBe(5)
+    })
+
+    it('a first digit that changed nothing still counts as typed', () => {
+      // The Bass track's fourth note already reads fret 1, so typing "12" makes
+      // the first press a NO-OP - and if that did not arm the window, the second
+      // press would find no number in progress and write fret 2.
+      const note = beatAt(0, 3, BASS).notes[0]
+      expect(note.fret).toBe(1)
+      clickAt(note)
+
+      expect(edit.typeFret('1')).toMatchObject({ ok: true, changed: false })
+      edit.typeFret('2')
+      expect(note.fret).toBe(12)
+    })
+
+    it('the window closes, so a slow second digit starts a new number', () => {
+      const now = vi.spyOn(Date, 'now')
+      try {
+        now.mockReturnValue(10_000)
+        cursorOnEmptyString()
+        edit.typeFret('1')
+        // 900ms later, past MULTI_DIGIT_MS.
+        now.mockReturnValue(10_900)
+        edit.typeFret('2')
+        expect(beatAt(0, 0).getNoteOnString(3).fret).toBe(2)
+      } finally {
+        now.mockRestore()
+      }
+    })
+
+    it('and moving the cursor between the digits does too', () => {
+      cursorOnEmptyString()
+      edit.typeFret('1')
+      expect(edit.moveCursorBeat(1).ok).toBe(true)
+      expect(edit.moveCursorBeat(-1).ok).toBe(true)
+      edit.typeFret('2')
+      expect(beatAt(0, 0).getNoteOnString(3).fret).toBe(2)
+    })
+
+    it('leaving two undo records, both of which were really on screen', () => {
+      cursorOnEmptyString()
+      edit.typeFret('1')
+      edit.typeFret('2')
+      expect(edit.undoDepth.value).toBe(2)
+
+      expect(edit.undo().ok).toBe(true)
+      expect(beatAt(0, 0).getNoteOnString(3).fret).toBe(1)
+      expect(edit.undo().ok).toBe(true)
+      expect(beatAt(0, 0).getNoteOnString(3)).toBeNull()
+    })
+  })
+
+  it('refuses a position with no string, and says why', () => {
+    // Percussion: `string` is null on the cursor, so there is nowhere to write.
+    const drums = score.tracks[DRUMS].staves[0].bars[0].voices[0].beats[0]
+    host.api.beatMouseDown.emit(drums)
+    host.api.noteMouseDown.emit(drums.notes[0])
+    expect(edit.cursor.value.string).toBeNull()
+
+    const result = edit.typeFret('5')
+    expect(result.ok).toBe(false)
+    expect(edit.editMessage.value).toMatchObject({ kind: 'error' })
+    expect(edit.editMessage.value.text).toMatch(/no string/)
+  })
+
+  it('refuses with no cursor at all', () => {
+    edit.clearSelection()
+    expect(edit.typeFret('5').ok).toBe(false)
+    expect(edit.editMessage.value.text).toMatch(/Click a note or a bar/)
+  })
+
+  it('refuses anything that is not a digit', () => {
+    cursorOnEmptyString()
+    expect(edit.typeFret('x').ok).toBe(false)
+    expect(edit.typeFret('12').ok).toBe(false)
+  })
+
+  it('stands down while playing, like every other edit', () => {
+    cursorOnEmptyString()
+    player.isPlaying.value = true
+    expect(edit.typeFret('7').ok).toBe(false)
+    expect(edit.editMessage.value.text).toMatch(/Pause playback/)
+    expect(beatAt(0, 0).getNoteOnString(3)).toBeNull()
+  })
+})
+
+describe('durations', () => {
+  function beatAt(bar, index, track = LEAD) {
+    return score.tracks[track].staves[0].bars[bar].voices[0].beats[index]
+  }
+
+  it('the cursor reports the duration the next thing written will take', () => {
+    clickAt(beatAt(0, 0).notes[0])
+    expect(edit.cursor.value).toMatchObject({ duration: 4, durationName: 'quarter' })
+  })
+
+  it('+ shortens the beat under the cursor, and the counter follows', () => {
+    clickAt(beatAt(0, 0).notes[0])
+    expect(edit.cursorBarFill.value).toMatchObject({ state: 'exact', beats: 4 })
+
+    const result = edit.changeDuration(DURATION_SHORTER)
+    expect(result).toMatchObject({ ok: true, changed: true, beatCount: 1 })
+    expect(beatAt(0, 0).duration).toBe(8)
+    expect(edit.cursor.value).toMatchObject({ durationName: 'eighth' })
+    // Pitfall 7: this only reads right because the write finished the score.
+    expect(edit.cursorBarFill.value).toMatchObject({ state: 'under', beats: 3.5 })
+  })
+
+  it('- lengthens it, and an overfull bar is allowed and flagged', () => {
+    clickAt(beatAt(0, 0).notes[0])
+    expect(edit.changeDuration(DURATION_LONGER).ok).toBe(true)
+    expect(beatAt(0, 0).duration).toBe(2)
+    expect(edit.cursorBarFill.value).toMatchObject({ state: 'over' })
+  })
+
+  // The second edit ever to need `now`, and for the same reason the tempo does:
+  // it changes TIMING, and the loaded midi is what maps a scrub position to a
+  // tick.
+  it('rebuilds the midi NOW rather than at the next play', () => {
+    clickAt(beatAt(0, 0).notes[0])
+    host.renders = []
+    host.midiReloads = 0
+    host.midiStale = false
+
+    edit.changeDuration(DURATION_SHORTER)
+    expect(host.midiReloads).toBe(1)
+    expect(host.midiStale).toBe(false)
+    expect(host.renders).toEqual([{ reuseViewport: true, firstChangedMasterBar: 0 }])
+  })
+
+  it('a dragged passage moves every beat it covers, all or nothing', () => {
+    dragOver(beatAt(0, 0), beatAt(0, 3))
+    expect(edit.selectedRange.value.noteCount).toBeGreaterThan(0)
+
+    const result = edit.changeDuration(DURATION_SHORTER)
+    expect(result).toMatchObject({ ok: true, beatCount: 4 })
+    expect(score.tracks[LEAD].staves[0].bars[0].voices[0].beats.map((b) => b.duration))
+      .toEqual([8, 8, 8, 8])
+  })
+
+  it('refuses at the end of the ladder, and moves nothing', () => {
+    clickAt(beatAt(0, 0).notes[0])
+    for (let i = 0; i < 6; i += 1) edit.changeDuration(DURATION_SHORTER)
+    expect(beatAt(0, 0).duration).toBe(256)
+
+    const result = edit.changeDuration(DURATION_SHORTER)
+    expect(result.ok).toBe(false)
+    expect(edit.editMessage.value).toMatchObject({ kind: 'error' })
+    expect(edit.editMessage.value.text).toMatch(/shortest/)
+    expect(beatAt(0, 0).duration).toBe(256)
+  })
+
+  it('refuses with nothing selected, and while playing', () => {
+    edit.clearSelection()
+    expect(edit.changeDuration(DURATION_SHORTER).ok).toBe(false)
+
+    clickAt(beatAt(0, 0).notes[0])
+    player.isPlaying.value = true
+    expect(edit.changeDuration(DURATION_SHORTER).ok).toBe(false)
+    expect(beatAt(0, 0).duration).toBe(4)
+  })
+
+  it('undoes back to the duration it had, ticks included', () => {
+    clickAt(beatAt(0, 0).notes[0])
+    edit.changeDuration(DURATION_SHORTER)
+    expect(beatAt(0, 0).playbackDuration).toBe(480)
+
+    expect(edit.undo().ok).toBe(true)
+    expect(beatAt(0, 0).duration).toBe(4)
+    expect(beatAt(0, 0).playbackDuration).toBe(960)
+  })
+})
+
+describe('Enter places a rest, or steps along the bar', () => {
+  function voiceAt(bar, track = LEAD) {
+    return score.tracks[track].staves[0].bars[bar].voices[0]
+  }
+  function beatAt(bar, index, track = LEAD) {
+    return voiceAt(bar, track).beats[index]
+  }
+
+  it('steps to the next beat of the bar, writing nothing', () => {
+    clickAt(beatAt(0, 0).notes[0])
+    const before = voiceAt(0).beats.length
+
+    const result = edit.insertRest()
+    expect(result.ok).toBe(true)
+    expect(edit.cursor.value).toMatchObject({ barIndex: 0, beatIndex: 1 })
+    expect(voiceAt(0).beats).toHaveLength(before)
+    expect(host.dirty).toBe(false)
+    expect(edit.undoDepth.value).toBe(0)
+  })
+
+  it('moves on to the next bar from the last beat of a FULL one', () => {
+    clickAt(beatAt(0, 3).notes[0])
+    expect(edit.cursorBarFill.value.state).toBe('exact')
+
+    expect(edit.insertRest().ok).toBe(true)
+    expect(edit.cursor.value).toMatchObject({ barIndex: 1, beatIndex: 0 })
+    expect(voiceAt(0).beats).toHaveLength(4)
+  })
+
+  it('inserts one where the bar is not exactly full, and lands on it', () => {
+    // Make room first, which is the flow this exists for: shorten, then fill.
+    clickAt(beatAt(0, 3).notes[0])
+    expect(edit.changeDuration(DURATION_SHORTER).ok).toBe(true)
+    expect(edit.cursorBarFill.value.state).toBe('under')
+
+    const result = edit.insertRest()
+    expect(result).toMatchObject({ ok: true, changed: true, inserted: true })
+    expect(voiceAt(0).beats).toHaveLength(5)
+    expect(edit.cursor.value).toMatchObject({ barIndex: 0, beatIndex: 4, hasNote: false })
+    expect(voiceAt(0).beats[4].isRest).toBe(true)
+    // The new rest takes the length of the beat it follows.
+    expect(voiceAt(0).beats[4].duration).toBe(8)
+  })
+
+  it('an inserted beat is a timing change, so the midi is rebuilt now', () => {
+    clickAt(beatAt(0, 3).notes[0])
+    edit.changeDuration(DURATION_SHORTER)
+    host.midiReloads = 0
+    host.renders = []
+
+    edit.insertRest()
+    expect(host.midiReloads).toBe(1)
+    expect(host.renders).toEqual([{ reuseViewport: true, firstChangedMasterBar: 0 }])
+  })
+
+  it('and the undo takes the beat back out', () => {
+    clickAt(beatAt(0, 3).notes[0])
+    edit.changeDuration(DURATION_SHORTER)
+    edit.insertRest()
+    expect(voiceAt(0).beats).toHaveLength(5)
+
+    expect(edit.undo().ok).toBe(true)
+    expect(voiceAt(0).beats).toHaveLength(4)
+    expect(voiceAt(0).beats.map((b) => b.index)).toEqual([0, 1, 2, 3])
+  })
+
+  it('refuses with no cursor, and while playing', () => {
+    edit.clearSelection()
+    expect(edit.insertRest().ok).toBe(false)
+
+    clickAt(beatAt(0, 0).notes[0])
+    player.isPlaying.value = true
+    expect(edit.insertRest().ok).toBe(false)
+    expect(edit.editMessage.value.text).toMatch(/Pause playback/)
+  })
+})
+
+// The right arrow is the key a passage is written with: it walks, and on the last
+// beat of a bar that is not EXACTLY full it makes room.
+describe('the right arrow makes room at the end of a bar', () => {
+  function voiceAt(bar, track = LEAD) {
+    return score.tracks[track].staves[0].bars[bar].voices[0]
+  }
+  function beatAt(bar, index, track = LEAD) {
+    return voiceAt(bar, track).beats[index]
+  }
+  function lastBeat(track = LEAD) {
+    const staff = score.tracks[track].staves[0]
+    const voice = staff.bars[staff.bars.length - 1].voices[0]
+    return voice.beats[voice.beats.length - 1]
+  }
+  // The arrow as the keyboard sends it: a single press, which may write.
+  function pressRight() {
+    return edit.moveCursorBeat(1, { canWrite: true })
+  }
+
+  // The four cases, in the order they come up while writing.
+
+  it('a bar that is EXACTLY full: on to the next bar', () => {
+    // The fixture's bars are four quarters in 4/4, so full.
+    clickAt(beatAt(0, 3).notes[0])
+    expect(edit.cursorBarFill.value.state).toBe('exact')
+
+    expect(pressRight().ok).toBe(true)
+    expect(edit.cursor.value).toMatchObject({ barIndex: 1, beatIndex: 0 })
+    expect(voiceAt(0).beats).toHaveLength(4)
+  })
+
+  it('a bar that is INCOMPLETE: a rest is inserted after the cursor', () => {
+    clickAt(beatAt(0, 3).notes[0])
+    expect(edit.changeDuration(DURATION_SHORTER).ok).toBe(true)
+    expect(edit.cursorBarFill.value.state).toBe('under')
+
+    const result = pressRight()
+    expect(result).toMatchObject({ ok: true, changed: true, inserted: true })
+    expect(voiceAt(0).beats).toHaveLength(5)
+    expect(edit.cursor.value).toMatchObject({ barIndex: 0, beatIndex: 4, hasNote: false })
+    expect(voiceAt(0).beats[4].isRest).toBe(true)
+    // The new rest takes the length of the beat it follows.
+    expect(voiceAt(0).beats[4].duration).toBe(8)
+  })
+
+  it('a bar that is TOO full: a rest is inserted as well, since it is not exactly right', () => {
+    clickAt(beatAt(0, 3).notes[0])
+    expect(edit.changeDuration(DURATION_LONGER).ok).toBe(true)
+    expect(edit.cursorBarFill.value.state).toBe('over')
+
+    expect(pressRight()).toMatchObject({ ok: true, inserted: true })
+    expect(voiceAt(0).beats).toHaveLength(5)
+    expect(edit.cursor.value).toMatchObject({ barIndex: 0, beatIndex: 4 })
+  })
+
+  it('a bar nobody has written into: left alone, and on to the next one', () => {
+    // Every voice empty is an implicit whole-bar rest, which reads as exactly
+    // full - so the arrow moves on rather than writing into it. That is what
+    // lets one press after another add bar after bar with nothing in them.
+    clickAt(lastBeat().notes[0])
+    const before = score.masterBars.length
+    pressRight()
+    expect(edit.cursor.value).toMatchObject({ barIndex: before, isUnwritten: true })
+
+    expect(pressRight()).toMatchObject({ ok: true, barIndex: before + 1 })
+    expect(score.masterBars).toHaveLength(before + 2)
+    // Neither new bar had anything written into it.
+    for (const index of [before, before + 1]) {
+      expect(voiceAt(index).beats).toHaveLength(1)
+      expect(voiceAt(index).isEmpty).toBe(true)
+    }
+  })
+
+  it('walking mid-bar is plain navigation, whatever the bar holds', () => {
+    clickAt(beatAt(0, 3).notes[0])
+    edit.changeDuration(DURATION_SHORTER)
+    // Back to the first beat: there are beats to the right, so nothing is
+    // written even though the bar is now incomplete.
+    clickAt(beatAt(0, 0).notes[0])
+    expect(pressRight().ok).toBe(true)
+    expect(edit.cursor.value).toMatchObject({ beatIndex: 1 })
+    expect(voiceAt(0).beats).toHaveLength(4)
+    expect(edit.undoDepth.value).toBe(1) // the duration change, and nothing else
+  })
+
+  // ---- adding a bar, which is still the end-of-score case ----
+
+  it('past the last beat of the last bar it adds a bar everywhere', () => {
+    clickAt(lastBeat().notes[0])
+    const before = score.masterBars.length
+    const string = edit.cursor.value.string
+    const staffCount = score.tracks.reduce((n, t) => n + t.staves.length, 0)
+    host.syncedScoreInfo = 0
+
+    const result = pressRight()
+    expect(result).toMatchObject({ ok: true, changed: true, barIndex: before, staffCount })
+    expect(score.masterBars).toHaveLength(before + 1)
+    for (const track of score.tracks) {
+      for (const staff of track.staves) expect(staff.bars).toHaveLength(before + 1)
+    }
+
+    // On the first beat of the new bar, on the string the arrow was walking.
+    expect(edit.cursor.value).toMatchObject({
+      barIndex: before,
+      beatIndex: 0,
+      string,
+      isUnwritten: true,
+    })
+    // The bar count in the document strip had to be re-read.
+    expect(host.syncedScoreInfo).toBe(1)
+  })
+
+  it('a new bar reads as a whole-bar rest, not as an incomplete one', () => {
+    clickAt(lastBeat().notes[0])
+    pressRight()
+    expect(edit.cursorBarFill.value).toMatchObject({ state: 'exact' })
+  })
+
+  it('and then Enter and a digit write into it', () => {
+    clickAt(lastBeat().notes[0])
+    pressRight()
+
+    // Enter on a bar nobody has written into materialises the rest IN PLACE.
+    const rest = edit.insertRest()
+    expect(rest).toMatchObject({ ok: true, changed: true, inserted: false })
+    expect(edit.cursor.value).toMatchObject({ beatIndex: 0, isUnwritten: false })
+    expect(edit.cursorBarFill.value).toMatchObject({ state: 'under', beats: 1 })
+
+    expect(edit.typeFret('7').ok).toBe(true)
+    expect(edit.selectedNote.value).toMatchObject({ fret: 7 })
+  })
+
+  it('a digit alone writes into the untouched bar too, clearing the placeholder', () => {
+    clickAt(lastBeat().notes[0])
+    pressRight()
+
+    expect(edit.typeFret('5')).toMatchObject({ ok: true, created: true })
+    expect(edit.cursor.value.isUnwritten).toBe(false)
+    expect(edit.cursorBarFill.value).toMatchObject({ state: 'under', beats: 1 })
+  })
+
+  it('and the arrow then fills that bar, one press at a time', () => {
+    // The whole writing loop: a bar, a note, and the arrow making room for the
+    // next one until the bar is exactly full.
+    clickAt(lastBeat().notes[0])
+    pressRight()
+    edit.typeFret('5')
+
+    for (const expected of [2, 3, 4]) {
+      expect(pressRight().ok, `beat ${expected}`).toBe(true)
+      expect(edit.cursor.value.beatIndex).toBe(expected - 1)
+      expect(edit.cursorBarFill.value.beats).toBe(expected)
+    }
+    expect(edit.cursorBarFill.value.state).toBe('exact')
+
+    // Full at last, so the next press moves on and adds the bar after it.
+    const bars = score.masterBars.length
+    expect(pressRight()).toMatchObject({ ok: true, barIndex: bars })
+  })
+
+  // ---- the guards ----
+
+  it('never inserts a BAR in the middle, however the option is passed', () => {
+    clickAt(beatAt(0, 3).notes[0])
+    const before = score.masterBars.length
+    expect(pressRight().ok).toBe(true)
+    expect(edit.cursor.value).toMatchObject({ barIndex: 1, beatIndex: 0 })
+    expect(score.masterBars).toHaveLength(before)
+  })
+
+  it('writes nothing on an auto-repeat: a held key only walks', () => {
+    // `canWrite: false` is what the binding passes for `event.repeat`. On an
+    // incomplete bar the arrow then crosses to the next bar instead of filling
+    // this one at the keyboard's repeat rate.
+    clickAt(beatAt(0, 3).notes[0])
+    edit.changeDuration(DURATION_SHORTER)
+    const depth = edit.undoDepth.value
+
+    expect(edit.moveCursorBeat(1, { canWrite: false }).ok).toBe(true)
+    expect(edit.cursor.value).toMatchObject({ barIndex: 1, beatIndex: 0 })
+    expect(voiceAt(0).beats).toHaveLength(4)
+    expect(edit.undoDepth.value).toBe(depth)
+  })
+
+  it('and at the end of the score a repeat stops rather than adding a bar', () => {
+    clickAt(lastBeat().notes[0])
+    const before = score.masterBars.length
+    expect(edit.moveCursorBeat(1, { canWrite: false }).ok).toBe(false)
+    expect(score.masterBars).toHaveLength(before)
+  })
+
+  it('the left arrow never writes, and never grows the score', () => {
+    clickAt(beatAt(0, 0).notes[0])
+    const before = score.masterBars.length
+    expect(edit.moveCursorBeat(-1, { canWrite: true }).ok).toBe(false)
+    expect(score.masterBars).toHaveLength(before)
+  })
+
+  // While playing it is a navigation key and nothing else. Refusing with "pause
+  // playback to edit" on every incomplete bar would make the arrow useless
+  // during playback, which is the one thing the bare arrows have always been
+  // good for.
+  it('only walks while playing, silently', () => {
+    clickAt(beatAt(0, 3).notes[0])
+    edit.changeDuration(DURATION_SHORTER)
+    player.isPlaying.value = true
+
+    expect(pressRight().ok).toBe(true)
+    expect(edit.cursor.value).toMatchObject({ barIndex: 1, beatIndex: 0 })
+    expect(voiceAt(0).beats).toHaveLength(4)
+  })
+
+  it('and cannot add a bar while playing either', () => {
+    clickAt(lastBeat().notes[0])
+    const before = score.masterBars.length
+    player.isPlaying.value = true
+
+    expect(pressRight().ok).toBe(false)
+    expect(score.masterBars).toHaveLength(before)
+    // Silent: no message, because nothing was refused - the arrow simply ran out
+    // of score.
+    expect(edit.editMessage.value).toBeNull()
+  })
+
+  // ---- undo ----
+
+  it('takes an inserted beat back out', () => {
+    clickAt(beatAt(0, 3).notes[0])
+    edit.changeDuration(DURATION_SHORTER)
+    pressRight()
+    expect(voiceAt(0).beats).toHaveLength(5)
+
+    expect(edit.undo().ok).toBe(true)
+    expect(voiceAt(0).beats).toHaveLength(4)
+    expect(voiceAt(0).beats.map((b) => b.index)).toEqual([0, 1, 2, 3])
+  })
+
+  it('and takes a whole added bar back out', () => {
+    clickAt(lastBeat().notes[0])
+    const before = score.masterBars.length
+    pressRight()
+
+    expect(edit.undo().ok).toBe(true)
+    expect(score.masterBars).toHaveLength(before)
+    for (const track of score.tracks) {
+      for (const staff of track.staves) expect(staff.bars).toHaveLength(before)
+    }
+    expect(host.dirty).toBe(false)
   })
 })

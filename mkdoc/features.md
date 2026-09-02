@@ -217,8 +217,8 @@ back, and `isDirty` warns before the score is replaced or closed.
 action bar carries an icon-only undo button whose tooltip names what would go
 and how many steps are left. It sits there rather than in a sidebar panel because
 it reaches edits made from either of them, and the bar stays visible with the
-sidebar collapsed. Every one
-of the eleven operations can be taken back, the delete included.
+sidebar collapsed. Every
+operation can be taken back, the delete and the added bar included.
 
 **`Ctrl+Y` / `Cmd+Y` redoes**, and so does `Ctrl+Shift+Z` for people who reach
 for that instead. A new edit throws away the redo branch, as everywhere else.
@@ -250,8 +250,8 @@ reason they could be taken at all. They are claimed once you have clicked
 something, and released again when you click away. A dragged passage collapses
 onto its far edge - right carries on from the last note, left from the first.
 
-Running off either end of the score does nothing. Adding a bar there is a write,
-and is not part of this tier.
+Running off the start of the score does nothing. Running off the **end** adds a
+bar - see below.
 
 ## Bars that hold too much
 
@@ -269,11 +269,69 @@ write it straight to the file. Nothing else in the chain reports it.
 
 Being honest about how much this finds today: across seventeen real files and
 11682 bars, exactly one bar was overfull and one incomplete. On music someone
-else wrote it will almost never fire. It earns its place when note entry arrives,
-which is why it was built first.
+else wrote it will almost never fire. It earns its place with the writing keys
+below, which can produce an overfull bar in two presses - which is why it was
+built first.
 
-**Deliberately out of scope for this tier:** entering notes, adding or removing
-bars, changing durations, changing the number of strings.
+## Writing music
+
+**Type a digit to write that fret** on the string the cursor is on, whether or
+not anything is there: a free string gets a new note, a string that already has
+one has its fret changed. A second digit within a moment **replaces** the first
+rather than being appended, so `1` then `2` is fret 12 - and `3` then `5` is
+fret 3 then fret 5, because 35 is off the end of any neck. Nothing ever waits for
+a second digit, which is the point: a one-digit fret appears the instant it is
+typed.
+
+**`+` shortens the beat and `-` lengthens it**, one step at a time: whole, half,
+quarter, eighth and so on down to a 256th. The direction follows the number that
+is written down - a quarter note is a 4 and an eighth is an 8, so "more" is a
+shorter note - and the panel says "Shorter" and "Longer" in words. The length
+belongs to the **beat**, so changing it changes every note of a chord at once,
+and on a dragged passage every beat moves together or none does.
+
+**`Enter` walks the bar and fills in what is missing.** On a beat with something
+after it, it just moves on. On the last beat of a bar that is not exactly full,
+it inserts a rest of the same length and lands on it. On a bar nobody has written
+into, it turns the whole-bar rest into a real one you can type into. On an
+exactly full bar it moves to the next one.
+
+**The right arrow makes room**, and it is the key a passage is actually written
+with. It walks the beats as before, but on the **last** beat of a bar it looks at
+whether the bar is exactly full:
+
+- **not exactly full** - incomplete, or holding too much - it inserts a rest
+  after the cursor, ready for a note to be typed over it. So a note, right, a
+  note, right fills a bar and stops making room by itself when the bar comes out
+  right.
+- **exactly full** it moves on to the next bar, and **adds one** when there is no
+  bar after it. A bar is added to every track at once, in the metre of the bar
+  before it, because a bar added to one track alone would desynchronise the
+  score. No key can insert a bar into the *middle* of a piece.
+
+A bar nobody has written into counts as exactly full - it is a whole-bar rest -
+so the arrow leaves it alone and moves on, which is how you add two empty bars in
+two presses.
+
+One thing worth knowing rather than discovering: **single presses cannot walk
+right out of an overfull bar**, because it is never exactly right, so the arrow
+keeps making room. Use the left arrow, a click, or `+` to fix the lengths - which
+is what the red outline is asking for anyway.
+
+Holding the arrow down only walks: a held key never writes, so it crosses an
+incomplete bar instead of filling it. And during playback the arrow is purely a
+navigation key - it moves the cursor and writes nothing, silently.
+
+Everything here is one `Ctrl+Z` away, the added bar included, and everything is
+**paused only** like every other edit.
+
+A note appears with the length of the beat it lands in, and a new beat with the
+length of the one before it. There is no separate "current duration" to keep an
+eye on: it is the length of the beat the cursor is standing on, shown in the Edit
+panel, and a fresh bar starts on a quarter.
+
+**Deliberately out of scope for this tier:** deleting a bar, dots and tuplets,
+changing a time signature, changing the number of strings, and copy and paste.
 
 ## What is NOT saved with the score
 

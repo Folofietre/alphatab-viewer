@@ -126,8 +126,16 @@ export const BINDINGS = [
     label: 'Toggle the focused checkbox',
     // Taking Space for play/pause removes a checkbox's ONLY native toggle key:
     // Enter does nothing on a checkbox. Hand it back here, once, instead of in
-    // every component that renders one. Non-checkbox targets are untouched, so
-    // Enter keeps working normally on buttons and links.
+    // every component that renders one.
+    //
+    // FIRST of two bindings on Enter, and the order is load-bearing: the rest
+    // binding at the bottom of this table claims Enter everywhere a checkbox is
+    // not focused, which includes a focused BUTTON. That is the same trade Space
+    // already makes - a focused button does not own the key here - and it is the
+    // useful way round, because alphaTab's `preventDefault()` keeps focus on
+    // whatever was last clicked, so standing down for buttons would leave Enter
+    // dead for writing in the commonest state of the app. There are no focusable
+    // links in this UI, so nothing else loses a native Enter.
     appliesTo: isCheckbox,
     run: (_player, event) => event.target.click(),
   },
@@ -146,10 +154,15 @@ export const BINDINGS = [
   // rectangle.
   {
     code: 'ArrowRight',
-    label: 'Move the cursor to the next beat',
+    label: 'Next beat, making room at the end of a bar',
     allowRepeat: true,
     appliesTo: (el, _player, edit) => !ownsTypingKeys(el) && edit.canNavigate.value,
-    run: (_player, _event, edit) => edit.moveCursorBeat(1),
+    // The one navigation key that WRITES: on the last beat of a bar that is not
+    // exactly full it inserts a beat, and past the last beat of the last bar it
+    // adds a bar. `!event.repeat` is what keeps a held key from doing either -
+    // it only walks, at the keyboard's repeat rate, which is what holding an
+    // arrow has always meant.
+    run: (_player, event, edit) => edit.moveCursorBeat(1, { canWrite: !event.repeat }),
   },
   {
     code: 'ArrowLeft',
@@ -362,6 +375,62 @@ export const BINDINGS = [
     appliesTo: (el) => !ownsAltArrows(el),
     run: (_player, _event, edit) => edit.shiftSelectedOctave(-1),
   },
+  // ---- writing -------------------------------------------------------------
+  //
+  // The three keys that put something into the score, and the first ones here
+  // that are plain CHARACTERS rather than a combination.
+  //
+  // That is what makes them the strictest bindings in the table: a digit typed
+  // into a tempo field is a digit, so unlike Alt+arrow these have to stand down
+  // for every element that owns typing keys. The consequence is worth knowing,
+  // because it looks like a bug: alphaTab calls `preventDefault()` on its
+  // mousedown, so clicking a note does NOT move focus out of the field you last
+  // typed in, and "type a tempo, click a note, type a fret" puts the fret in the
+  // tempo field. Clicking anywhere outside a field first is the way out, and
+  // there is no fix available from here - taking the key back from a focused
+  // text field is a worse bug than this one.
+  //
+  // None of them repeats. Each one calls `score.finish()`, so a held key would
+  // be re-deriving the whole score at the keyboard's repeat rate.
+  {
+    // Ten characters, one action. See matchesKey.
+    key: ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'],
+    keyName: '0-9',
+    label: 'Write a fret at the cursor',
+    // A digit needs a POSITION to write at, which is what a cursor is. With
+    // nothing selected the keys are left entirely alone.
+    appliesTo: (el, _player, edit) => !ownsTypingKeys(el) && edit.canWriteNote.value,
+    run: (_player, event, edit) => edit.typeFret(event.key),
+  },
+  // `+` shortens and `-` lengthens, following the number that is written down: a
+  // quarter note is a 4 and an eighth is an 8, so "more" is a shorter note.
+  //
+  // Matched by CHARACTER, which is what makes both the main row and the numeric
+  // keypad work: the keypad's plus reports `key: '+'` too. And `+` needs Shift
+  // on most layouts, which is exactly why Shift is not declared - the same
+  // reason as the "?" binding.
+  {
+    key: '+',
+    label: 'Shorter note',
+    appliesTo: (el, _player, edit) => !ownsTypingKeys(el) && edit.canChangeDuration.value,
+    run: (_player, _event, edit) => edit.changeDuration(edit.DURATION_SHORTER),
+  },
+  {
+    key: '-',
+    label: 'Longer note',
+    appliesTo: (el, _player, edit) => !ownsTypingKeys(el) && edit.canChangeDuration.value,
+    run: (_player, _event, edit) => edit.changeDuration(edit.DURATION_LONGER),
+  },
+  // Enter, which is the SECOND binding on that key: the checkbox toggle above
+  // owns it while a checkbox is focused, and this one takes it everywhere else.
+  // That only works because the resolver looks for the first binding that
+  // matches AND applies - see onKeyDown.
+  {
+    code: 'Enter',
+    label: 'Add a rest, or step along the bar',
+    appliesTo: (el, _player, edit) => !ownsTypingKeys(el) && edit.canWriteNote.value,
+    run: (_player, _event, edit) => edit.insertRest(),
+  },
 ]
 
 // Exact match on Alt, Ctrl and Meta, always. Shift only when the binding says so.
@@ -372,10 +441,17 @@ export const BINDINGS = [
 // without it, so they declare `shift` and get an exact match, which is also what
 // keeps Alt+Up from resolving to two bindings at once.
 // A binding matches a key event by physical position or by character, never both.
+//
+// `key` may be a LIST of characters, which is there for exactly one binding: the
+// ten digits are one action, not ten, and ten entries would print ten key
+// tokens into a help table that means to say "0-9". `keyName` is what it says
+// instead.
 export function matchesKey(binding, event) {
   if (binding.code) return binding.code === event.code
-  if (binding.key) return (event.key || '').toLowerCase() === binding.key
-  return false
+  if (!binding.key) return false
+  const typed = (event.key || '').toLowerCase()
+  if (Array.isArray(binding.key)) return binding.key.includes(typed)
+  return typed === binding.key
 }
 
 export function matchesModifiers(binding, event) {
@@ -414,7 +490,9 @@ export function describeBinding(binding) {
   // show.
   if (wanted.shift) parts.push('Shift')
 
-  if (binding.code) parts.push(KEY_NAMES[binding.code] ?? binding.code)
+  // A binding that matches several characters names itself: see matchesKey.
+  if (binding.keyName) parts.push(binding.keyName)
+  else if (binding.code) parts.push(KEY_NAMES[binding.code] ?? binding.code)
   else if (binding.key) parts.push(binding.key.toUpperCase())
 
   return parts.join(' + ')
@@ -459,11 +537,21 @@ export function useShortcuts() {
     // Respect a handler that already acted.
     if (event.defaultPrevented) return
 
+    // The first binding that matches the key AND applies to what is focused.
+    //
+    // `appliesTo` is part of the search rather than a check on the winner,
+    // because one key legitimately has several meanings on disjoint conditions:
+    // Enter toggles a focused checkbox and, everywhere else, places a rest. With
+    // the check outside the search, whichever entry came first in the table
+    // would have swallowed the key for the other one - silently, and only in the
+    // situation the other one exists for.
     const binding = BINDINGS.find(
-      (b) => matchesKey(b, event) && matchesModifiers(b, event),
+      (b) =>
+        matchesKey(b, event) &&
+        matchesModifiers(b, event) &&
+        b.appliesTo(event.target, player, edit),
     )
     if (!binding) return
-    if (!binding.appliesTo(event.target, player, edit)) return
 
     // Swallow the key so it neither scrolls the page nor triggers a focused
     // button, then drop auto-repeat unless the binding asked for it.

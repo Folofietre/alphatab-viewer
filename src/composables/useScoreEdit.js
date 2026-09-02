@@ -1,12 +1,20 @@
 import { computed, ref, shallowRef } from 'vue'
 import { usePlayer, scoreEditHost } from '@/composables/usePlayer'
 import {
+  BAR_EXACT,
   BAR_OVER,
+  DURATION_LONGER,
+  DURATION_SHORTER,
   MAX_FRET,
   MIN_FRET,
+  appendBar,
   barFill,
   describeBarFill,
+  describeDuration,
   deleteNotes,
+  placeRest,
+  stepBeatsDuration,
+  writeNoteAtString,
   RETUNE_KEEP_PITCH,
   RETUNE_REASSIGN,
   applyScoreTempo,
@@ -94,6 +102,34 @@ let lastBeatDownAt = 0
 
 // Set by `beatMouseDown` and cleared by `noteMouseDown`. See the handlers below.
 let missedNote = false
+
+// ---- typing a fret ---------------------------------------------------------
+//
+// How long a second digit still belongs to the first, so that "1" then "2" is
+// fret 12 rather than fret 1 followed by fret 2.
+//
+// Three options were weighed and this is the one that never makes the user
+// wait: the first digit is written IMMEDIATELY, and a second one inside the
+// window REPLACES it. The alternatives both cost something on every single
+// note - a latency of half a second before any one-digit fret appears, or an
+// extra key to confirm each one - to serve the frets above 9.
+//
+// The correction it can produce is visible on the score and undoable, which the
+// half-second of nothing is not.
+const MULTI_DIGIT_MS = 800
+
+// The note the last digit wrote, so a second digit knows whether it is still
+// typing the same fret. Identity, not position: cleared by `setCursor`, so any
+// arrow, click or edit in between starts a new number.
+let lastDigitNote = null
+let lastDigitAt = 0
+let lastDigitFret = 0
+
+function forgetTypedDigits() {
+  lastDigitNote = null
+  lastDigitAt = 0
+  lastDigitFret = 0
+}
 
 // ---- the cursor ------------------------------------------------------------
 //
@@ -291,6 +327,21 @@ function describeCursor(beat, string) {
     string,
     stringCount: staff?.tuning?.length ?? 0,
     hasNote: string == null ? false : !!beat.getNoteOnString(string),
+    // The duration the next thing written here will take, which is simply the
+    // duration of the beat the cursor is ON. There is no fourth piece of cursor
+    // state holding it, and that is the whole of "a quarter note by default":
+    // `new Beat()` is born a quarter and so are the placeholders alphaTab pads
+    // an unwritten bar with, so the default falls out of the model instead of
+    // being a constant somewhere that could disagree with it.
+    duration: beat.duration,
+    durationName: describeDuration(beat.duration),
+    dots: beat.dots,
+    // Whether this beat sounds at all, and whether anybody has written it yet.
+    // `isEmpty` is alphaTab's placeholder marker, not "a rest": a bar nobody has
+    // touched holds one of those, and it is the difference between placing a
+    // rest in place and inserting one beside it.
+    isRest: beat.isRest,
+    isUnwritten: !!beat.isEmpty,
   }
 }
 
@@ -322,6 +373,10 @@ function setCursor(beat, string, note = undefined) {
   selectedRange.value = null
   syncPlayheadToCursor(beat)
 
+  // Any move ends the number being typed, which is what makes a second digit
+  // mean "still the same fret" and nothing else. See MULTI_DIGIT_MS.
+  forgetTypedDigits()
+
   cursorBeat = beat
   cursorString = string ?? null
   selected = note !== undefined ? note : (cursorString == null ? null : beat.getNoteOnString(cursorString) ?? null)
@@ -345,8 +400,10 @@ function setCursorFromNote(note) {
   return setCursor(note.beat, note.isStringed ? note.string : null, note)
 }
 
-// How full the cursor's bar is. Re-read on every cursor move; nothing in palier
-// A changes a duration, so nothing else can move it.
+// How full the cursor's bar is. Re-read on every cursor move, and by hand after
+// every write that changes a duration or adds a beat - those move it without
+// moving the cursor, and it is derived from `playbackDuration`, which is itself
+// derived (pitfall 7).
 function refreshBarFill() {
   const bar = cursorBeat?.voice?.bar ?? null
   cursorBarFill.value = bar ? describeBarFill(bar) : null
@@ -591,6 +648,7 @@ function clearSelection() {
   cursorBarRects.value = []
   cursorBarFill.value = null
   missedNote = false
+  forgetTypedDigits()
 }
 
 // Resolve the last click into a position and put the cursor there.
@@ -875,9 +933,13 @@ function neighbourBeat(beat, delta) {
 //
 // Running off either end is left SILENT, like running out of frets or strings:
 // it is the natural end of a repeatable key, and a message per press would be
-// noise. Creating a bar past the end is a WRITE and belongs to the writing
-// palier, not here.
-function moveCursorBeat(delta) {
+// noise.
+//
+// Pure navigation, and it stays that way: it writes nothing, so it is not gated
+// on playback and never goes near `propagate`. Adding a bar past the end IS a
+// write, so it is layered on top of this by the composable - see `moveCursorBeat`
+// there - rather than folded in here.
+function navigateBeat(delta) {
   const anchor = cursorAnchor(delta)
   if (!anchor) return stalled('Click a note or a bar in the score first.')
 
@@ -886,6 +948,42 @@ function moveCursorBeat(delta) {
 
   setCursor(next, anchor.string)
   return moved()
+}
+
+// Whether a beat is the last one of its bar AND that bar is not exactly full,
+// which is where the right arrow makes room instead of moving on.
+//
+// "Not exactly full" is the whole test - "is this bar exactly right", not "does
+// it have room" - so an overfull bar counts too. The beat itself must not be
+// alphaTab's placeholder: an untouched voice has nothing to insert after, and
+// `Enter` turns that placeholder into a rest in place.
+//
+// The bar is judged by the reading the counter and the red outline already show,
+// so the three cannot disagree. On a multi-voice bar that reading is its FULLEST
+// voice, so walking a short voice of an otherwise full bar moves on rather than
+// inserting.
+function needsRoomAfter(beat) {
+  const voice = beat?.voice ?? null
+  if (!voice || beat.isEmpty) return false
+  if (beat.index !== voice.beats.length - 1) return false
+  return barFill(voice.bar)?.state !== BAR_EXACT
+}
+
+// Whether a beat is the very last one of the whole score, which is the only
+// place the right arrow is allowed to write.
+//
+// Both halves are checked rather than trusting `navigateBeat` having failed:
+// that only proves there is no later beat on THIS staff, and a staff with fewer
+// bars than the score would then grow the score from the wrong end.
+function isLastBeatOfScore(beat) {
+  const voice = beat?.voice ?? null
+  const bar = voice?.bar ?? null
+  const staff = bar?.staff ?? null
+  const score = staff?.track?.score ?? null
+  if (!voice || !bar || !staff || !score) return false
+  if (beat.index !== voice.beats.length - 1) return false
+  if (bar.index !== staff.bars.length - 1) return false
+  return bar.masterBar?.index === score.masterBars.length - 1
 }
 
 // Up and down: the next string of the same beat.
@@ -1285,6 +1383,279 @@ export function useScoreEdit() {
     return outcome
   }
 
+  // ---- writing -------------------------------------------------------------
+  //
+  // Everything below this line CREATES or DESTROYS structure, or moves a tick.
+  // Three consequences that the tiers above never had to deal with, and that are
+  // the whole cost of this one:
+  //
+  //   `finish()` runs on the typing path. Measured end to end on the real files
+  //   rather than guessed: 0.9-3.4ms a keystroke at 77 and 118 bars, with an
+  //   occasional first call up to 9.7ms. The plan budgeted 16ms and called this
+  //   the main risk; 16ms is the COLD first finish on a freshly imported score,
+  //   and it settles to under 2ms after that. What keeps it small is that none
+  //   of these keys repeats - a held one would re-derive the whole score at the
+  //   keyboard's repeat rate.
+  //
+  //   The bar fill has to be re-read by hand. It is derived from
+  //   `playbackDuration`, which is derived from `duration` (pitfall 7), so a
+  //   duration edit moves it and a `setCursor` does not necessarily follow.
+  //
+  //   A bar can now be overfull for real. The red outline stopped being a
+  //   diagnostic on other people's files the moment these landed, which is
+  //   exactly why it was built first.
+
+  // Type a fret at the cursor: the keyboard's digits.
+  //
+  // The multi-digit rule is "replace, never wait": the first digit is written at
+  // once and a second one inside MULTI_DIGIT_MS replaces it with the two-digit
+  // number, when that number is a fret this neck has. So `1` `2` gives fret 12
+  // and `3` `5` gives fret 3 then fret 5, because 35 is off the end of any neck.
+  //
+  // It leaves TWO undo records for one two-digit fret - the note as it was first
+  // written, then the correction - which is honest rather than tidy: both states
+  // really existed in the model, and coalescing them would mean a record whose
+  // "before" was never on screen.
+  function typeFret(digit) {
+    if (!canEdit.value) return refusePlayback()
+
+    const value = Math.round(Number(digit))
+    if (!Number.isFinite(value) || value < 0 || value > 9) return refused('Type a digit 0-9.')
+    if (!cursorBeat) return refused('Click a note or a bar in the score first.')
+
+    // Still typing the same number, on the same note, inside the window - and
+    // the result has to be a fret that exists. `lastDigitFret > 0` keeps "0"
+    // from being a leading zero.
+    const combined = lastDigitFret * 10 + value
+    const continues =
+      lastDigitNote !== null &&
+      lastDigitFret > 0 &&
+      combined <= MAX_FRET &&
+      Date.now() - lastDigitAt <= MULTI_DIGIT_MS &&
+      cursorString != null &&
+      cursorBeat.getNoteOnString(cursorString) === lastDigitNote
+
+    const fret = continues ? combined : value
+    const bar = cursorInfo.value?.barIndex ?? null
+    const trackIndex = cursorInfo.value?.trackIndex ?? null
+
+    const result = writeNoteAtString(cursorBeat, cursorString, fret, scoreEditHost.api?.settings)
+    if (result.changed) {
+      // Through `setCursor` rather than `refreshSelection`, because the note may
+      // not have existed a moment ago: this is what puts the ring on it, points
+      // the panel at it and re-reads the bar fill, which moved if the note was
+      // the first thing written into an untouched bar.
+      setCursor(cursorBeat, cursorString, result.note)
+      if (typeof trackIndex === 'number') scoreEditHost.syncTrack(trackIndex)
+      // Sound it, straight from the model. Same reason as the fret nudge: this
+      // is why the midi rebuild is deferred, since doing it now would call
+      // stop() and cut the preview off.
+      scoreEditHost.previewNote(result.note)
+    }
+
+    // Armed on `ok` and not on `changed`, which is not a detail: typing "12" on
+    // a note that already reads 1 makes the first press a no-op, and only the
+    // second one changes anything. Armed on `changed` that press would find no
+    // number in progress and write fret 2. Set AFTER `setCursor`, which clears
+    // it.
+    if (result.ok) {
+      lastDigitNote = result.note ?? null
+      lastDigitAt = Date.now()
+      lastDigitFret = fret
+    }
+
+    return propagate(result, {
+      render: true,
+      midi: 'onPlay',
+      firstChangedBar: bar,
+      label: result.created ? 'Write a note' : 'Change pitch',
+    })
+  }
+
+  // `+` and `-`: one step along the duration ladder.
+  //
+  // `+` SHORTENS and `-` lengthens, following the number that is written: a
+  // quarter is a 4 and an eighth an 8, so "more" is a shorter note. The panel
+  // says "Shorter" and "Longer" in words, because the keys alone cannot.
+  //
+  // THE DURATION BELONGS TO THE BEAT. Changing "this note's length" changes the
+  // whole chord it is in, which is the musical model and not a limitation - see
+  // `stepBeatsDuration`.
+  //
+  // On a dragged passage every beat moves, all or nothing. Worth knowing what
+  // that does NOT cover: a range is a set of NOTES, so a rest sitting inside the
+  // passage belongs to no note and keeps its own length.
+  //
+  // `now` rather than `onPlay`: it changes TIMING, and the loaded midi is what
+  // maps a scrub position to a tick, so a stale one would make the transport
+  // disagree with the score. Until this tier the tempo was the only edit that
+  // did; now an inserted rest and an added bar do too.
+  function changeDuration(direction) {
+    if (!canEdit.value) return refusePlayback()
+
+    const isRange = rangeNotes.length > 0
+    const beats = isRange
+      ? [...new Set(rangeNotes.map((note) => note.beat))]
+      : cursorBeat
+        ? [cursorBeat]
+        : []
+    if (beats.length === 0) return refused('Click a note or a bar in the score first.')
+
+    const trackIndex = isRange
+      ? (selectedRange.value?.trackIndex ?? null)
+      : (cursorInfo.value?.trackIndex ?? null)
+    const bar = isRange
+      ? (selectedRange.value?.startBar ?? null)
+      : (cursorInfo.value?.barIndex ?? null)
+
+    const result = stepBeatsDuration(beats, direction, scoreEditHost.api?.settings)
+    if (result.changed) {
+      if (typeof trackIndex === 'number') scoreEditHost.syncTrack(trackIndex)
+      refreshSelection()
+      refreshSelectionRects()
+      // By hand, because no cursor move happened: the ticks under the cursor
+      // changed while the position did not.
+      refreshBarFill()
+    }
+    return propagate(result, {
+      render: true,
+      midi: 'now',
+      firstChangedBar: bar,
+      label: direction === DURATION_SHORTER ? 'Shorten' : 'Lengthen',
+    })
+  }
+
+  // Enter: a rest where nothing has been written yet, and a step along the bar
+  // where something has.
+  //
+  // One rule, read off the position rather than off the key: Enter goes to the
+  // next beat, and WRITES that beat when it does not exist yet. Which gives four
+  // cases, in this order:
+  //
+  //   1. The cursor is on alphaTab's placeholder - a bar nobody has touched.
+  //      Nothing exists here yet either, so the rest is placed IN PLACE and the
+  //      cursor stays on it.
+  //   2. There is another beat in this bar. Pure navigation, nothing written.
+  //   3. This is the last beat of the bar and the bar is not exactly full. The
+  //      beat after it does not exist, so it is inserted - the same step the
+  //      right arrow makes, so the two keys agree wherever they overlap.
+  //   4. The bar is exactly full. Enter moves on to the next bar, and stops at
+  //      the end of the score: adding a bar is the right arrow's job.
+  function insertRest() {
+    if (!canEdit.value) return refusePlayback()
+    if (!cursorBeat) return refused('Click a note or a bar in the score first.')
+
+    if (!cursorBeat.isEmpty && !needsRoomAfter(cursorBeat)) return navigateBeat(1)
+    return writeRestAt(cursorBeat, cursorString)
+  }
+
+  // The write itself, shared by Enter and by the right arrow.
+  //
+  // Both mean "there should be a beat here and there is not", so both do the
+  // same thing and carry the same undo label - which is what keeps the undo
+  // control readable when a passage was written with a mixture of the two.
+  // What differs is WHEN each one decides that, and those two decisions are in
+  // their own callers.
+  //
+  // The bar and the track come off the beat rather than off `cursorInfo`,
+  // because the right arrow's position can come from a dragged range, which has
+  // no cursor for the descriptor to describe.
+  function writeRestAt(beat, string) {
+    const bar = beat?.voice?.bar?.masterBar?.index ?? null
+    const trackIndex = beat?.voice?.bar?.staff?.track?.index ?? null
+
+    const result = placeRest(beat, scoreEditHost.api?.settings)
+    // `placeRest` lands the rest on the anchor when the anchor is a placeholder
+    // and after it otherwise, and `result.beat` is whichever it turned out to
+    // be - so the cursor follows the write rather than guessing.
+    //
+    if (result.changed) {
+      // Onto the rest itself: afterwards the cursor is always standing on a
+      // fresh silence, ready for a fret to be typed into it.
+      setCursor(result.beat, string)
+      cursorMoves.value += 1
+      if (typeof trackIndex === 'number') scoreEditHost.syncTrack(trackIndex)
+    }
+    return propagate(result, {
+      render: true,
+      // An inserted beat moves every tick after it, so this is a timing change
+      // for the same reason a duration is.
+      midi: 'now',
+      firstChangedBar: bar,
+      label: result.inserted ? 'Insert a rest' : 'Add a rest',
+    })
+  }
+
+  // One more bar, at the very end of the score.
+  //
+  // Reached only from the right arrow, and only past the last beat of the last
+  // bar - so no bar can ever be inserted into the MIDDLE of a piece, which is
+  // the guard that matters here. Under the same undo stack as every other write.
+  function addBarAtEnd(anchor) {
+    const result = appendBar(scoreEditHost.score, scoreEditHost.api?.settings)
+    if (result.changed) {
+      // The bar count in the document strip.
+      scoreEditHost.syncScoreInfo()
+      // Onto the first beat of the new bar, on the staff and voice the cursor
+      // was already walking, so the arrow key carries on where it was going.
+      const staff = anchor.beat?.voice?.bar?.staff ?? null
+      const added = staff?.bars?.[staff.bars.length - 1] ?? null
+      const voice = added?.voices?.[anchor.beat.voice.index] ?? added?.voices?.[0] ?? null
+      const beat = voice?.beats?.[0] ?? null
+      if (beat) {
+        setCursor(beat, anchor.string)
+        cursorMoves.value += 1
+      }
+    }
+    return propagate(result, {
+      // A full render: a new bar re-flows the system it lands on, and there is
+      // no earlier bar to keep.
+      render: true,
+      // The score is longer, so the transport's own end moves.
+      midi: 'now',
+      label: 'Add a bar',
+    })
+  }
+
+  // The left and right arrows, whole job included.
+  //
+  // The LEFT arrow only ever walks. The right arrow walks too, until it reaches
+  // the last beat of its bar - and there it makes room, which is what turns it
+  // into the key a passage is written with:
+  //
+  //   | the bar the cursor is in | the right arrow |
+  //   | exactly full            | goes to the next bar, adding one past the end |
+  //   | anything else           | inserts a rest after the cursor |
+  //
+  // "Anything else" is both incomplete AND overfull, deliberately: the test is
+  // "is this bar exactly right", not "does it have room". A bar nobody has
+  // written into reads as exactly full - every voice of it is empty, which is an
+  // implicit whole-bar rest - so the arrow leaves it alone and moves on, which
+  // is what makes "add a bar, then another" possible without writing anything
+  // into either.
+  //
+  // Two things make this acceptable on a key that also navigates:
+  //
+  //   `canWrite` is false for an auto-REPEAT, so a held arrow only walks - it
+  //   crosses an incomplete bar instead of filling it with rests at the
+  //   keyboard's repeat rate.
+  //
+  //   While PLAYING it only walks, too. Refusing with "pause playback to edit"
+  //   on every incomplete bar would make the arrow useless during playback,
+  //   which is the one thing the bare arrows have always been good for.
+  function moveCursorBeat(delta, { canWrite = false } = {}) {
+    if (delta <= 0 || !canWrite || !canEdit.value) return navigateBeat(delta)
+
+    const anchor = cursorAnchor(delta)
+    if (!anchor) return navigateBeat(delta)
+
+    if (needsRoomAfter(anchor.beat)) return writeRestAt(anchor.beat, anchor.string)
+
+    const result = navigateBeat(delta)
+    if (result.ok || !isLastBeatOfScore(anchor.beat)) return result
+    return addBarAtEnd(anchor)
+  }
+
   // Re-read the selected note after an edit that may have moved it, and bring
   // the cursor with it.
   //
@@ -1441,6 +1812,25 @@ export function useScoreEdit() {
     // answer before `preventDefault()` runs: deciding inside `run` would be too
     // late and the page would have stopped scrolling either way.
     canNavigate: computed(() => cursorInfo.value !== null || selectedRange.value !== null),
+
+    // writing
+    typeFret,
+    changeDuration,
+    insertRest,
+    // The two conditions the writing keys stand down on, and they are not the
+    // same one. A digit and a rest need a POSITION to write at, which only a
+    // cursor is; a duration belongs to a beat, and a dragged passage is a set of
+    // beats even with no cursor on any of them.
+    //
+    // Both are read from `appliesTo` for the reason `canNavigate` is: bare
+    // digits are characters, and a key that is not going to be used has to be
+    // left alone BEFORE `preventDefault()`, not after.
+    canWriteNote: computed(() => cursorInfo.value !== null),
+    canChangeDuration: computed(
+      () => cursorInfo.value !== null || selectedRange.value !== null,
+    ),
+    DURATION_SHORTER,
+    DURATION_LONGER,
 
     // bar filling
     cursorBarFill,

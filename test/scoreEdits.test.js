@@ -22,6 +22,14 @@ import {
   shiftNoteOctave,
   shiftNotesString,
   stringedNotes,
+  DURATION_LADDER,
+  DURATION_LONGER,
+  DURATION_SHORTER,
+  appendBar,
+  describeDuration,
+  placeRest,
+  stepBeatsDuration,
+  writeNoteAtString,
   BAR_UNDER,
   BAR_EXACT,
   BAR_OVER,
@@ -994,6 +1002,37 @@ describe('undo restores exactly', () => {
       tracks: score.tracks.map(snapshotTrack),
       // The link graph, as indexes rather than objects so it can be compared.
       links: linkGraph(score),
+      // The STRUCTURE, which `snapshotTrack` cannot see: it flattens a staff to
+      // a list of notes, so an added bar or an inserted rest would leave it
+      // identical. Every operation of the writing tier moves one of these.
+      structure: structureOf(score),
+    }
+  }
+
+  // Bars, voices, beats and the ticks they occupy, per staff.
+  //
+  // `playbackDuration` is in here on purpose rather than only `duration`: it is
+  // DERIVED (pitfall 7), so it is what catches an undo that put a field back and
+  // never re-finished.
+  function structureOf(score) {
+    return {
+      masterBars: score.masterBars.map((mb) => [
+        mb.index, mb.start, mb.timeSignatureNumerator, mb.timeSignatureDenominator,
+      ]),
+      staves: score.tracks.flatMap((track) =>
+        track.staves.map((staff) =>
+          staff.bars.map((bar) =>
+            bar.voices.map((voice) => ({
+              isEmpty: voice.isEmpty,
+              ticks: voice.calculateDuration(),
+              beats: voice.beats.map((beat) => [
+                beat.index, beat.duration, beat.dots, beat.isEmpty,
+                beat.playbackStart, beat.playbackDuration, beat.notes.length,
+              ]),
+            })),
+          ),
+        ),
+      ),
     }
   }
 
@@ -1083,6 +1122,44 @@ describe('undo restores exactly', () => {
         expect(notes.length).toBeGreaterThan(0)
         return deleteNotes(notes, settings)
       },
+    ],
+    // The writing tier. Each of these creates structure or moves a tick, so each
+    // is a shape of undo the tiers above never had to produce.
+    [
+      'write a note on a free string',
+      (score) => writeNoteAtString(
+        score.tracks[LEAD].staves[0].bars[0].voices[0].beats[0], 1, 5, settings,
+      ),
+    ],
+    [
+      // The one that pins the argument for NOT capturing the whole staff's
+      // derived state the way the delete has to: an add cannot disturb a tie,
+      // because `Note.finish` only re-resolves one whose origin is already null.
+      // This runs it against the track that carries ties, hammer-ons and a slide.
+      'write a note into a bar full of ties',
+      (score) => writeNoteAtString(
+        score.tracks[TIES].staves[0].bars[0].voices[0].beats[0], 1, 4, settings,
+      ),
+    ],
+    [
+      'shorten a beat',
+      (score) => stepBeatsDuration(
+        [score.tracks[LEAD].staves[0].bars[0].voices[0].beats[0]], DURATION_SHORTER, settings,
+      ),
+    ],
+    [
+      'lengthen a whole bar of beats',
+      (score) => stepBeatsDuration(
+        score.tracks[LEAD].staves[0].bars[0].voices[0].beats, DURATION_LONGER, settings,
+      ),
+    ],
+    [
+      'insert a rest',
+      (score) => placeRest(score.tracks[LEAD].staves[0].bars[0].voices[0].beats[1], settings),
+    ],
+    [
+      'add a bar at the end',
+      (score) => appendBar(score, settings),
     ],
     [
       'silence one note of a chord',
@@ -1512,5 +1589,494 @@ describe('moving a note by an octave', () => {
   it('a direction of zero is a no-op rather than a refusal', () => {
     const score = loadFixture()
     expect(shiftNoteOctave(leadNote(score), 0)).toMatchObject({ ok: true, changed: false })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// The writing tier: the first operations that create structure or move a tick.
+// ---------------------------------------------------------------------------
+
+// Every beat of a track, in model order.
+function allBeats(score, trackIndex) {
+  const beats = []
+  for (const staff of score.tracks[trackIndex].staves) {
+    for (const bar of staff.bars) {
+      for (const voice of bar.voices) beats.push(...voice.beats)
+    }
+  }
+  return beats
+}
+
+describe('writeNoteAtString', () => {
+  it('creates a note on a free string of an existing beat', () => {
+    const score = loadFixture()
+    const beat = allBeats(score, LEAD)[0]
+    expect(beat.notes.map((n) => `${n.fret}.${n.string}`)).toEqual(['3.4'])
+
+    const result = writeNoteAtString(beat, 1, 5, settings)
+    expect(result).toMatchObject({ ok: true, changed: true, created: true, string: 1, fret: 5 })
+    expect(beat.notes.map((n) => `${n.fret}.${n.string}`)).toEqual(['3.4', '5.1'])
+    // `addNote` files the string lookup, which is what every later read uses.
+    expect(beat.getNoteOnString(1)).toBe(result.note)
+    expect(result.note.index).toBe(1)
+  })
+
+  it('sounds at the pitch of the string it was written on', () => {
+    const score = loadFixture()
+    const staff = score.tracks[LEAD].staves[0]
+    const beat = staff.bars[0].voices[0].beats[0]
+    const result = writeNoteAtString(beat, 1, 5, settings)
+    // String 1 is the LOWEST (pitfall 2), E2 = 40, so fret 5 is A2 = 45.
+    expect(tuningForString(staff.tuning, 1)).toBe(40)
+    expect(result.note.realValue).toBe(45)
+  })
+
+  it('changes the fret of a note already on that string instead of stacking one', () => {
+    const score = loadFixture()
+    const beat = allBeats(score, LEAD)[0]
+    const existing = beat.getNoteOnString(4)
+
+    const result = writeNoteAtString(beat, 4, 7, settings)
+    expect(result).toMatchObject({ ok: true, changed: true, created: false })
+    expect(result.note).toBe(existing)
+    expect(existing.fret).toBe(7)
+    expect(beat.notes).toHaveLength(1)
+  })
+
+  it('keeps the natural-harmonic refusal it inherits from setNoteFret', () => {
+    const score = loadFixture()
+    const beat = allBeats(score, HARM)[0]
+    const harmonic = beat.notes.find(
+      (n) => n.harmonicType === alphaTab.model.HarmonicType.Natural,
+    )
+    expect(harmonic).toBeTruthy()
+    const result = writeNoteAtString(beat, harmonic.string, 9, settings)
+    expect(result.ok).toBe(false)
+    expect(result.reason).toMatch(/natural harmonic/)
+  })
+
+  it('refuses a position with no string, and a staff with none', () => {
+    const score = loadFixture()
+    const beat = allBeats(score, LEAD)[0]
+    expect(writeNoteAtString(beat, null, 5, settings).reason).toMatch(/no string/)
+    expect(writeNoteAtString(allBeats(score, DRUMS)[0], 1, 5, settings).reason).toMatch(
+      /no strings/,
+    )
+  })
+
+  it('refuses a string the staff does not have, and a fret off the neck', () => {
+    const score = loadFixture()
+    const beat = allBeats(score, BASS)[0] // 4 strings
+    expect(writeNoteAtString(beat, 5, 3, settings).reason).toMatch(/no string 5/)
+    expect(writeNoteAtString(beat, 2, MAX_FRET + 1, settings).reason).toMatch(
+      new RegExp(`${MIN_FRET}-${MAX_FRET}`),
+    )
+    expect(writeNoteAtString(beat, 2, -1, settings).reason).toMatch(/range/)
+  })
+
+  it('survives the .gp round trip', () => {
+    const score = loadFixture()
+    writeNoteAtString(allBeats(score, LEAD)[0], 1, 5, settings)
+    const back = roundTrip(score)
+    expect(back.tracks[LEAD].staves[0].bars[0].voices[0].beats[0].notes.map(
+      (n) => `${n.fret}.${n.string}`,
+    )).toEqual(['3.4', '5.1'])
+  })
+
+  it('takes the note back, and puts it back again on a second call', () => {
+    const score = loadFixture()
+    const beat = allBeats(score, LEAD)[0]
+    const result = writeNoteAtString(beat, 1, 5, settings)
+
+    result.undo()
+    expect(beat.notes).toHaveLength(1)
+    expect(beat.getNoteOnString(1)).toBeNull()
+
+    result.undo()
+    expect(beat.notes).toHaveLength(2)
+    expect(beat.getNoteOnString(1)).toBe(result.note)
+  })
+
+  // The empty-bar case, and the reason `isEmpty` has to be cleared by hand:
+  // alphaTab pads an unwritten voice with a placeholder beat, `Voice.finish`
+  // only ever SETS that flag, and an empty voice is skipped by the renderer and
+  // by the bar-fill arithmetic alike.
+  describe('into a bar nobody has written into yet', () => {
+    function freshBar(score) {
+      appendBar(score, settings)
+      const staff = score.tracks[LEAD].staves[0]
+      return staff.bars[staff.bars.length - 1].voices[0]
+    }
+
+    it('the placeholder beat is empty until something is written', () => {
+      const score = loadFixture()
+      const voice = freshBar(score)
+      expect(voice.beats).toHaveLength(1)
+      expect(voice.beats[0].isEmpty).toBe(true)
+      expect(voice.isEmpty).toBe(true)
+    })
+
+    it('writing a note clears the flag, so the voice is no longer empty', () => {
+      const score = loadFixture()
+      const voice = freshBar(score)
+      const result = writeNoteAtString(voice.beats[0], 3, 7, settings)
+      expect(result).toMatchObject({ ok: true, created: true })
+      expect(voice.beats[0].isEmpty).toBe(false)
+      expect(voice.isEmpty).toBe(false)
+      // A quarter written into a 4/4 bar: one beat of four.
+      expect(describeBarFill(voice.bar)).toMatchObject({ state: BAR_UNDER, beats: 1 })
+    })
+
+    it('and the undo puts the flag back, not just the note', () => {
+      const score = loadFixture()
+      const voice = freshBar(score)
+      const result = writeNoteAtString(voice.beats[0], 3, 7, settings)
+      result.undo()
+      expect(voice.beats[0].isEmpty).toBe(true)
+      expect(voice.isEmpty).toBe(true)
+      expect(voice.beats[0].notes).toHaveLength(0)
+    })
+  })
+})
+
+describe('stepBeatsDuration', () => {
+  it('the ladder is ordered longest to shortest, and is a list rather than arithmetic', () => {
+    // Duration is a DENOMINATOR: the two longest values are negative, so no
+    // multiplication walks this correctly.
+    expect(DURATION_LADDER).toEqual([-4, -2, 1, 2, 4, 8, 16, 32, 64, 128, 256])
+    expect(describeDuration(alphaTab.model.Duration.Quarter)).toBe('quarter')
+  })
+
+  it('shortens one beat by one step', () => {
+    const score = loadFixture()
+    const beat = allBeats(score, LEAD)[0]
+    expect(beat.duration).toBe(alphaTab.model.Duration.Quarter)
+
+    const result = stepBeatsDuration([beat], DURATION_SHORTER, settings)
+    expect(result).toMatchObject({ ok: true, changed: true, beatCount: 1, durationName: 'eighth' })
+    expect(beat.duration).toBe(alphaTab.model.Duration.Eighth)
+  })
+
+  it('lengthens the other way', () => {
+    const score = loadFixture()
+    const beat = allBeats(score, LEAD)[0]
+    stepBeatsDuration([beat], DURATION_LONGER, settings)
+    expect(beat.duration).toBe(alphaTab.model.Duration.Half)
+  })
+
+  // Pitfall 7. `playbackDuration` is derived and nothing recomputes it on
+  // assignment, so an operation that changed a duration without finishing would
+  // leave every tick reading - the bar-fill counter included - reporting the bar
+  // as it was.
+  it('finishes, so playbackDuration and the bar fill follow immediately', () => {
+    const score = loadFixture()
+    const bar = score.tracks[LEAD].staves[0].bars[0]
+    const beat = bar.voices[0].beats[0]
+    expect(beat.playbackDuration).toBe(960)
+    expect(describeBarFill(bar)).toMatchObject({ state: BAR_EXACT })
+
+    stepBeatsDuration([beat], DURATION_SHORTER, settings)
+    expect(beat.playbackDuration).toBe(480)
+    expect(describeBarFill(bar)).toMatchObject({ state: BAR_UNDER, filledTicks: 3360 })
+  })
+
+  it('can overfill a bar, which is allowed and flagged rather than refused', () => {
+    const score = loadFixture()
+    const bar = score.tracks[LEAD].staves[0].bars[0]
+    expect(stepBeatsDuration([bar.voices[0].beats[0]], DURATION_LONGER, settings).ok).toBe(true)
+    expect(barFill(bar).state).toBe(BAR_OVER)
+  })
+
+  it('moves a whole passage one step, all of it', () => {
+    const score = loadFixture()
+    const beats = score.tracks[LEAD].staves[0].bars[0].voices[0].beats
+    const result = stepBeatsDuration(beats, DURATION_SHORTER, settings)
+    expect(result).toMatchObject({ ok: true, beatCount: 4 })
+    expect(beats.map((b) => b.duration)).toEqual([8, 8, 8, 8])
+  })
+
+  it('deduplicates, so a chord given note by note moves its beat once', () => {
+    const score = loadFixture()
+    const beat = allBeats(score, LEAD)[0]
+    const result = stepBeatsDuration([beat, beat, beat], DURATION_SHORTER, settings)
+    expect(result.beatCount).toBe(1)
+    expect(beat.duration).toBe(alphaTab.model.Duration.Eighth)
+  })
+
+  // All or nothing, like the frets and the strings. A beat left behind would not
+  // hold a WRONG value - so the octave's argument for best effort does not
+  // apply - but it would hold a wrong RHYTHM, which is the whole content of the
+  // operation.
+  it('refuses at either end of the ladder, and moves nothing', () => {
+    const score = loadFixture()
+    const beats = score.tracks[LEAD].staves[0].bars[0].voices[0].beats
+    beats[2].duration = alphaTab.model.Duration.TwoHundredFiftySixth
+
+    const result = stepBeatsDuration(beats, DURATION_SHORTER, settings)
+    expect(result.ok).toBe(false)
+    expect(result.reason).toMatch(/1 of these 4 beats/)
+    expect(beats.map((b) => b.duration)).toEqual([4, 4, 256, 4])
+  })
+
+  it('words the refusal differently for a single beat, which is the keyboard case', () => {
+    const score = loadFixture()
+    const beat = allBeats(score, LEAD)[0]
+    beat.duration = alphaTab.model.Duration.QuadrupleWhole
+    const result = stepBeatsDuration([beat], DURATION_LONGER, settings)
+    expect(result.ok).toBe(false)
+    expect(result.reason).toMatch(/quadruple whole note is the longest/)
+  })
+
+  it('refuses an empty list and ignores a direction it does not know', () => {
+    const score = loadFixture()
+    expect(stepBeatsDuration([], DURATION_SHORTER, settings).ok).toBe(false)
+    expect(stepBeatsDuration(allBeats(score, LEAD).slice(0, 1), 'sideways', settings))
+      .toMatchObject({ ok: true, changed: false })
+  })
+
+  it('survives the .gp round trip', () => {
+    const score = loadFixture()
+    const beats = score.tracks[LEAD].staves[0].bars[0].voices[0].beats
+    stepBeatsDuration(beats.slice(0, 2), DURATION_SHORTER, settings)
+    const back = roundTrip(score)
+    expect(
+      back.tracks[LEAD].staves[0].bars[0].voices[0].beats.map((b) => b.duration),
+    ).toEqual([8, 8, 4, 4])
+  })
+
+  it('puts the durations back, and re-applies on a second call', () => {
+    const score = loadFixture()
+    const beats = score.tracks[LEAD].staves[0].bars[0].voices[0].beats
+    stepBeatsDuration(beats, DURATION_SHORTER, settings).undo
+    const result = stepBeatsDuration(beats, DURATION_SHORTER, settings)
+
+    result.undo()
+    expect(beats.map((b) => b.duration)).toEqual([8, 8, 8, 8])
+    expect(beats[0].playbackDuration).toBe(480)
+
+    result.undo()
+    expect(beats.map((b) => b.duration)).toEqual([16, 16, 16, 16])
+    expect(beats[0].playbackDuration).toBe(240)
+  })
+})
+
+describe('placeRest', () => {
+  it('inserts a bare beat, which IS a rest of that duration', () => {
+    const score = loadFixture()
+    const voice = score.tracks[LEAD].staves[0].bars[0].voices[0]
+    const first = voice.beats[0]
+
+    const result = placeRest(first, settings)
+    expect(result).toMatchObject({ ok: true, changed: true, inserted: true })
+    expect(voice.beats).toHaveLength(5)
+    expect(voice.beats[1]).toBe(result.beat)
+    expect(result.beat.isRest).toBe(true)
+    expect(result.beat.notes).toHaveLength(0)
+    expect(result.beat.duration).toBe(first.duration)
+  })
+
+  // `insertBeat` splices the array and links the chain but never touches
+  // `index` - it leaves the list numbered 0,1,0,2,3 - and `Voice.finish` is what
+  // renumbers it. Verified in Node against alphaTab 1.8.4.
+  it('renumbers the beats and re-chains them, which only finish() does', () => {
+    const score = loadFixture()
+    const voice = score.tracks[LEAD].staves[0].bars[0].voices[0]
+    const result = placeRest(voice.beats[1], settings)
+
+    expect(voice.beats.map((b) => b.index)).toEqual([0, 1, 2, 3, 4])
+    expect(result.beat.previousBeat).toBe(voice.beats[1])
+    expect(result.beat.nextBeat).toBe(voice.beats[3])
+    expect(voice.beats[3].previousBeat).toBe(result.beat)
+  })
+
+  it('lengthens the bar, which is what makes it overfull', () => {
+    const score = loadFixture()
+    const bar = score.tracks[LEAD].staves[0].bars[0]
+    expect(barFill(bar).state).toBe(BAR_EXACT)
+    placeRest(bar.voices[0].beats[0], settings)
+    expect(barFill(bar)).toMatchObject({ state: BAR_OVER, filled: 4800 })
+  })
+
+  // The placeholder case: alphaTab's own padding for an unwritten voice. There is
+  // nothing to insert beside, because there is nothing there yet.
+  it('materialises the placeholder of an empty bar in place, without inserting', () => {
+    const score = loadFixture()
+    appendBar(score, settings)
+    const staff = score.tracks[LEAD].staves[0]
+    const voice = staff.bars[staff.bars.length - 1].voices[0]
+    expect(voice.beats[0].isEmpty).toBe(true)
+
+    const result = placeRest(voice.beats[0], settings)
+    expect(result).toMatchObject({ ok: true, changed: true, inserted: false })
+    expect(result.beat).toBe(voice.beats[0])
+    expect(voice.beats).toHaveLength(1)
+    expect(voice.beats[0].isEmpty).toBe(false)
+    expect(voice.isEmpty).toBe(false)
+    expect(voice.beats[0].isRest).toBe(true)
+
+    result.undo()
+    expect(voice.beats[0].isEmpty).toBe(true)
+    expect(voice.isEmpty).toBe(true)
+  })
+
+  it('carries the dots of the beat it follows', () => {
+    const score = loadFixture()
+    const voice = score.tracks[LEAD].staves[0].bars[0].voices[0]
+    voice.beats[0].dots = 1
+    expect(placeRest(voice.beats[0], settings).beat.dots).toBe(1)
+  })
+
+  it('refuses a position that is not in a score', () => {
+    expect(placeRest(null, settings).ok).toBe(false)
+    expect(placeRest(new alphaTab.model.Beat(), settings).ok).toBe(false)
+  })
+
+  it('survives the .gp round trip', () => {
+    const score = loadFixture()
+    placeRest(score.tracks[LEAD].staves[0].bars[0].voices[0].beats[0], settings)
+    const beats = roundTrip(score).tracks[LEAD].staves[0].bars[0].voices[0].beats
+    expect(beats).toHaveLength(5)
+    expect(beats.map((b) => b.isRest)).toEqual([false, true, false, false, false])
+  })
+
+  it('takes the beat back out, and puts it back on a second call', () => {
+    const score = loadFixture()
+    const voice = score.tracks[LEAD].staves[0].bars[0].voices[0]
+    const result = placeRest(voice.beats[0], settings)
+
+    result.undo()
+    expect(voice.beats).toHaveLength(4)
+    expect(voice.beats.map((b) => b.index)).toEqual([0, 1, 2, 3])
+    expect(voice.beats[0].nextBeat).toBe(voice.beats[1])
+    expect(voice.calculateDuration()).toBe(3840)
+
+    result.undo()
+    expect(voice.beats).toHaveLength(5)
+    expect(voice.beats[1]).toBe(result.beat)
+  })
+})
+
+describe('appendBar', () => {
+  it('adds a MasterBar plus one Bar on every staff of every track', () => {
+    const score = loadFixture()
+    const staffCount = score.tracks.reduce((n, t) => n + t.staves.length, 0)
+    const before = score.masterBars.length
+
+    const result = appendBar(score, settings)
+    expect(result).toMatchObject({
+      ok: true,
+      changed: true,
+      barIndex: before,
+      barCount: before + 1,
+      staffCount,
+    })
+    for (const track of score.tracks) {
+      for (const staff of track.staves) expect(staff.bars).toHaveLength(before + 1)
+    }
+  })
+
+  it('carries the time signature over rather than assuming 4/4', () => {
+    const score = loadFixture()
+    const previous = score.masterBars[score.masterBars.length - 1]
+    previous.timeSignatureNumerator = 7
+    previous.timeSignatureDenominator = 8
+
+    const result = appendBar(score, settings)
+    expect(result).toMatchObject({ numerator: 7, denominator: 8 })
+    const added = score.masterBars[score.masterBars.length - 1]
+    expect(added.timeSignatureNumerator).toBe(7)
+    expect(added.calculateDuration()).toBe(7 * 480)
+  })
+
+  it('links the new bar into the chain and gives it the next index', () => {
+    const score = loadFixture()
+    const previousMaster = score.masterBars[score.masterBars.length - 1]
+    appendBar(score, settings)
+    const added = score.masterBars[score.masterBars.length - 1]
+
+    expect(added.index).toBe(previousMaster.index + 1)
+    expect(added.previousMasterBar).toBe(previousMaster)
+    expect(previousMaster.nextMasterBar).toBe(added)
+    expect(added.start).toBe(previousMaster.start + previousMaster.calculateDuration())
+
+    const staff = score.tracks[LEAD].staves[0]
+    const bar = staff.bars[staff.bars.length - 1]
+    expect(bar.index).toBe(added.index)
+    expect(bar.masterBar).toBe(added)
+    expect(bar.previousBar).toBe(staff.bars[staff.bars.length - 2])
+  })
+
+  it('is an empty bar, which reads as a whole-bar rest rather than as incomplete', () => {
+    const score = loadFixture()
+    appendBar(score, settings)
+    const staff = score.tracks[LEAD].staves[0]
+    const bar = staff.bars[staff.bars.length - 1]
+
+    expect(bar.voices).toHaveLength(1)
+    expect(bar.voices[0].beats).toHaveLength(1)
+    expect(bar.voices[0].isEmpty).toBe(true)
+    // Every voice auto-filled: complete by definition, so no red and no
+    // "incomplete" the moment a bar is added.
+    expect(barFill(bar).state).toBe(BAR_EXACT)
+  })
+
+  it('copies the clef and key signature of the bar before it, per staff', () => {
+    const score = loadFixture()
+    appendBar(score, settings)
+    for (const track of score.tracks) {
+      for (const staff of track.staves) {
+        const bars = staff.bars
+        const added = bars[bars.length - 1]
+        const previous = bars[bars.length - 2]
+        expect(added.clef).toBe(previous.clef)
+        expect(added.keySignature).toBe(previous.keySignature)
+      }
+    }
+  })
+
+  it('refuses a score with no bars at all', () => {
+    expect(appendBar(new alphaTab.model.Score(), settings).ok).toBe(false)
+  })
+
+  it('survives the .gp round trip', () => {
+    const score = loadFixture()
+    const before = score.masterBars.length
+    appendBar(score, settings)
+    const back = roundTrip(score)
+    expect(back.masterBars).toHaveLength(before + 1)
+    for (const track of back.tracks) {
+      for (const staff of track.staves) expect(staff.bars).toHaveLength(before + 1)
+    }
+  })
+
+  it('takes the whole bar back out, and puts it back on a second call', () => {
+    const score = loadFixture()
+    const before = score.masterBars.length
+    const lastMaster = score.masterBars[before - 1]
+    const result = appendBar(score, settings)
+
+    result.undo()
+    expect(score.masterBars).toHaveLength(before)
+    expect(lastMaster.nextMasterBar).toBeNull()
+    for (const track of score.tracks) {
+      for (const staff of track.staves) {
+        expect(staff.bars).toHaveLength(before)
+        expect(staff.bars[before - 1].nextBar).toBeNull()
+      }
+    }
+
+    result.undo()
+    expect(score.masterBars).toHaveLength(before + 1)
+    expect(score.masterBars[before].index).toBe(before)
+    for (const track of score.tracks) {
+      for (const staff of track.staves) expect(staff.bars).toHaveLength(before + 1)
+    }
+  })
+
+  it('and the score still exports after the undo', () => {
+    const score = loadFixture()
+    const before = score.masterBars.length
+    appendBar(score, settings).undo()
+    expect(roundTrip(score).masterBars).toHaveLength(before)
   })
 })

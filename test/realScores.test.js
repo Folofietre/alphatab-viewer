@@ -22,6 +22,12 @@ import {
   BAR_OVER,
   barFill,
   shiftNotesOctave,
+  DURATION_LONGER,
+  DURATION_SHORTER,
+  appendBar,
+  placeRest,
+  stepBeatsDuration,
+  writeNoteAtString,
 } from '@/utils/scoreEdits'
 import {
   loadFile,
@@ -459,6 +465,179 @@ describe.skipIf(scores.length === 0)('invariants on real scores', () => {
             }
           }
         }
+      })
+
+      // ---- the writing tier -----------------------------------------------
+
+      // SAMPLED rather than swept, and the number is the reason: every write
+      // here runs `score.finish()`, measured at 16ms on a 118-bar score, so
+      // touching all 3000 beats of a real file would be 50 seconds of finishing.
+      // That cost is exactly why none of the writing keys repeats.
+      const SAMPLE = 20
+
+      it('a note written on a free string sounds at that string and fret', () => {
+        const score = loadFile(file)
+        // One candidate per beat: the beat, its staff, and its first free
+        // string. Collected first so the sample spreads across the whole file
+        // rather than stopping in its first bar.
+        const candidates = []
+        for (const track of stringedTracks(score)) {
+          for (const staff of track.staves) {
+            if (!staff.isStringed) continue
+            for (const bar of staff.bars) {
+              for (const voice of bar.voices) {
+                for (const beat of voice.beats) {
+                  for (let string = 1; string <= staff.tuning.length; string += 1) {
+                    if (beat.getNoteOnString(string)) continue
+                    candidates.push({ staff, beat, string })
+                    break
+                  }
+                }
+              }
+            }
+          }
+        }
+        if (candidates.length === 0) return
+
+        const step = Math.max(1, Math.floor(candidates.length / SAMPLE))
+        let written = 0
+        for (let i = 0; i < candidates.length; i += step) {
+          const { staff, beat, string } = candidates[i]
+          const before = beat.notes.length
+          const result = writeNoteAtString(beat, string, 5, settings)
+          if (!result.ok) continue
+          written += 1
+          expect(result.created).toBe(true)
+          expect(beat.notes).toHaveLength(before + 1)
+          expect(result.note.calculateRealValue(false, false)).toBe(
+            tuningForString(staff.tuning, string) + 5,
+          )
+          // No beat can ever hold two notes on one string (pitfall 5).
+          const strings = beat.notes.map((n) => n.string)
+          expect(new Set(strings).size).toBe(strings.length)
+          result.undo()
+          expect(beat.notes).toHaveLength(before)
+        }
+        expect(written).toBeGreaterThan(0)
+      })
+
+      // The reading everything else derives from, and the trap it was written
+      // around: `playbackDuration` is stale until finish() (pitfall 7), so a
+      // duration change that skipped it would leave every tick reading wrong.
+      // Every voice that somebody has actually written into, which is not every
+      // voice: two of the real test files carry a stringed track whose every bar
+      // is still an untouched placeholder, and a written-note invariant has
+      // nothing to say about those.
+      function writtenVoices(score) {
+        const voices = []
+        for (const track of stringedTracks(score)) {
+          for (const staff of track.staves) {
+            if (!staff.isStringed) continue
+            for (const bar of staff.bars) {
+              for (const voice of bar.voices) {
+                if (!voice.isEmpty && voice.beats.length > 0) voices.push(voice)
+              }
+            }
+          }
+        }
+        return voices
+      }
+
+      it('a duration change moves the ticks, both ways', () => {
+        const score = loadFile(file)
+        const voices = writtenVoices(score)
+        if (voices.length === 0) return
+
+        const step = Math.max(1, Math.floor(voices.length / SAMPLE))
+        let checked = 0
+        for (let i = 0; i < voices.length; i += step) {
+          const voice = voices[i]
+          const bar = voice.bar
+          const beat = voice.beats[0]
+          const wasTicks = beat.playbackDuration
+          const wasFill = barFill(bar).filled
+
+          const result = stepBeatsDuration([beat], DURATION_SHORTER, settings)
+          if (!result.ok) continue
+          checked += 1
+          // Pitfall 7: both of these are DERIVED from `duration`, so they only
+          // read right because the write finished the score.
+          expect(beat.playbackDuration).toBeLessThan(wasTicks)
+          expect(barFill(bar).filled).toBeLessThan(wasFill)
+
+          result.undo()
+          expect(beat.playbackDuration).toBe(wasTicks)
+          expect(barFill(bar).filled).toBe(wasFill)
+        }
+        expect(checked).toBeGreaterThan(0)
+      })
+
+      it('lengthening a full bar overfills it, which is the state nothing else reports', () => {
+        const score = loadFile(file)
+        const voice = writtenVoices(score).find(
+          (v) => barFill(v.bar)?.state === 'exact',
+        )
+        if (!voice) return
+
+        const result = stepBeatsDuration([voice.beats[0]], DURATION_LONGER, settings)
+        if (!result.ok) return
+        expect(barFill(voice.bar).state).toBe(BAR_OVER)
+        result.undo()
+        expect(barFill(voice.bar).state).toBe('exact')
+      })
+
+      it('an inserted rest renumbers and re-chains the beats of its voice', () => {
+        const score = loadFile(file)
+        const voices = writtenVoices(score)
+        if (voices.length === 0) return
+
+        const step = Math.max(1, Math.floor(voices.length / SAMPLE))
+        let inserted = 0
+        for (let i = 0; i < voices.length; i += step) {
+          const voice = voices[i]
+          const before = voice.beats.length
+          const result = placeRest(voice.beats[0], settings)
+          if (!result.ok) continue
+          inserted += 1
+          // `insertBeat` leaves the indexes at 0,1,0,2,3 - only finish()
+          // renumbers them.
+          expect(voice.beats.map((b) => b.index)).toEqual(voice.beats.map((_, j) => j))
+          for (let j = 1; j < voice.beats.length; j += 1) {
+            expect(voice.beats[j].previousBeat).toBe(voice.beats[j - 1])
+          }
+          result.undo()
+          expect(voice.beats).toHaveLength(before)
+          expect(voice.beats.map((b) => b.index)).toEqual(voice.beats.map((_, j) => j))
+        }
+        expect(inserted).toBeGreaterThan(0)
+      })
+
+      it('a bar added at the end lands on every staff, and comes back off', () => {
+        const score = loadFile(file)
+        const staffCount = score.tracks.reduce((n, t) => n + t.staves.length, 0)
+        const before = score.masterBars.length
+        // Every staff has one bar per master bar to start with, which is what
+        // the append has to preserve.
+        for (const track of score.tracks) {
+          for (const staff of track.staves) expect(staff.bars).toHaveLength(before)
+        }
+
+        const result = appendBar(score, settings)
+        expect(result).toMatchObject({ ok: true, staffCount })
+        for (const track of score.tracks) {
+          for (const staff of track.staves) expect(staff.bars).toHaveLength(before + 1)
+        }
+        // An empty bar reads as a whole-bar rest rather than as incomplete.
+        const added = score.tracks[0].staves[0].bars[before]
+        expect(barFill(added).state).toBe('exact')
+        expect(roundTrip(score).masterBars).toHaveLength(before + 1)
+
+        result.undo()
+        expect(score.masterBars).toHaveLength(before)
+        for (const track of score.tracks) {
+          for (const staff of track.staves) expect(staff.bars).toHaveLength(before)
+        }
+        expect(roundTrip(score).masterBars).toHaveLength(before)
       })
 
       it('carries a full set of edits through a .gp round trip', () => {

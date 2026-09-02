@@ -355,8 +355,11 @@ Three smaller rules, each of which would otherwise look like a broken key:
 
 - **Empty bars are walked through, not stopped at.** A bar with no beats in this
   voice is a hole in the line, not the end of it.
-- **Running off either end is silent.** It is the natural end of a repeatable
-  key. Creating a bar past the end is a write, and belongs to the writing palier.
+- **Running off the START is silent.** It is the natural end of a repeatable key.
+  The right arrow is the one that does something else: on the last beat of a bar
+  that is not exactly full it inserts a rest, and past the end of the score it
+  adds a bar. See
+  [the right arrow makes room](#the-right-arrow-makes-room-which-is-what-a-passage-is-written-with).
 - **A dragged range collapses onto its far edge.** Right moves on from the range's
   last note, left from its first - the edge the arrow is travelling away from.
   The range then goes, because a cursor and a range are the two notions and only
@@ -484,6 +487,236 @@ The only real difference from all-or-nothing is in the undo, and it settles
 itself: the swap holds only the notes that **moved**, so undoing puts back only
 those. Same mechanism, shorter list.
 
+## Writing: the line the first tier held, and what crossing it costs
+
+Everything above this point writes **fields on notes that already exist**. The
+writing tier creates and destroys structure, and changes durations, and those two
+are the same cost wearing different clothes:
+
+| | before | now |
+| --- | --- | --- |
+| `finish()` on the typing path | never (one exception, the delete) | every write |
+| undo records that rebuild rather than restore | one | four |
+| the midi flavour | `onPlay` (one `now`: the tempo) | `now` for anything that moves a tick |
+| a bar can be overfull | no, by construction | **yes** |
+
+The last row is the one that matters most, and it is why the red outline and the
+counter were built a tier early: they stopped being a diagnostic on other
+people's files the moment these keys landed.
+
+### What `finish()` on every keystroke actually costs
+
+The plan that designed this tier budgeted **16ms** for it and called it the main
+risk. Measured on the two large real files, one write end to end - the model
+change, `finish()`, and the undo record - comes to:
+
+| file | write a note | shorten a beat | insert a rest | add a bar |
+| --- | --- | --- | --- | --- |
+| 77 bars, 4314 beats | 1.4ms | 0.9ms | 0.9ms | 1.0ms |
+| 118 bars, 7424 beats | 3.4ms | 2.4ms | 2.5ms | 2.0ms |
+
+Medians of ten, with an occasional first call up to 9.7ms. 16ms is the **cold**
+first `finish()` on a freshly imported score; it is idempotent and settles to
+0.9-1.8ms after that, so the risk was real and turned out to be small.
+
+What keeps it small is that **none of the writing keys repeats**. A held arrow
+walks the cursor and costs a lookup; a held `+` would re-derive the whole score
+at the keyboard's repeat rate, so `allowRepeat` is off for all four and a test
+pins that it stays off.
+
+### Typing a fret: replace, never wait
+
+Three ways to read two digits, and only one of them never makes the user wait:
+
+| | cost |
+| --- | --- |
+| wait ~500ms and see if a second digit arrives | every one-digit fret is half a second of nothing |
+| accumulate until Enter confirms | one extra key per note, forever |
+| **write the first digit, let a second replace it** | a visible correction, on the frets above 9 only |
+
+So `1` writes fret 1 at once and `2` within 800ms replaces it with 12. `3` then
+`5` is fret 3 then fret 5, because 35 is off the end of any neck - the second
+digit only combines when the number it makes is a fret that exists. A leading
+zero is not a number either, so `0` `5` is fret 5.
+
+It leaves **two undo records** for one two-digit fret. That is honest rather than
+tidy: both states really were in the model and on the screen, and coalescing them
+would produce a record whose "before" nobody ever saw.
+
+The window is closed by identity, not by position: the second digit only counts
+if the note the first one wrote is still the note at the cursor. `setCursor`
+clears the state, so any arrow, click or other edit in between starts a new
+number.
+
+### The duration is not a fourth piece of cursor state
+
+The plan asked for "a quarter note by default", read as a duration the cursor
+carries between entries. It needs no state at all: the cursor's duration **is**
+the duration of the beat it is standing on, and `new Beat()` is born a quarter -
+so are the placeholders alphaTab pads an unwritten bar with. The default falls
+out of the model instead of being a constant somewhere that could disagree with
+it.
+
+Which also settles what a new beat's length should be: the one before it. A run
+of `Enter` presses comes out even, and `+` or `-` before them changes what the run
+will be.
+
+One wart, recorded rather than hidden: on a bar nobody has written into yet, `+`
+and `-` change the placeholder beat's duration, which is **invisible** - an empty
+voice renders as a whole-bar rest whatever its placeholder says - and still counts
+as an edit on the undo stack and the dirty flag. The panel shows the value, so it
+is not unfeedbacked, and the alternative was a second source of truth for the
+duration purely to make that one case free.
+
+### `+` shortens and `-` lengthens
+
+The direction is not obvious either way, so it follows the number that is
+written down: a quarter note is a **4** and an eighth is an **8**, so "more" is a
+shorter note. The panel says "Shorter" and "Longer" in words, because the keys
+cannot.
+
+`Duration` is a denominator, and the two longest values are negative
+(`DoubleWhole` is -2, `QuadrupleWhole` is -4), so lengthening is a step along an
+ordered list and never arithmetic on the value. `DURATION_LADDER` is that list,
+and it exists to make the arithmetic version impossible to write by accident.
+
+**The duration belongs to the BEAT**, so changing "this note's length" changes
+the whole chord it is in. That is the musical model rather than a limitation:
+`duration` is a field of `Beat` and there is nowhere else to put it.
+
+On a dragged passage every beat moves, all or nothing - the octave's best-effort
+exception does not apply here, because a beat left behind would not hold a wrong
+value, it would hold a wrong **rhythm**, which is the whole content of the
+operation. Worth knowing what a passage does *not* cover: a range is a set of
+**notes**, so a rest inside the passage belongs to no note and keeps its own
+length.
+
+### A rest needs no rest object, and Enter has one rule
+
+`Beat.isRest` is a getter over `isEmpty || !deadSlapped && notes.length === 0`,
+so a beat with no notes already IS a rest of its own duration - the same fact the
+delete relies on from the other side. Placing one is either clearing a flag or
+inserting a bare `Beat`.
+
+Enter's rule is read off the position rather than off the key: **go to the next
+beat, and write it when it does not exist yet.** Four cases fall out of that, in
+order:
+
+| the cursor is on | Enter |
+| --- | --- |
+| alphaTab's placeholder, in a bar nobody has touched | makes it a real rest **in place**, and stays on it |
+| a beat with another beat after it in this bar | moves there, writing nothing |
+| the last beat of a bar that is not exactly full | inserts a rest after it, and lands on it |
+| the last beat of an exactly full bar | moves to the next bar, and stops at the end of the score |
+
+The last row is why Enter cannot add a bar - that is the right arrow's job - and
+the first is why the placeholder has to be told apart from a rest somebody wrote:
+inserting beside it would leave it behind to be counted twice.
+
+The third row is the step the right arrow makes as well, through the same
+`placeRest` and under the same undo label, so the two keys agree wherever they
+overlap and a passage written with a mixture of them reads as one thing in the
+undo control.
+
+### The placeholder beat, and why `isEmpty` has to be cleared by hand
+
+`ModelUtils.consolidate` pads every unwritten voice with a beat carrying
+`isEmpty = true`, which is what a whole-bar rest is made of. Writing into that
+beat has to clear the flag, because `Voice.finish` only ever **sets** `isEmpty`
+and never unsets it - and an empty voice is skipped by the renderer and by the
+bar-fill arithmetic alike. Without the clear the note is in the model and nothing
+draws it.
+
+This is also why an added bar reads as `exact` rather than as incomplete the
+moment it appears: every voice of it is empty, which `barFill` treats as an
+implicit whole-bar rest.
+
+### A bar is not one object
+
+It is a `MasterBar` - the metre, the key, the repeats, shared by the whole score -
+plus a `Bar` on every staff of **every** track. Adding one to a single track
+desynchronises the score, so `appendBar` adds them everywhere or not at all, with
+the metre of the bar before it (a `new MasterBar()` would silently assume 4/4) and
+each staff's own clef and key signature copied from its own previous bar, which is
+what alphaTab's `consolidate` does for the same job.
+
+**Append only.** `addBar` and `addMasterBar` set `index` from the current length
+and no `finish()` ever renumbers either - only `Voice.finish` renumbers, and only
+beats. At the end of the score the indexes stay right for free; an insertion in
+the middle would need a renumbering pass over every staff. See
+[gotcha 11](alphatab-gotchas.md#11-nothing-can-be-removed-from-the-model-and-only-beats-get-renumbered).
+
+### The right arrow makes room, which is what a passage is written with
+
+The right arrow walks, until it reaches **the last beat of its bar**. There it
+looks at one thing:
+
+| the bar the cursor is in | the right arrow |
+| --- | --- |
+| exactly full | goes to the next bar, adding one past the end of the score |
+| anything else | inserts a rest after the cursor |
+
+"Anything else" is both incomplete **and overfull**, deliberately: the test is
+"is this bar exactly right", not "does it have room". So the writing loop is one
+key - a note, right, a note, right - and it stops making room by itself at the
+moment the bar comes out exactly full.
+
+A bar **nobody has written into** reads as exactly full, because every voice of
+it is empty and that is an implicit whole-bar rest. So the arrow leaves it alone
+and moves on, which is what makes "add a bar, then another" possible without
+writing anything into either of them.
+
+The bar is judged by the reading the counter and the red outline already show, so
+the three cannot disagree. On a multi-voice bar that reading is its **fullest**
+voice, so walking a short voice of an otherwise full bar moves on rather than
+inserting.
+
+**The consequence to know about, and it follows from that table rather than being
+an oversight: single presses cannot walk right out of an OVERFULL bar.** The bar
+is never exactly right, so the arrow keeps making room. The ways out are the left
+arrow, a click, holding the key (a repeat only walks), or fixing the durations
+with `+` - which is the thing the red outline is asking for anyway.
+
+Three guards make a writing key acceptable on an arrow:
+
+- **A bar is only ever added past the last beat of the last bar**, checked on the
+  beat itself - `beat.index` last in its voice, `bar.index` last in its staff,
+  `masterBar.index` last in the score - rather than inferred from the walk having
+  failed. A failed walk only proves there is no later beat on *this* staff, and a
+  staff with fewer bars than the score would then grow the score from the wrong
+  end. No bar can be inserted into the middle of a piece by any key. Inserting a
+  *beat* mid-score is a different matter and is the whole point.
+- **It stands down for an auto-repeat.** `run` reads `event.repeat` and passes
+  `canWrite: false`, so a held arrow only walks - crossing an incomplete bar
+  instead of filling it at the keyboard's repeat rate.
+- **While playing it only walks, too.** Refusing with "pause playback to edit" on
+  every incomplete bar would make the arrow useless during playback, which is the
+  one thing the bare arrows have always been good for. So this arrow, unlike
+  every other edit, is silent rather than refusing: it simply navigates.
+
+The division of labour that keeps this honest is in the code rather than in a
+comment. `navigateBeat` is pure navigation - it writes nothing, is not gated on
+playback, and never goes near `propagate` - and the composable's `moveCursorBeat`
+layers the two writes on top of it. The write is not folded into the walk.
+
+### Where Enter and the right arrow differ, and why
+
+Both place the same rest, through the same `placeRest` and under the same undo
+label, and they agree on the case a passage is actually written in: the last beat
+of a bar that is not exactly full. What differs is the rest of the table:
+
+| the cursor is on | Enter | right arrow |
+| --- | --- | --- |
+| a bar nobody has written into | makes the rest real **in place** | moves on to the next bar |
+| a beat with another after it in this bar | moves there | moves there |
+| the last beat of a bar that is not exactly full | inserts | inserts |
+| the last beat of an exactly full bar | moves on | moves on, adding a bar past the end |
+
+The two rows they disagree on are the two keys meaning different things. Enter
+means "there should be a rest here", and on an untouched bar that is the bar's
+own placeholder rather than a beat beside it. The arrow means "go right", and it
+leaves an untouched bar untouched.
+
 ## Sounding a note, and when the midi gets rebuilt
 
 `api.playNote(note)` generates a **one-note** midi file from the current model
@@ -503,8 +736,23 @@ to feel responsive would have truncated it. So edits declare one of two flavours
 
 | Flavour | Used by | Why |
 | --- | --- | --- |
-| `now` | tempo | It changes **timing**, and the loaded midi is what maps a scrub position to a tick. A stale one would make the transport disagree with the score. |
-| `onPlay` | frets, strings, transposition, retuning | Marked stale, rebuilt when playback starts. Costs nothing while editing, and never cuts a preview. |
+| `now` | tempo, durations, an inserted rest, an added bar | They change **timing**, and the loaded midi is what maps a scrub position to a tick. A stale one would make the transport disagree with the score. |
+| `onPlay` | frets, strings, transposition, retuning, a written note | Marked stale, rebuilt when playback starts. Costs nothing while editing, and never cuts a preview. |
+
+One honest gap, which the writing tier makes more visible rather than
+introducing: **an undo always marks the midi stale rather than rebuilding it**,
+because the history record does not carry the flavour of the edit it reverses.
+So right after undoing a duration change - or a tempo change, which has had the
+same gap since it was built - the scrub bar maps a position to a slightly wrong
+tick until playback starts and the rebuild happens. Fixing it properly means the
+flavour travelling with the record; rebuilding on every undo would pay 16-39ms
+for the many undos that move no tick at all.
+
+The split is exactly "does this move a tick". Writing a note is on the cheap side
+even though it is a structural change, because a note added to a beat that
+already exists moves nothing - which also matters for the preview: a rebuild
+calls `stop()` internally, so a `now` flavour would cut off the note the write
+just sounded.
 
 Nothing is lost by deferring: pitch and fingering changes do not move any tick,
 so a stale midi still maps a scrub position correctly. And the rebuild itself is
@@ -557,6 +805,22 @@ refuse. A swap needs no ambient state.
 
 A **new** edit throws away the redo branch, which is not cosmetic: a redone edit
 would otherwise be re-applied on top of a model it was never captured against.
+
+**Four records rebuild structure rather than restoring values**, and they all
+have the same shape: a named `attach()` and `detach()`, a boolean saying which
+way round it is, and a swap that toggles. The objects are created once and kept
+in the record, so a redo re-attaches the same `Note`, `Beat`, `MasterBar` and
+`Bar` rather than building new ones - which is what makes an undo of an added bar
+cheap and, more importantly, exact.
+
+Three of them are much simpler than the delete, and the reason is worth writing
+down because it looks like an omission. `finish()` **creates** cross-note links as
+well as clearing them, but only where `tieOrigin` is already null. Deleting a note
+can produce that state; adding one cannot. So the delete captures everything
+`finish()` derives for the whole affected staff, and the add captures nothing -
+pinned by a test that compares the full link graph and the generated midi of the
+fixture's Ties track across an add and its undo, rather than by trusting the
+argument.
 
 **The delete's undo is the hard one**, and a test caught why. The Note objects
 are still alive, only detached, so re-attaching them is cheap - but `finish()`

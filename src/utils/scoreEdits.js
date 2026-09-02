@@ -1282,3 +1282,401 @@ export function shiftNoteOctave(note, direction) {
   if (!note) return refused('No note selected.')
   return shiftNotesOctave([note], direction)
 }
+
+// ---------------------------------------------------------------------------
+// 8. Writing: notes, rests, durations and bars
+// ---------------------------------------------------------------------------
+//
+// The line the previous tier held and this one crosses: nothing above this point
+// creates or destroys structure, and nothing above it changes a duration. Every
+// function below does one or the other, which is why they all end in
+// `score.finish()` and why their undo records rebuild rather than restore.
+
+// The duration ladder, longest first.
+//
+// Duration is a DENOMINATOR, not a length: `Whole` is 1, `Quarter` is 4,
+// `Sixteenth` is 16, and the two longer-than-a-bar values are NEGATIVE
+// (`DoubleWhole` is -2, `QuadrupleWhole` is -4). So lengthening or shortening a
+// note is a step along this ordered list, never arithmetic on the value - which
+// is the mistake the ladder exists to make impossible.
+export const DURATION_LADDER = [
+  alphaTab.model.Duration.QuadrupleWhole,
+  alphaTab.model.Duration.DoubleWhole,
+  alphaTab.model.Duration.Whole,
+  alphaTab.model.Duration.Half,
+  alphaTab.model.Duration.Quarter,
+  alphaTab.model.Duration.Eighth,
+  alphaTab.model.Duration.Sixteenth,
+  alphaTab.model.Duration.ThirtySecond,
+  alphaTab.model.Duration.SixtyFourth,
+  alphaTab.model.Duration.OneHundredTwentyEighth,
+  alphaTab.model.Duration.TwoHundredFiftySixth,
+]
+
+// Named rather than signed, and that is deliberate.
+//
+// A number would have to mean either "one step down the ladder" or "twice as
+// long", and those are opposite directions: a shorter note has a BIGGER value.
+// Every call site would then need the comment this pair of constants makes
+// unnecessary.
+export const DURATION_SHORTER = 'shorter'
+export const DURATION_LONGER = 'longer'
+
+// What a duration is called, for the panel and for a refusal message.
+const DURATION_NAMES = new Map([
+  [alphaTab.model.Duration.QuadrupleWhole, 'quadruple whole'],
+  [alphaTab.model.Duration.DoubleWhole, 'double whole'],
+  [alphaTab.model.Duration.Whole, 'whole'],
+  [alphaTab.model.Duration.Half, 'half'],
+  [alphaTab.model.Duration.Quarter, 'quarter'],
+  [alphaTab.model.Duration.Eighth, 'eighth'],
+  [alphaTab.model.Duration.Sixteenth, '16th'],
+  [alphaTab.model.Duration.ThirtySecond, '32nd'],
+  [alphaTab.model.Duration.SixtyFourth, '64th'],
+  [alphaTab.model.Duration.OneHundredTwentyEighth, '128th'],
+  [alphaTab.model.Duration.TwoHundredFiftySixth, '256th'],
+])
+
+export function describeDuration(duration) {
+  return DURATION_NAMES.get(duration) ?? String(duration)
+}
+
+// The next duration along the ladder, or null at either end.
+function nextDuration(duration, direction) {
+  const at = DURATION_LADDER.indexOf(duration)
+  if (at < 0) return null
+  const to = at + (direction === DURATION_SHORTER ? 1 : -1)
+  return to >= 0 && to < DURATION_LADDER.length ? DURATION_LADDER[to] : null
+}
+
+// The swap behind every structural write here: exchange the saved values, then
+// re-derive.
+//
+// `finish()` is not optional and not a precaution. `playbackDuration` and
+// `displayDuration` are DERIVED from `duration` and nothing recomputes them on
+// assignment (pitfall 7), so a swap that skipped it would put the field back and
+// leave every tick reading it stale - including the bar-fill counter that is
+// supposed to be watching for exactly this.
+function makeFinishingSwap(entries, score, settings) {
+  const swap = makeSwap(entries)
+  return () => {
+    swap()
+    score?.finish(settings ?? null)
+  }
+}
+
+function scoreOf(node) {
+  return node?.voice?.bar?.staff?.track?.score ?? node?.bar?.staff?.track?.score ?? null
+}
+
+// 8a. Write a fret at a position: the keyboard's digits.
+//
+// Two cases, and only the second is structural. A string that already carries a
+// note in this beat is a `setNoteFret`, which needs no finish() and no undo
+// record of its own; a free string means a new `Note`, which does.
+//
+// The empty-bar case is the one worth knowing about. alphaTab pads every unwritten
+// voice with a placeholder beat carrying `isEmpty = true`
+// (`ModelUtils.consolidate`), which is what a whole-bar rest is made of. Writing
+// into that beat has to CLEAR the flag, or the note is in the model and nothing
+// draws it: `Voice.finish` only ever sets `isEmpty`, never unsets it, and an
+// empty voice is skipped by the renderer and by the bar-fill arithmetic alike.
+export function writeNoteAtString(beat, string, fret, settings) {
+  if (!beat) return refused('No position to write at.')
+  if (string == null) {
+    return refused('That position has no string: percussion, or a staff without tablature.')
+  }
+
+  const staff = beat.voice?.bar?.staff ?? null
+  const strings = staff?.tuning?.length ?? 0
+  if (strings === 0) return refused('That staff has no strings to write on.')
+  if (string < 1 || string > strings) return refused(`There is no string ${string}.`)
+
+  const value = Math.round(Number(fret))
+  if (!Number.isFinite(value)) return refused('Enter a fret number.')
+  if (value < MIN_FRET || value > MAX_FRET) {
+    return refused(`Fret ${value} is outside the ${MIN_FRET}-${MAX_FRET} range.`)
+  }
+
+  // The string is taken, so this is a pitch change on a note that already
+  // exists. Delegated rather than reimplemented: `setNoteFret` carries the
+  // natural-harmonic refusal and the no-op case, and both apply here unchanged.
+  const existing = beat.getNoteOnString(string)
+  if (existing) {
+    const result = setNoteFret(existing, value)
+    return result.ok ? { ...result, note: existing, created: false } : result
+  }
+
+  const score = scoreOf(beat)
+  if (!score) return refused('That position is not attached to a score.')
+
+  const note = new alphaTab.model.Note()
+  note.string = string
+  note.fret = value
+
+  const wasEmpty = beat.isEmpty
+
+  function attach() {
+    beat.addNote(note)
+    beat.isEmpty = false
+    score.finish(settings ?? null)
+  }
+
+  // The way back. `removeNote` deletes the `noteStringLookup` entry and splices
+  // the array but does NOT renumber (pitfall in `deleteNotes`), and here the new
+  // note is always last, so the survivors keep their indexes and there is
+  // nothing to renumber.
+  //
+  // No whole-staff capture of the state finish() derives, unlike the delete, and
+  // the reason is that an ADD cannot disturb it: `Note.finish` only re-resolves a
+  // tie whose `tieOrigin` is already null, and every imported tie destination
+  // carries one. A test pins the whole link graph of the fixture's Ties track
+  // across an add and its undo rather than trusting that argument.
+  function detach() {
+    beat.removeNote(note)
+    beat.isEmpty = wasEmpty
+    score.finish(settings ?? null)
+  }
+
+  attach()
+
+  let isAttached = true
+  return applied({
+    note,
+    created: true,
+    string,
+    fret: value,
+    undo: () => {
+      if (isAttached) detach()
+      else attach()
+      isAttached = !isAttached
+    },
+  })
+}
+
+// 8b. Longer or shorter, one step along the ladder.
+//
+// THE DURATION BELONGS TO THE BEAT, not to the note. `duration` is a field of
+// `Beat`, so changing "how long this note is" changes the whole chord it sits
+// in. That is the musical model rather than a limitation to work around, and it
+// is why this function takes beats and never notes.
+//
+// All or nothing, like every other batch operation here except the octave. A
+// beat that could not move while its neighbours did would not leave a wrong
+// value behind - so the octave's argument does not apply - but it would leave a
+// wrong RHYTHM, which is the whole content of the operation. Same reasoning as
+// the fret transposition.
+export function stepBeatsDuration(beats, direction, settings) {
+  const list = [...new Set(beats ?? [])]
+  if (list.length === 0) return refused('No beat selected.')
+  if (direction !== DURATION_SHORTER && direction !== DURATION_LONGER) {
+    return noop({ beatCount: 0 })
+  }
+
+  const score = scoreOf(list[0])
+  if (!score) return refused('Those beats are not attached to a score.')
+
+  const moves = []
+  const blocked = []
+  for (const beat of list) {
+    const to = nextDuration(beat.duration, direction)
+    if (to === null) blocked.push(beat)
+    else moves.push({ target: beat, key: 'duration', value: to })
+  }
+
+  if (blocked.length > 0) {
+    const edge = direction === DURATION_SHORTER ? 'shortest' : 'longest'
+    const name = describeDuration(blocked[0].duration)
+    if (list.length === 1) {
+      return refused(`A ${name} note is the ${edge} this editor writes.`)
+    }
+    return refused(
+      `${blocked.length} of these ${list.length} beats are already ${name} notes, the ${edge} this editor writes.`,
+    )
+  }
+
+  // Captured before the write, so the swap has the values to put back.
+  const undo = makeFinishingSwap(
+    moves.map(({ target, key }) => ({ target, key, value: target[key] })),
+    score,
+    settings,
+  )
+  for (const move of moves) move.target[move.key] = move.value
+  score.finish(settings ?? null)
+
+  return applied({
+    beatCount: moves.length,
+    duration: moves[0].value,
+    durationName: describeDuration(moves[0].value),
+    undo,
+  })
+}
+
+// 8c. A rest, which needs no rest object.
+//
+// `Beat.isRest` is a getter over `isEmpty || !deadSlapped && notes.length === 0`,
+// so a beat with no notes IS a rest of its own duration - the same fact the
+// delete already relies on from the other side. Placing one is therefore either
+// clearing a flag or inserting a bare `Beat`, and never building anything.
+//
+// Which of the two depends on what is already there, and the distinction is
+// alphaTab's own: a beat carrying `isEmpty` is the placeholder its importer pads
+// unwritten voices with, not a rest somebody wrote. Turning that into a real rest
+// in place is what "there is nothing here yet" means, and inserting beside it
+// would leave the placeholder behind to be counted twice.
+export function placeRest(beat, settings) {
+  if (!beat) return refused('No position to write at.')
+  const voice = beat.voice ?? null
+  const score = scoreOf(beat)
+  if (!voice || !score) return refused('That position is not attached to a score.')
+
+  // The placeholder case: no insertion, just the flag.
+  if (beat.isEmpty) {
+    const undo = makeFinishingSwap([{ target: beat, key: 'isEmpty', value: true }], score, settings)
+    beat.isEmpty = false
+    score.finish(settings ?? null)
+    return applied({ beat, inserted: false, duration: beat.duration, undo })
+  }
+
+  // A new beat takes the duration of the one it follows, which is what makes a
+  // run of them come out even - and it is also where "a quarter by default"
+  // comes from with no default anywhere in the code: `new Beat()` is born a
+  // quarter, and so are the placeholders alphaTab writes.
+  const rest = new alphaTab.model.Beat()
+  rest.duration = beat.duration
+  rest.dots = beat.dots
+
+  // `insertBeat` links the chain and splices the array but does NOT set
+  // `index` - it leaves the list numbered 0,1,0,2,3 - and `Voice.finish` is what
+  // renumbers it. Verified in Node against 1.8.4, and it is the reason the
+  // finish below is load-bearing rather than tidy.
+  function attach() {
+    voice.insertBeat(beat, rest)
+    score.finish(settings ?? null)
+  }
+
+  // No `removeBeat` exists on `Voice`, so the way back is the splice alphaTab
+  // would have done, plus the two chain links `insertBeat` wrote.
+  function detach() {
+    const at = voice.beats.indexOf(rest)
+    if (at >= 0) voice.beats.splice(at, 1)
+    const previous = rest.previousBeat ?? null
+    const next = rest.nextBeat ?? null
+    if (previous) previous.nextBeat = next
+    if (next) next.previousBeat = previous
+    score.finish(settings ?? null)
+  }
+
+  attach()
+
+  let isAttached = true
+  return applied({
+    beat: rest,
+    inserted: true,
+    duration: rest.duration,
+    undo: () => {
+      if (isAttached) detach()
+      else attach()
+      isAttached = !isAttached
+    },
+  })
+}
+
+// 8d. One more bar, at the end of the score.
+//
+// A bar is not one object. It is a `MasterBar` - the time signature, the key,
+// the repeats, shared by the whole score - plus a `Bar` on every staff of every
+// track. Adding one to a single track desynchronises the score, so this adds
+// them everywhere or not at all.
+//
+// Appended only, never inserted, and that is what keeps it cheap: `addMasterBar`
+// and `addBar` set `index` from the current length and `finish()` never
+// renumbers either of them (only `Voice.finish` renumbers beats), so inserting in
+// the middle would need a renumbering pass this does not.
+export function appendBar(score, settings) {
+  const masterBars = score?.masterBars ?? []
+  if (masterBars.length === 0) return refused('This score has no bars to add one after.')
+
+  const previous = masterBars[masterBars.length - 1]
+
+  const masterBar = new alphaTab.model.MasterBar()
+  // The time signature carries over: a new bar at the end of a piece is in the
+  // metre the piece is in, and `new MasterBar()` would silently assume 4/4.
+  masterBar.timeSignatureNumerator = previous.timeSignatureNumerator
+  masterBar.timeSignatureDenominator = previous.timeSignatureDenominator
+  masterBar.timeSignatureCommon = previous.timeSignatureCommon
+  masterBar.tripletFeel = previous.tripletFeel
+
+  // The bars themselves, one per staff, built once here and re-attached by the
+  // undo rather than rebuilt.
+  //
+  // `voices` matches the staff's previous bar: a two-voice piece stays a
+  // two-voice piece, and every voice gets the placeholder beat alphaTab's own
+  // `consolidate` gives an unwritten voice. `isEmpty` is what makes it a
+  // whole-bar rest rather than a beat somebody wrote.
+  const staffBars = []
+  for (const track of score.tracks ?? []) {
+    for (const staff of track.staves ?? []) {
+      const bar = new alphaTab.model.Bar()
+      const last = staff.bars?.[staff.bars.length - 1] ?? null
+      if (last) {
+        bar.clef = last.clef
+        bar.clefOttava = last.clefOttava
+        bar.keySignature = last.keySignature
+        bar.keySignatureType = last.keySignatureType
+      }
+      const voiceCount = Math.max(1, last?.voices?.length ?? 1)
+      for (let i = 0; i < voiceCount; i += 1) {
+        const voice = new alphaTab.model.Voice()
+        bar.addVoice(voice)
+        const beat = new alphaTab.model.Beat()
+        beat.isEmpty = true
+        voice.addBeat(beat)
+      }
+      staffBars.push({ staff, bar })
+    }
+  }
+
+  function attach() {
+    // `addMasterBar` also computes `start` from the previous bar and files the
+    // bar into the repeat groups, so re-running it on the same object is the
+    // correct re-attach and not a shortcut.
+    score.addMasterBar(masterBar)
+    for (const { staff, bar } of staffBars) staff.addBar(bar)
+    score.finish(settings ?? null)
+  }
+
+  // No `removeMasterBar` and no `removeBar` exist, so the way back pops both
+  // lists and cuts the forward links `add*` wrote. The indexes need no repair
+  // because only the last element ever goes.
+  //
+  // `rebuildRepeatGroups()` is the one part that is not a mirror image: the
+  // groups are built by appending, so removing a bar from the middle of a group
+  // has no inverse - rebuilding them from what is left does.
+  function detach() {
+    if (score.masterBars[score.masterBars.length - 1] === masterBar) score.masterBars.pop()
+    if (masterBar.previousMasterBar) masterBar.previousMasterBar.nextMasterBar = null
+    score.rebuildRepeatGroups()
+    for (const { staff, bar } of staffBars) {
+      if (staff.bars[staff.bars.length - 1] === bar) staff.bars.pop()
+      if (bar.previousBar) bar.previousBar.nextBar = null
+    }
+    score.finish(settings ?? null)
+  }
+
+  attach()
+
+  let isAttached = true
+  return applied({
+    barIndex: masterBar.index,
+    barCount: score.masterBars.length,
+    staffCount: staffBars.length,
+    numerator: masterBar.timeSignatureNumerator,
+    denominator: masterBar.timeSignatureDenominator,
+    undo: () => {
+      if (isAttached) detach()
+      else attach()
+      isAttached = !isAttached
+    },
+  })
+}

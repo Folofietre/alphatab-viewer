@@ -1,7 +1,7 @@
 # alphaTab gotchas
 
 
-All ten were found by running code against alphaTab **1.8.4**, not by reading
+All eleven were found by running code against alphaTab **1.8.4**, not by reading
 the docs, and each one silently corrupts an edit - or lets a corrupt one
 through, or quietly disables a feature - if you do the obvious thing. They are the reason
 [src/utils/scoreEdits.js](../src/utils/scoreEdits.js) exists as its own module.
@@ -186,8 +186,19 @@ full a bar is - has to come after `finish()`, or recompute the value itself from
 `voice.calculateDuration()`, which sums `playbackDuration`, so a fill read
 between a duration change and `finish()` reports the bar as it was.
 
-Nothing in this app changes a duration yet, so this is not on any live path -
-but a test pins it, because it is the trap waiting for the first one that does.
+This is now on the **live path**: `+` and `-` change a beat's duration on every
+press, and the bar-fill counter beside them is reading `playbackDuration`. So
+every write in the writing tier ends in `score.finish()`, and the swap that
+undoes it finishes too - a swap that only put the field back would leave the
+counter reporting the bar as it was.
+
+What that costs, measured on the real files rather than guessed: **0.9-3.4ms**
+per keystroke for the whole operation, finish included (77 bars / 4314 beats and
+118 bars / 7424 beats), with an occasional first call up to 9.7ms. The plan that
+designed this tier budgeted 16ms and treated it as the main risk; 16ms is the
+**cold** first call on a freshly imported score, and `finish()` is idempotent
+and much cheaper after it - the same 16ms / 9.5ms / 6.2ms decay measured further
+down this page. The risk was real and turned out to be small.
 
 ## 8. An overfull bar passes through the whole chain in silence
 
@@ -300,14 +311,68 @@ navigating during playback impossible.
 One trap in doing it: that call fires the very event that handles it, so the
 clear-down needs a re-entrancy guard or it recurses until the stack goes.
 
+## 11. Nothing can be removed from the model, and only beats get renumbered
+
+Three asymmetries in one, all verified in Node, and together they are the shape
+of every structural undo in the writing tier.
+
+**`Voice.insertBeat` does not set `index`.** It links `nextBeat` / `previousBeat`
+and splices the array, and leaves the list numbered like this:
+
+```
+before insert : 0,1,2,3
+after  insert : 0,1,0,2,3      <- the new beat carries index 0
+after  finish : 0,1,2,3,4
+```
+
+`Voice.finish()` is what renumbers, which is why a beat insertion has to finish
+even though nothing about it changed a duration. `MidiFileGenerator` and the
+renderer both read `beat.index`.
+
+**There is no `removeBeat`, no `removeBar` and no `removeMasterBar`.** `Voice`
+has `addBeat` and `insertBeat`, `Bar` has `addVoice`, `Staff` has `addBar`,
+`Score` has `addMasterBar` - and no inverse for any of them. So an undo splices
+the array itself and cuts the links the `add` wrote:
+
+```js
+voice.beats.splice(at, 1)
+if (previous) previous.nextBeat = next
+if (next) next.previousBeat = previous
+score.finish(settings)
+```
+
+**But `Bar.index` and `MasterBar.index` are never renumbered.** `addBar` and
+`addMasterBar` set them from the current length, and no `finish()` touches them
+again - only `Voice.finish` renumbers, and only beats. That is why adding a bar
+is **append-only** here: at the end of the score the indexes stay right for free,
+where an insertion in the middle would need a renumbering pass over every staff
+plus `rebuildRepeatGroups()`, and would silently leave `firstChangedMasterBar`
+hints pointing at the wrong bar until it did.
+
+`score.rebuildRepeatGroups()` is the one part with no mirror image:
+`addMasterBar` files a bar into the open repeat group, and removing a bar from
+the middle of a group has no inverse. Rebuilding the groups from what is left
+does.
+
 ## And one non-gotcha: `finish()` is not needed after the OTHER edits
 
 `score.finish()` is idempotent - measured on a 118-bar score at 16ms, then 9.5ms,
 then 6.2ms, with beat and note counts unchanged - but all it recomputes is
-structure, durations and cross-note links, and every operation except the delete
-changes none of those. So `deleteNotes()` is the single caller in
-`scoreEdits.js`, for the reasons in gotcha 6. Adding or removing beats or bars would
-need it too.
+structure, durations and cross-note links, and none of the value-based edits
+changes any of those. So the callers in `scoreEdits.js` are exactly the ones that
+touch structure or a duration: `deleteNotes` (gotcha 6) and every function of the
+writing tier. A fret, a string, a tuning, a transposition and a tempo still need
+none.
+
+One asymmetry inside that, which is why writing a note captures much less state
+than deleting one: `finish()` **creates** links as well as clearing them, but
+only for a note whose `tieOrigin` is already null (`this.tieOrigin ??
+Note.findTieOrigin(this)`). Deleting can produce that state, so the delete has to
+capture everything `finish()` derives for the whole affected staff. Adding cannot,
+so the add's undo is just the removal. That argument is pinned by a test rather
+than trusted: the fixture's Ties track carries ties, hammer-ons and a slide, and
+the whole link graph plus the generated midi is compared across an add and its
+undo.
 
 ## alphaTab escapes your stacking context
 
