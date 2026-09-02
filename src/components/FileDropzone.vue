@@ -18,9 +18,7 @@
 
 <script setup>
 import { ref, onMounted, onBeforeUnmount } from 'vue'
-
-// Guitar Pro and MusicXML — the formats alphaTab reads from a binary/text blob.
-const ACCEPT = '.gp,.gp3,.gp4,.gp5,.gpx,.xml,.musicxml'
+import { SCORE_FILE_ACCEPT as ACCEPT } from '@/utils/scoreFiles'
 
 defineProps({
   variant: { type: String, default: 'full' }, // 'full' | 'compact'

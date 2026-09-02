@@ -118,6 +118,22 @@ Then `Save .gp` downloads the result - or **`Ctrl+S`** / **`Cmd+S`**, which
 deliberately takes the key from the browser's "Save page as" - and `Revert`
 reloads the file exactly as it was opened.
 
+**Everything you can do to the document as a whole is in one File menu**, top
+left: `Open`, `Save`, `Save as...` and `Close`. They used to be scattered - an
+Open button in the action bar, a Close button in the document strip - and
+`Save as` had nowhere to go that was not beside one of them.
+
+`Save as...` uses `showSaveFilePicker`, so it really does choose a name and a
+folder - but that is the File System Access API and it is **Chromium only**.
+Where it is missing the item still works and still gets the file out; it just
+lands wherever downloads land, and the item's tooltip says so rather than
+letting the difference be a surprise. Cancelling the dialog is silent: it is not
+an error, and the most likely reason to see one is having opened it by accident.
+
+The name it *suggests* still carries the `(edited)` marker, so an original
+cannot be overwritten by pressing Enter; the name it *reports* afterwards is
+whatever you actually chose.
+
 Those two note-level moves work on **one note or a whole passage**. Click and
 drag across the score - the same gesture that sets alphaTab's loop range - or
 **double click a bar** to take the whole measure, and Alt+arrow acts on every

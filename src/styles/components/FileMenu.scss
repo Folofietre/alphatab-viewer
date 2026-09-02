@@ -1,0 +1,80 @@
+@use '@/styles/mixins' as *;
+
+.file-menu {
+  position: relative;
+  flex: none;
+}
+
+.file-button {
+  @include button-chrome;
+  padding: 0.2rem 0.6rem;
+  font-size: 0.78rem;
+
+  &.on {
+    @include control-active;
+  }
+}
+
+// Dropped below the button, in the action bar's own colours. It has to escape
+// the bar's box, which is only 46px tall, so it is absolutely positioned and
+// carries a z-index above the score's escaping cursor layer - alphaTab puts
+// 1000 on that and it leaks, as documented in the gotchas.
+.menu {
+  position: absolute;
+  top: calc(100% + 0.3rem);
+  left: 0;
+  z-index: 1100;
+  min-width: 11rem;
+  margin: 0;
+  padding: 0.2rem;
+  list-style: none;
+  background: var(--chrome-raised);
+  border: 1px solid var(--chrome-border);
+  border-radius: $radius-control;
+  box-shadow: 0 6px 18px rgb(0 0 0 / 40%);
+
+  button {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: $gap-md;
+    width: 100%;
+    padding: 0.32rem 0.45rem;
+    background: none;
+    border: none;
+    border-radius: $radius-control;
+    color: var(--chrome-text);
+    font-size: 0.76rem;
+    text-align: left;
+    cursor: pointer;
+
+    &:hover:not(:disabled) {
+      background: var(--accent);
+      border-color: transparent;
+      color: var(--text-inverse);
+    }
+    &:disabled {
+      cursor: not-allowed;
+      opacity: 0.4;
+    }
+  }
+}
+
+// Close is a different kind of act from the three above it - it throws the
+// score away rather than moving it around - so it is set apart.
+.sep {
+  margin-top: 0.2rem;
+  padding-top: 0.2rem;
+  border-top: 1px solid var(--chrome-divider);
+}
+
+kbd {
+  @include tabular;
+  font-size: 0.62rem;
+  color: var(--chrome-text-muted);
+}
+
+// The input exists only to be clicked by the menu item.
+.file-input {
+  display: none;
+}

@@ -4,11 +4,17 @@
          window chrome does not shift when a score is opened. -->
     <header class="action-bar">
       <div class="bar-side">
-        <FileDropzone
-          v-if="isScoreLoaded"
-          variant="compact"
+        <!-- One File menu instead of an Open button here and a Close button in
+             the strip below. The four things you can do to the document as a
+             whole now live together, which is also the only place `Save as` had
+             to go: it is a sibling of Save, not of anything in a side panel. -->
+        <FileMenu
+          :is-score-loaded="isScoreLoaded"
           @file="openFile"
-        >Open</FileDropzone>
+          @save="saveScore"
+          @save-as="saveScoreAs"
+          @close="closeScore"
+        />
 
         <!-- Undo and redo. Icon only, so the whole state goes in the tooltip:
              what would move, and how many steps are left before the 30-step
@@ -58,12 +64,7 @@
       </div>
     </header>
 
-    <ScoreHeader
-      v-if="isScoreLoaded && scoreInfo"
-      :info="scoreInfo"
-      :file-name="fileName"
-      @close="closeScore"
-    />
+    <ScoreHeader v-if="isScoreLoaded && scoreInfo" :info="scoreInfo" :file-name="fileName" />
 
     <p v-if="loadError" class="error" role="alert">{{ loadError }}</p>
 
@@ -247,6 +248,7 @@ import ScoreEditPanel from '@/components/ScoreEditPanel.vue'
 import SelectionEditPanel from '@/components/SelectionEditPanel.vue'
 import TransportBar from '@/components/TransportBar.vue'
 import FileDropzone from '@/components/FileDropzone.vue'
+import FileMenu from '@/components/FileMenu.vue'
 import BarsPerRow from '@/components/BarsPerRow.vue'
 import HelpDialog from '@/components/HelpDialog.vue'
 
@@ -256,8 +258,25 @@ const { loadFile, clearScore, isScoreLoaded, isDirty, scoreInfo, fileName, loadE
 // The undo control sits in the action bar, not in a sidebar panel: it reaches
 // edits made from either of them, and the bar is visible even with the sidebar
 // collapsed.
-const { undo, canUndo, undoLabel, undoDepth, redo, canRedo, redoLabel, redoDepth } =
-  useScoreEdit()
+const {
+  undo, canUndo, undoLabel, undoDepth,
+  redo, canRedo, redoLabel, redoDepth,
+  download,
+  downloadAs,
+} = useScoreEdit()
+
+// Saving from the menu blurs first, for the same reason Ctrl+S does: the edit
+// panels commit their text and number fields on `change`, which fires on blur,
+// so a half-typed track name would otherwise be left out of the file.
+function saveScore() {
+  document.activeElement?.blur?.()
+  download()
+}
+
+function saveScoreAs() {
+  document.activeElement?.blur?.()
+  downloadAs()
+}
 
 // The shortcut help. Driven from here and from the "?" key, which is why the
 // state lives in its own composable rather than in either.

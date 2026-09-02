@@ -22,7 +22,8 @@ src/
     HelpDialog.vue           the "?" modal: shortcuts, generated from BINDINGS
     TransportBar.vue         play, stop, scrub, speed, volume, loop, click (in the action bar)
     BarsPerRow.vue           force a fixed number of bars per system
-    FileDropzone.vue         window-wide drag & drop + file picker
+    FileDropzone.vue         window-wide drag & drop + the empty-state target
+    FileMenu.vue             the File menu: open / save / save as / close
   assets/
     loop.png metronome.png   monochrome toggle icons, used as CSS masks
   styles/

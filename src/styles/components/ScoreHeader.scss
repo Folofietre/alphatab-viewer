@@ -64,18 +64,3 @@
   }
 }
 
-// Ghost button: the strip is already a strong colour, so the control reads as
-// an outline on it rather than another filled shape.
-.close {
-  flex: none;
-  justify-self: end;
-  background: rgba(255, 255, 255, 0.12);
-  border-color: rgba(255, 255, 255, 0.35);
-  color: var(--docstrip-text);
-
-  &:hover:not(:disabled) {
-    background: var(--accent);
-    border-color: var(--accent-strong);
-    color: var(--text-inverse);
-  }
-}

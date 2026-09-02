@@ -75,3 +75,66 @@ export function downloadScoreAsGp(score, settings, sourceFileName) {
 
   return { fileName, byteLength: bytes.length }
 }
+
+// ---------------------------------------------------------------------------
+// Save as: choosing the name and the folder
+// ---------------------------------------------------------------------------
+
+// Whether this browser can offer a real save dialog.
+//
+// `showSaveFilePicker` is the File System Access API, and it is Chromium-only -
+// Firefox and Safari have neither shipped it nor said they will. It also needs a
+// secure context, which localhost and the deployed https page both are.
+//
+// Exported so the menu can say which of the two things its item will do, rather
+// than promising a folder picker and quietly producing a download.
+export function canPickSaveLocation() {
+  return typeof window !== 'undefined' && typeof window.showSaveFilePicker === 'function'
+}
+
+// Save, letting the user choose the name and the folder.
+//
+// Falls back to the ordinary download where the API is missing, which is the
+// same thing `Save` does: the user still gets the file, they just do not get to
+// say where it lands. `picked` reports which of the two happened.
+//
+// Returns null when the user CANCELS the dialog, which is not an error and must
+// not be reported as one - it is the most likely outcome of opening a save
+// dialog by accident.
+//
+// The picker is opened BEFORE the export runs, and that order matters twice.
+// `showSaveFilePicker` must be called from a user gesture, and an await before
+// it would spend that gesture; and the export is synchronous and cost ~400ms on
+// a 118-bar score, so exporting first would freeze the window before the dialog
+// even appeared.
+export async function saveScoreAsGp(score, settings, sourceFileName) {
+  const suggestedName = exportFileName(score, sourceFileName)
+  if (!score) throw new Error('No score to export.')
+
+  if (!canPickSaveLocation()) {
+    return { ...downloadScoreAsGp(score, settings, sourceFileName), picked: false }
+  }
+
+  let handle
+  try {
+    handle = await window.showSaveFilePicker({
+      suggestedName,
+      types: [
+        {
+          description: 'Guitar Pro 7',
+          accept: { 'application/octet-stream': ['.gp'] },
+        },
+      ],
+    })
+  } catch (error) {
+    if (error?.name === 'AbortError') return null
+    throw error
+  }
+
+  const bytes = exportScoreToGp(score, settings)
+  const writable = await handle.createWritable()
+  await writable.write(bytes)
+  await writable.close()
+
+  return { fileName: handle.name || suggestedName, byteLength: bytes.length, picked: true }
+}
