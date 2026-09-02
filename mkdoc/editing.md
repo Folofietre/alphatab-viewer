@@ -603,6 +603,20 @@ and it exists to make the arithmetic version impossible to write by accident.
 the whole chord it is in. That is the musical model rather than a limitation:
 `duration` is a field of `Beat` and there is nowhere else to put it.
 
+The **dot** is on the same key row and in the same function of the model:
+`beat.dots` is part of how long the beat lasts, not a mark of its own, so `.`
+acts on exactly what `+` and `-` act on and the three share one `durationTarget`
+so they cannot drift apart about what "this note's length" means. It is stale
+until `finish()` like every other tick (pitfall 7): measured, a quarter reads
+960, still 960 after `dots = 1`, and 1440 after finishing.
+
+A TOGGLE rather than a count, and the number decided it: across the two large
+real files **76 of 11738 beats carry a dot and none carries two**. A key that
+stepped 0-1-2 would spend a press on something the music here does not use, so
+`.` goes 0 or 1 and an imported double dot clears in one press. A mixed passage
+resolves towards dotted, because the first press should do what was asked rather
+than undo work already on screen.
+
 On a dragged passage every beat moves, all or nothing - the octave's best-effort
 exception does not apply here, because a beat left behind would not hold a wrong
 value, it would hold a wrong **rhythm**, which is the whole content of the
@@ -818,6 +832,34 @@ The two rows they disagree on are the two keys meaning different things. Enter
 means "there should be a rest here", and on an untouched bar that is the bar's
 own placeholder rather than a beat beside it. The arrow means "go right", and it
 leaves an untouched bar untouched.
+
+### Clicking the score takes the keyboard back
+
+alphaTab calls `preventDefault()` on its own mousedown when
+`enableUserInteraction` is on, and that **suppresses the focus change**. So a
+control used a moment ago still owned the keyboard while the user was looking at
+the score: pick a value in the bars-per-row select, click a note, and the arrow
+keys still moved that select. Nothing on screen said why.
+
+A plain DOM `mousedown` on alphaTab's host now blurs whatever had the focus.
+alphaTab's own event is not enough here - it only fires when the press lands
+inside a bar, while a press anywhere on the rendered surface should hand the
+keyboard back.
+
+Blurring also **commits**: the panels write their fields on `change`, which fires
+on blur, so a half-typed tempo is applied rather than lost. That is the same
+reason `Ctrl+S` blurs before it exports.
+
+This changes a premise recorded above. The writing keys stand down for every
+element that owns typing keys - a digit typed into a tempo field is a digit - and
+that used to mean "type a tempo, click a note, type a fret" put the fret in the
+tempo field, with no fix available. Now the click takes the focus, so the
+sequence works and the stand-down costs nothing.
+
+The rule is split out as `focusToRelease(active, host)` so it can be tested
+without a document, the same way `guardUnload` is. Two cases matter: an element
+with no `blur` of its own, and anything alphaTab put inside its own host, which
+is never ours to interfere with. Blurring the body needs no case - it is a no-op.
 
 ## Sounding a note, and when the midi gets rebuilt
 

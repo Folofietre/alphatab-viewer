@@ -31,6 +31,7 @@ import {
   describeDuration,
   placeRest,
   stepBeatsDuration,
+  toggleBeatsDot,
   writeNoteAtString,
   BAR_UNDER,
   BAR_EXACT,
@@ -1144,6 +1145,12 @@ describe('undo restores exactly', () => {
       ),
     ],
     [
+      'dot a beat',
+      (score) => toggleBeatsDot(
+        [score.tracks[LEAD].staves[0].bars[0].voices[0].beats[0]], settings,
+      ),
+    ],
+    [
       'shorten a beat',
       (score) => stepBeatsDuration(
         [score.tracks[LEAD].staves[0].bars[0].voices[0].beats[0]], DURATION_SHORTER, settings,
@@ -1879,6 +1886,93 @@ describe('stepBeatsDuration', () => {
     result.undo()
     expect(beats.map((b) => b.duration)).toEqual([16, 16, 16, 16])
     expect(beats[0].playbackDuration).toBe(240)
+  })
+})
+
+describe('toggleBeatsDot', () => {
+  it('dots a beat, and the ticks follow because it finished', () => {
+    const score = loadFixture()
+    const beat = allBeats(score, LEAD)[0]
+    expect(beat.playbackDuration).toBe(960)
+
+    const result = toggleBeatsDot([beat], settings)
+    expect(result).toMatchObject({ ok: true, changed: true, beatCount: 1, dots: 1 })
+    expect(beat.dots).toBe(1)
+    // Pitfall 7 again: a dotted quarter is 1440, and only a finish says so.
+    expect(beat.playbackDuration).toBe(1440)
+  })
+
+  it('and takes it off again on the second press', () => {
+    const score = loadFixture()
+    const beat = allBeats(score, LEAD)[0]
+    toggleBeatsDot([beat], settings)
+    expect(toggleBeatsDot([beat], settings)).toMatchObject({ ok: true, dots: 0 })
+    expect(beat.dots).toBe(0)
+    expect(beat.playbackDuration).toBe(960)
+  })
+
+  it('clears a double dot in one press rather than stepping through it', () => {
+    // No real test file uses one - 0 of 11738 beats - so this is the way out of
+    // an imported double dot, not a way to make one.
+    const score = loadFixture()
+    const beat = allBeats(score, LEAD)[0]
+    beat.dots = 2
+    expect(toggleBeatsDot([beat], settings)).toMatchObject({ ok: true, dots: 0 })
+    expect(beat.dots).toBe(0)
+  })
+
+  it('a mixed passage resolves towards dotted', () => {
+    const score = loadFixture()
+    const beats = score.tracks[LEAD].staves[0].bars[0].voices[0].beats
+    beats[1].dots = 1
+
+    // Only the three undotted ones move.
+    expect(toggleBeatsDot(beats, settings)).toMatchObject({ ok: true, beatCount: 3, dots: 1 })
+    expect(beats.map((b) => b.dots)).toEqual([1, 1, 1, 1])
+    // Now they all agree, so the next press clears them.
+    expect(toggleBeatsDot(beats, settings)).toMatchObject({ ok: true, beatCount: 4, dots: 0 })
+    expect(beats.map((b) => b.dots)).toEqual([0, 0, 0, 0])
+  })
+
+  it('deduplicates, so a chord given note by note dots its beat once', () => {
+    const score = loadFixture()
+    const beat = allBeats(score, LEAD)[0]
+    expect(toggleBeatsDot([beat, beat], settings).beatCount).toBe(1)
+  })
+
+  it('can overfill a bar, which is allowed and flagged', () => {
+    const score = loadFixture()
+    const bar = score.tracks[LEAD].staves[0].bars[0]
+    expect(toggleBeatsDot(bar.voices[0].beats, settings).ok).toBe(true)
+    expect(barFill(bar).state).toBe(BAR_OVER)
+  })
+
+  it('refuses an empty list', () => {
+    expect(toggleBeatsDot([], settings).ok).toBe(false)
+    expect(toggleBeatsDot(null, settings).ok).toBe(false)
+  })
+
+  it('survives the .gp round trip', () => {
+    const score = loadFixture()
+    const beats = score.tracks[LEAD].staves[0].bars[0].voices[0].beats
+    toggleBeatsDot(beats.slice(0, 2), settings)
+    const back = roundTrip(score).tracks[LEAD].staves[0].bars[0].voices[0].beats
+    expect(back.map((b) => b.dots)).toEqual([1, 1, 0, 0])
+    expect(back[0].playbackDuration).toBe(1440)
+  })
+
+  it('puts the dots back, and re-applies on a second call', () => {
+    const score = loadFixture()
+    const beats = score.tracks[LEAD].staves[0].bars[0].voices[0].beats
+    const result = toggleBeatsDot(beats, settings)
+
+    result.undo()
+    expect(beats.map((b) => b.dots)).toEqual([0, 0, 0, 0])
+    expect(beats[0].playbackDuration).toBe(960)
+
+    result.undo()
+    expect(beats.map((b) => b.dots)).toEqual([1, 1, 1, 1])
+    expect(beats[0].playbackDuration).toBe(1440)
   })
 })
 

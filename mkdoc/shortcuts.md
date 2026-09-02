@@ -126,18 +126,18 @@ typed into a tempo field is a digit, so unlike `Alt`+arrow they stand down for
 every element that owns typing keys - text and number inputs, textareas,
 `<select>`, contentEditable.
 
-The consequence is worth knowing, because it looks like a bug. alphaTab calls
+That used to have a consequence that looked exactly like a bug. alphaTab calls
 `preventDefault()` on its mousedown, which **suppresses the focus change**, so
-clicking a note does not move focus out of the field you last typed in - and
-"type a tempo, click a note, type a fret" puts the fret in the tempo field.
-Clicking anywhere outside a field first is the way out. There is no fix available
-from here: taking a character key back from a focused text field would be a worse
-bug than this one.
+clicking a note did not move focus out of the field you last typed in - and
+"type a tempo, click a note, type a fret" put the fret in the tempo field.
+`useScoreEdit` now blurs on a press anywhere on the score, so the focus really
+does leave and the sequence works. See
+[clicking the score takes the keyboard back](editing.md#clicking-the-score-takes-the-keyboard-back).
 
-`+` and `-` match by **character**, which is what makes both the main row and the
-numeric keypad work - the keypad's plus reports `key: '+'` too. `+` needs Shift on
-most layouts, so Shift is deliberately not declared, the same reason as the `?`
-binding.
+`+`, `-` and `.` match by **character**, which is what makes both the main row
+and the numeric keypad work - the keypad's plus and decimal report `'+'` and
+`'.'` too. `+` needs Shift on most layouts and so does a full stop on several, so
+Shift is deliberately not declared, the same reason as the `?` binding.
 
 One subtlety in the save shortcut: it **blurs the focused element first**. The
 edit panels commit their text and number fields on `change`, which fires on blur,
@@ -176,6 +176,35 @@ different **kind** of move: the fret and the string are both recomputed to land
 on a pitch, so unlike the others it can be impossible - going down an octave is
 off the bottom of the instrument for 37 % of the notes of the real scores
 measured.
+
+## The help is generated in GROUPS, and the groups are checked
+
+`shortcutHelp()` returns sections rather than one list - `Global`,
+`Moving around`, `The selected note`, `Writing` - because the table is long
+enough now that "what does the dot do" meant scanning thirty rows. Each binding
+declares its own `group`, and `SHORTCUT_GROUPS` declares the order they read in:
+what works everywhere, then getting around, then changing what is there, then
+putting something new in.
+
+The order is declared rather than derived, because the reading order of a help
+table is a decision while the order of the binding table is a maintenance one. A
+test asserts the two sets match exactly, in both directions - a group named in a
+binding and forgotten in the list would file the row into a section the modal
+never renders, which is the one failure a generated table exists to prevent.
+
+`shortcutRows()` is the same thing flat, for the assertions that are about the
+table rather than about its layout ("is every binding accounted for").
+
+Two things about the layout are worth writing down, because both were wrong on
+the first attempt and both are arithmetic rather than taste. **Two columns at
+most**, enforced by a 26rem minimum on the grid track rather than by a count: the
+keycap column takes a fixed share out of whatever a column has, so at 19rem the
+grid fitted three or four and every description came out three words to a line
+("Toggle / the / focused / checkbox"). And **alternative combinations stack**
+rather than sitting side by side - only two rows have them, but laid out in a row
+the widest of the two set the width of the whole keycap column and pushed every
+description in the table away from its keys. The "or" between them stays: stacked
+keycaps with nothing between them read as a chord to be pressed together.
 
 ## The shortcut help is generated, not written
 

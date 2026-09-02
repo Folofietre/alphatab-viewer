@@ -16,6 +16,7 @@ import {
   deleteNotes,
   placeRest,
   stepBeatsDuration,
+  toggleBeatsDot,
   writeNoteAtString,
   RETUNE_KEEP_PITCH,
   RETUNE_REASSIGN,
@@ -307,6 +308,21 @@ function message(kind, text) {
   editMessage.value = text ? { kind, text } : null
 }
 
+// What a press on the score should take the focus off, or null.
+//
+// Split out from the listener for the reason `guardUnload` is: the rule is worth
+// testing and the DOM around it is not. Nothing here needs a document.
+//
+// Blurring the body would be a no-op, so it needs no case of its own - the two
+// that matter are an element with no `blur` (not everything focusable in a test
+// or a future DOM has one) and anything alphaTab put inside its own host, which
+// is never ours to interfere with.
+export function focusToRelease(active, host) {
+  if (!active || typeof active.blur !== 'function') return null
+  if (host && (active === host || host.contains?.(active))) return null
+  return active
+}
+
 // ---- cursor reads and writes -----------------------------------------------
 
 // The flat description of a position, for the UI and for the shortcuts.
@@ -504,6 +520,28 @@ function bind() {
   // handlers on the same event is the arrangement that already worked only by
   // accident once, and this would be the third job on it.
   const host = scoreEditHost.hostElement
+
+  // Clicking the score takes the focus off whatever had it.
+  //
+  // alphaTab calls `preventDefault()` on its own mousedown when
+  // `enableUserInteraction` is on, and that SUPPRESSES THE FOCUS CHANGE - so
+  // without this, clicking a note leaves the focus in whatever field or select
+  // was last used. The bars-per-row select was where it showed: pick a value,
+  // click the score, and the arrow keys still moved that select instead of the
+  // cursor, with nothing on screen to say why.
+  //
+  // A plain DOM `mousedown` on the host rather than alphaTab's own event,
+  // because alphaTab only fires that one when the press lands inside a bar,
+  // while a press anywhere on the rendered surface should hand the keyboard
+  // back.
+  //
+  // Blurring also COMMITS: the panels write their fields on `change`, which
+  // fires on blur, so a half-typed tempo is applied rather than lost - the same
+  // reason `Ctrl+S` blurs before exporting.
+  host?.addEventListener('mousedown', () => {
+    focusToRelease(document.activeElement, host)?.blur()
+  })
+
   host?.addEventListener('alphaTab.beatMouseDown', (event) => {
     const mouse = event.originalEvent ?? null
     if (!mouse || !host.isConnected) {
@@ -1563,24 +1601,12 @@ export function useScoreEdit() {
   function changeDuration(direction) {
     if (!canEdit.value) return refusePlayback()
 
-    const isRange = rangeNotes.length > 0
-    const beats = isRange
-      ? [...new Set(rangeNotes.map((note) => note.beat))]
-      : cursorBeat
-        ? [cursorBeat]
-        : []
-    if (beats.length === 0) return refused('Click a note or a bar in the score first.')
+    const target = durationTarget()
+    if (!target) return refused('Click a note or a bar in the score first.')
 
-    const trackIndex = isRange
-      ? (selectedRange.value?.trackIndex ?? null)
-      : (cursorInfo.value?.trackIndex ?? null)
-    const bar = isRange
-      ? (selectedRange.value?.startBar ?? null)
-      : (cursorInfo.value?.barIndex ?? null)
-
-    const result = stepBeatsDuration(beats, direction, scoreEditHost.api?.settings)
+    const result = stepBeatsDuration(target.beats, direction, scoreEditHost.api?.settings)
     if (result.changed) {
-      if (typeof trackIndex === 'number') scoreEditHost.syncTrack(trackIndex)
+      if (typeof target.trackIndex === 'number') scoreEditHost.syncTrack(target.trackIndex)
       refreshSelection()
       refreshSelectionRects()
       // By hand, because no cursor move happened: the ticks under the cursor
@@ -1590,8 +1616,58 @@ export function useScoreEdit() {
     return propagate(result, {
       render: true,
       midi: 'now',
-      firstChangedBar: bar,
+      firstChangedBar: target.bar,
       label: direction === DURATION_SHORTER ? 'Shorten' : 'Lengthen',
+    })
+  }
+
+  // What the length keys act on: every beat of a dragged passage, or the one the
+  // cursor is on.
+  //
+  // Shared by `+`, `-` and the dot, so the three cannot drift apart about what
+  // "this note's length" means. Null when nothing is designated.
+  function durationTarget() {
+    const isRange = rangeNotes.length > 0
+    const beats = isRange
+      ? [...new Set(rangeNotes.map((note) => note.beat))]
+      : cursorBeat
+        ? [cursorBeat]
+        : []
+    if (beats.length === 0) return null
+    return {
+      beats,
+      trackIndex: isRange
+        ? (selectedRange.value?.trackIndex ?? null)
+        : (cursorInfo.value?.trackIndex ?? null),
+      bar: isRange
+        ? (selectedRange.value?.startBar ?? null)
+        : (cursorInfo.value?.barIndex ?? null),
+    }
+  }
+
+  // The dot key, which is the other half of a duration.
+  //
+  // Same scope as `+` and `-` in every way - the beat under the cursor, or every
+  // beat of a dragged passage - because a dot IS part of how long the beat
+  // lasts. Shares the target logic with them for that reason: two keys that
+  // disagreed about what they act on would be the worst of both.
+  function toggleDot() {
+    if (!canEdit.value) return refusePlayback()
+    const target = durationTarget()
+    if (!target) return refused('Click a note or a bar in the score first.')
+
+    const result = toggleBeatsDot(target.beats, scoreEditHost.api?.settings)
+    if (result.changed) {
+      if (typeof target.trackIndex === 'number') scoreEditHost.syncTrack(target.trackIndex)
+      refreshSelection()
+      refreshSelectionRects()
+      refreshBarFill()
+    }
+    return propagate(result, {
+      render: true,
+      midi: 'now',
+      firstChangedBar: target.bar,
+      label: result.dots ? 'Dot' : 'Undot',
     })
   }
 
@@ -2004,6 +2080,7 @@ export function useScoreEdit() {
     // writing
     typeFret,
     changeDuration,
+    toggleDot,
     insertRest,
     insertBar,
     removeBars,

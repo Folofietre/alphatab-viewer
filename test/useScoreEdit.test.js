@@ -110,7 +110,7 @@ const alphaTab = await import('@coderline/alphatab')
 const apiSettings = new alphaTab.Settings()
 apiSettings.core.includeNoteBounds = true
 
-const { useScoreEdit } = await import('@/composables/useScoreEdit')
+const { useScoreEdit, focusToRelease } = await import('@/composables/useScoreEdit')
 const { loadFixture } = await import('./helpers')
 const {
   stringedNotes,
@@ -201,6 +201,9 @@ function fakeHostElement() {
     addEventListener: (name, fn) => listeners.set(name, fn),
     getBoundingClientRect: () => ({ left: 0, top: 0 }),
     fire: (name, event) => listeners.get(name)?.(event),
+    // alphaTab renders inside the host, so the blur-on-press has to leave
+    // anything in there alone.
+    contains: (el) => el?.insideTheHost === true,
   }
 }
 
@@ -2444,6 +2447,112 @@ describe('durations', () => {
     expect(edit.undo().ok).toBe(true)
     expect(beatAt(0, 0).duration).toBe(4)
     expect(beatAt(0, 0).playbackDuration).toBe(960)
+  })
+})
+
+describe('the dot', () => {
+  function beatAt(bar, index, track = LEAD) {
+    return score.tracks[track].staves[0].bars[bar].voices[0].beats[index]
+  }
+
+  it('dots the beat under the cursor, and the counter follows', () => {
+    clickAt(beatAt(0, 0).notes[0])
+    expect(edit.cursorBarFill.value).toMatchObject({ state: 'exact', beats: 4 })
+
+    const result = edit.toggleDot()
+    expect(result).toMatchObject({ ok: true, changed: true, beatCount: 1, dots: 1 })
+    expect(beatAt(0, 0).dots).toBe(1)
+    expect(edit.cursor.value.dots).toBe(1)
+    // A dotted quarter in a full 4/4 bar overflows it, which is allowed and
+    // flagged rather than refused.
+    expect(edit.cursorBarFill.value.state).toBe('over')
+  })
+
+  it('and takes it off on the second press', () => {
+    clickAt(beatAt(0, 0).notes[0])
+    edit.toggleDot()
+    expect(edit.toggleDot()).toMatchObject({ ok: true, dots: 0 })
+    expect(beatAt(0, 0).dots).toBe(0)
+    expect(edit.cursorBarFill.value.state).toBe('exact')
+  })
+
+  it('is a timing change, so the midi is rebuilt now', () => {
+    clickAt(beatAt(0, 0).notes[0])
+    host.renders = []
+    host.midiReloads = 0
+
+    edit.toggleDot()
+    expect(host.midiReloads).toBe(1)
+    expect(host.renders).toEqual([{ reuseViewport: true, firstChangedMasterBar: 0 }])
+    expect(host.dirty).toBe(true)
+  })
+
+  it('acts on every beat of a dragged passage, like the length keys', () => {
+    dragOver(beatAt(0, 0), beatAt(0, 3))
+    expect(edit.toggleDot()).toMatchObject({ ok: true, beatCount: 4, dots: 1 })
+    expect(score.tracks[LEAD].staves[0].bars[0].voices[0].beats.map((b) => b.dots))
+      .toEqual([1, 1, 1, 1])
+  })
+
+  it('refuses with nothing selected, and while playing', () => {
+    edit.clearSelection()
+    expect(edit.toggleDot().ok).toBe(false)
+
+    clickAt(beatAt(0, 0).notes[0])
+    player.isPlaying.value = true
+    expect(edit.toggleDot().ok).toBe(false)
+    expect(edit.editMessage.value.text).toMatch(/Pause playback/)
+    expect(beatAt(0, 0).dots).toBe(0)
+  })
+
+  it('undoes back to the ticks it had', () => {
+    clickAt(beatAt(0, 0).notes[0])
+    edit.toggleDot()
+    expect(beatAt(0, 0).playbackDuration).toBe(1440)
+
+    expect(edit.undo().ok).toBe(true)
+    expect(beatAt(0, 0).dots).toBe(0)
+    expect(beatAt(0, 0).playbackDuration).toBe(960)
+  })
+
+  it('and a new beat inherits the dot of the one it follows', () => {
+    // `placeRest` copies `dots` along with the duration, so a run of rests after
+    // a dotted note comes out even.
+    clickAt(beatAt(0, 3).notes[0])
+    edit.toggleDot()
+    expect(edit.insertRest()).toMatchObject({ ok: true, inserted: true })
+    const beats = score.tracks[LEAD].staves[0].bars[0].voices[0].beats
+    expect(beats[4].dots).toBe(1)
+  })
+})
+
+// alphaTab calls preventDefault() on its own mousedown, which suppresses the
+// focus change - so without this, a control used a moment ago still owns the
+// keyboard while the user is looking at the score. The rule is split out from
+// the listener so it needs no document, the same way `guardUnload` is.
+describe('clicking the score takes the keyboard back', () => {
+  const host = { contains: (el) => el?.insideTheHost === true }
+
+  it('names the focused element as the one to release', () => {
+    const select = { tagName: 'SELECT', blur() {} }
+    expect(focusToRelease(select, host)).toBe(select)
+  })
+
+  it('leaves the host and anything alphaTab put inside it alone', () => {
+    expect(focusToRelease(host, host)).toBeNull()
+    expect(focusToRelease({ insideTheHost: true, blur() {} }, host)).toBeNull()
+  })
+
+  it('and answers null rather than throwing on nothing to blur', () => {
+    expect(focusToRelease(null, host)).toBeNull()
+    expect(focusToRelease(undefined, host)).toBeNull()
+    // Not everything focusable carries a blur, in a test or in a future DOM.
+    expect(focusToRelease({ tagName: 'DIV' }, host)).toBeNull()
+  })
+
+  it('works with no host at all, which is the state before init', () => {
+    const el = { blur() {} }
+    expect(focusToRelease(el, null)).toBe(el)
   })
 })
 

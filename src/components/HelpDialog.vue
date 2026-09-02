@@ -15,25 +15,32 @@
 
       <div class="body">
         <!-- Generated from the binding table, so it cannot claim a shortcut the
-             handler does not have. -->
-        <section>
-          <h3>Keyboard</h3>
-          <dl>
-            <template v-for="row in shortcuts" :key="row.label">
-              <dt>
-                <template v-for="(keys, i) in row.keys" :key="keys">
-                  <span v-if="i > 0" class="alt">or</span>
-                  <kbd>{{ keys }}</kbd>
-                </template>
-              </dt>
-              <dd>{{ row.label }}</dd>
-            </template>
-          </dl>
+             handler does not have - the GROUPS included, so a key cannot end up
+             filed under the wrong heading either.
+
+             Laid out in columns rather than as one list: the table is long
+             enough now that "what does the dot do" means scanning thirty rows,
+             where four headed groups means scanning one. -->
+        <section class="keyboard">
+          <div v-for="section in shortcuts" :key="section.group" class="group">
+            <h3>{{ section.group }}</h3>
+            <dl>
+              <template v-for="row in section.rows" :key="row.label">
+                <dt>
+                  <template v-for="(keys, i) in row.keys" :key="keys">
+                    <span v-if="i > 0" class="alt">or</span>
+                    <kbd>{{ keys }}</kbd>
+                  </template>
+                </dt>
+                <dd>{{ row.label }}</dd>
+              </template>
+            </dl>
+          </div>
         </section>
 
         <!-- Hand-written, because these are not bindings: alphaTab owns the
              mouse and there is no table to generate them from. -->
-        <section>
+        <section class="mouse">
           <h3>Mouse</h3>
           <dl>
             <dt><span class="gesture">Click a note head</span></dt>
@@ -60,6 +67,13 @@
 
             <dt><span class="gesture">Click a track name</span></dt>
             <dd>In the Mixer tab, show that track alone.</dd>
+
+            <dt><span class="gesture">Any click on the score</span></dt>
+            <dd>
+              Takes the keyboard back from whatever field or menu had it, so the
+              keys above act on the score rather than on a control you had just
+              used.
+            </dd>
           </dl>
         </section>
       </div>

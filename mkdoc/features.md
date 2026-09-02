@@ -290,6 +290,12 @@ shorter note - and the panel says "Shorter" and "Longer" in words. The length
 belongs to the **beat**, so changing it changes every note of a chord at once,
 and on a dragged passage every beat moves together or none does.
 
+**`.` adds or removes the dot**, which makes the beat half again as long. It is
+part of the length rather than a mark of its own, so it acts on exactly what `+`
+and `-` act on. One press on, one press off: across the real test files 76 of
+11738 beats carry a dot and none carries two, so the key spends itself on the
+one that exists - and an imported double dot clears in a single press.
+
 **`Enter` walks the bar and fills in what is missing.** On a beat with something
 after it, it just moves on. On the last beat of a bar that is not exactly full,
 it inserts a rest of the same length and lands on it. On a bar nobody has written
@@ -352,8 +358,16 @@ selection, `Ctrl+Delete` takes the bar it is in.** There is no confirmation on
 either, which is the same call as everywhere else here: undo covers it, and the
 unsaved-changes warning covers the file.
 
-**Deliberately out of scope for this tier:** dots and tuplets, changing a time
-signature, changing the number of strings, and copy and paste.
+**Deliberately out of scope for this tier:** tuplets, changing a time signature,
+changing the number of strings, and copy and paste.
+
+## Clicking the score takes the keyboard back
+
+alphaTab suppresses the focus change on its own clicks, so a control used a
+moment ago kept the keyboard while you were looking at the score - pick a value
+in **bars per row**, click a note, and the arrow keys still moved that select.
+Any press on the score now takes the focus off whatever had it, and commits it on
+the way, so a half-typed tempo is applied rather than lost.
 
 ## What is NOT saved with the score
 

@@ -1512,6 +1512,47 @@ export function stepBeatsDuration(beats, direction, settings) {
   })
 }
 
+// 8b bis. The dot, which is the other half of a duration.
+//
+// A dot is not a separate mark on a note: `beat.dots` is part of how long the
+// BEAT lasts, so it belongs beside `stepBeatsDuration` and carries the same two
+// consequences. `playbackDuration` is derived from `duration` AND `dots` and is
+// stale until `finish()` (pitfall 7) - measured: a quarter reads 960, still 960
+// after `dots = 1`, and 1440 after finishing.
+//
+// A TOGGLE rather than a count, and the choice is measured rather than a guess:
+// across the two large real files, 76 of 11738 beats carry a dot and **none**
+// carries two. So the key that reaches for a double dot would be spending itself
+// on something real music here does not use; `dots` still takes any number, and
+// an imported double dot is cleared in one press rather than being stepped
+// through.
+//
+// Mixed selections resolve towards ON: a passage where only some beats are
+// dotted becomes uniformly dotted, and the second press clears it. The
+// alternative - clearing whenever anything is dotted - makes the first press
+// undo work the user can see rather than doing what they asked for.
+export function toggleBeatsDot(beats, settings) {
+  const list = [...new Set(beats ?? [])]
+  if (list.length === 0) return refused('No beat selected.')
+
+  const score = scoreOf(list[0])
+  if (!score) return refused('Those beats are not attached to a score.')
+
+  const dots = list.every((beat) => beat.dots > 0) ? 0 : 1
+  const moves = list.filter((beat) => beat.dots !== dots)
+  if (moves.length === 0) return noop({ beatCount: 0, dots })
+
+  const undo = makeFinishingSwap(
+    moves.map((beat) => ({ target: beat, key: 'dots', value: beat.dots })),
+    score,
+    settings,
+  )
+  for (const beat of moves) beat.dots = dots
+  score.finish(settings ?? null)
+
+  return applied({ beatCount: moves.length, dots, undo })
+}
+
 // 8c. A rest, which needs no rest object.
 //
 // `Beat.isRest` is a getter over `isEmpty || !deadSlapped && notes.length === 0`,

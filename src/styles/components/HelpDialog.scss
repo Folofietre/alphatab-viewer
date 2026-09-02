@@ -8,7 +8,10 @@
 .help-dialog {
   margin: auto;
   padding: 0;
-  width: min(680px, calc(100vw - 2rem));
+  // Wider than it was, because the keyboard half is now two columns of groups
+  // rather than one list. Still capped to the viewport, so a narrow window gets
+  // a single column instead of a horizontal scrollbar.
+  width: min(920px, calc(100vw - 2rem));
   max-height: calc(100vh - 3rem);
   border: 1px solid var(--chrome-border);
   border-radius: $radius-block;
@@ -72,21 +75,54 @@ section {
   }
 }
 
+// The keyboard half: groups side by side, each with its own heading.
+//
+// TWO columns at most, and the minimum is what enforces it rather than a count:
+// at 19rem the grid fitted three or four on a wide window and every description
+// came out three words to a line ("Toggle / the / focused / checkbox"), because
+// the keycap column takes a fixed 7rem out of whatever the column has. 26rem
+// leaves about 19rem for the words, which is where they stop wrapping mid-phrase
+// - and one column below that, rather than a narrower pair.
+.keyboard {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(26rem, 1fr));
+  gap: $gap-md calc($gap-md * 2);
+  align-items: start;
+}
+
+// A column keeps its heading with its rows when the grid reflows.
+.group {
+  min-width: 0;
+
+  h3 {
+    margin-bottom: 0.3rem;
+  }
+}
+
 // Keys on the left, what they do on the right. A grid rather than a table so it
 // collapses to one column on a narrow window without a horizontal scrollbar.
 dl {
   display: grid;
-  grid-template-columns: minmax(7rem, max-content) minmax(0, 1fr);
-  gap: 0.35rem $gap-md;
+  // `max-content` over the stacked keycaps, so the column is exactly as wide as
+  // the widest ONE of them and never as wide as two side by side.
+  grid-template-columns: minmax(5rem, max-content) minmax(0, 1fr);
+  gap: 0.4rem $gap-md;
   align-items: baseline;
   margin: 0;
 }
 
+// Alternatives STACK rather than running side by side.
+//
+// Two rows have more than one combination - redo (Ctrl/Cmd+Y or Ctrl/Cmd+Shift+Z)
+// and silence (Delete or Backspace) - and laid out in a row the widest of them
+// set the width of the whole keycap column, which pushed every description in
+// the table away from its keys. One above the other keeps the column as narrow as
+// its widest single keycap.
 dt {
   display: flex;
-  align-items: baseline;
-  flex-wrap: wrap;
-  gap: 0.25rem;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.15rem;
 }
 
 dd {
@@ -109,9 +145,11 @@ kbd {
   color: var(--chrome-text);
 }
 
-// "or", between two combinations that do the same thing.
+// "or", between two combinations that do the same thing. It has to stay: stacked
+// keycaps with nothing between them read as a chord to be pressed together.
 .alt {
-  font-size: 0.62rem;
+  font-size: 0.58rem;
+  line-height: 1;
   color: var(--chrome-text-muted);
 }
 
@@ -139,4 +177,13 @@ footer {
   dd {
     margin-bottom: 0.5rem;
   }
+}
+
+// A group heading is a heading INSIDE a section, so it must not read as loudly
+// as the section's own. The section labels ("Keyboard", "Mouse") were the only
+// h3 before; the groups now carry them and the section keeps its name in the
+// column headings instead of repeating it.
+.keyboard .group h3 {
+  color: var(--chrome-text);
+  font-size: 0.6rem;
 }

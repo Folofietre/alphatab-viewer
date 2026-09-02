@@ -95,7 +95,13 @@
             title="Double the length of every beat in the selection"
             @click="changeDuration(DURATION_LONGER)"
           >Longer</button>
-          <kbd title="Plus shortens and minus lengthens, following the number that is written: a quarter is a 4 and an eighth an 8">+ / -</kbd>
+          <button
+            type="button"
+            :disabled="!canEdit"
+            title="Add or remove the dot on every beat in the selection"
+            @click="toggleDot"
+          >Dot</button>
+          <kbd title="Plus shortens, minus lengthens, and the full stop adds the dot">+ - .</kbd>
         </div>
 
         <div class="row">
@@ -234,7 +240,7 @@
              new rest or a new bar's first note will take: one value, so the
              panel cannot disagree with the score. -->
         <p class="inspector">
-          <span class="badge">{{ cursor.durationName }}</span>
+          <span class="badge">{{ cursor.dots ? `dotted ${cursor.durationName}` : cursor.durationName }}</span>
           <template v-if="cursor.isUnwritten">nothing written here yet</template>
           <template v-else-if="cursor.isRest">rest</template>
           <template v-else-if="cursor.hasNote">note</template>
@@ -254,7 +260,13 @@
             title="Double the length of this beat, and of every note in it"
             @click="changeDuration(DURATION_LONGER)"
           >Longer</button>
-          <kbd title="Plus shortens and minus lengthens, following the number that is written: a quarter is a 4 and an eighth an 8">+ / -</kbd>
+          <button
+            type="button"
+            :disabled="!canEdit"
+            title="Add or remove the dot, which makes the beat half again as long"
+            @click="toggleDot"
+          >Dot</button>
+          <kbd title="Plus shortens, minus lengthens, and the full stop adds the dot">+ - .</kbd>
         </div>
 
         <div class="row">
@@ -327,7 +339,8 @@ const CURSOR_HELP =
   'nothing selected the arrows scroll the score instead. ' +
   'Typing a digit writes that fret here, and a second digit within a moment ' +
   'replaces it, so 1 then 2 is fret 12. Shorter and Longer act on the whole ' +
-  'beat, so on every note of a chord, and on every beat of a dragged passage. ' +
+  'beat, so on every note of a chord, and on every beat of a dragged passage, ' +
+  'and so does the dot. ' +
   'The right arrow makes room: on the last beat of a bar that is not exactly ' +
   'full it inserts a rest for the next note, and past the end of the score it ' +
   'adds a bar. Insert bar and Delete bar act on the bar the cursor is in, on ' +
@@ -349,7 +362,7 @@ const CURSOR_HELP =
 const selectionHelp = computed(() =>
   selectedRange.value
     ? 'String and Pitch apply to every note at once, or to none: if one would run off the neck, the whole selection is refused. ' +
-      'Shorter and Longer act on every BEAT the passage covers, so on every note of a chord - and not on a rest inside it, which belongs to no note. ' +
+      'Shorter, Longer and Dot act on every BEAT the passage covers, so on every note of a chord - and not on a rest inside it, which belongs to no note. ' +
       'Octave is the exception, and does what it can: a note the tuning cannot reach stays at the pitch it had rather than being moved to a wrong one. ' +
       'Delete bar removes every bar the passage covers, on every track, and is the only way to name more than one. ' +
       'Drag on the score to change the range, or click a note to leave it.'
@@ -373,6 +386,7 @@ const {
   shiftSelectedOctave,
   deleteSelection,
   changeDuration,
+  toggleDot,
   insertRest,
   insertBar,
   removeBars,

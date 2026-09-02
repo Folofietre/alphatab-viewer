@@ -118,12 +118,14 @@ export const BINDINGS = [
   {
     code: 'Space',
     label: 'Play / pause',
+    group: 'Global',
     appliesTo: (el) => !ownsTypingKeys(el),
     run: (player) => player.playPause(),
   },
   {
     code: 'Enter',
     label: 'Toggle the focused checkbox',
+    group: 'Global',
     // Taking Space for play/pause removes a checkbox's ONLY native toggle key:
     // Enter does nothing on a checkbox. Hand it back here, once, instead of in
     // every component that renders one.
@@ -155,6 +157,7 @@ export const BINDINGS = [
   {
     code: 'ArrowRight',
     label: 'Next beat, making room at the end of a bar',
+    group: 'Moving around',
     allowRepeat: true,
     appliesTo: (el, _player, edit) => !ownsTypingKeys(el) && edit.canNavigate.value,
     // The one navigation key that WRITES: on the last beat of a bar that is not
@@ -167,6 +170,7 @@ export const BINDINGS = [
   {
     code: 'ArrowLeft',
     label: 'Move the cursor to the previous beat',
+    group: 'Moving around',
     allowRepeat: true,
     appliesTo: (el, _player, edit) => !ownsTypingKeys(el) && edit.canNavigate.value,
     run: (_player, _event, edit) => edit.moveCursorBeat(-1),
@@ -174,6 +178,7 @@ export const BINDINGS = [
   {
     code: 'ArrowUp',
     label: 'Move the cursor up one string',
+    group: 'Moving around',
     // `shift: false` and no Alt, so this stays distinct from the three other
     // things the up arrow does. The modifier match is exact for Alt, Ctrl and
     // Meta already; Shift is declared because Alt+Shift+Up is a binding too and
@@ -186,6 +191,7 @@ export const BINDINGS = [
   {
     code: 'ArrowDown',
     label: 'Move the cursor down one string',
+    group: 'Moving around',
     modifiers: { shift: false },
     allowRepeat: true,
     appliesTo: (el, _player, edit) => !ownsTypingKeys(el) && edit.canNavigate.value,
@@ -210,6 +216,7 @@ export const BINDINGS = [
   {
     key: 's',
     label: 'Save the score as .gp',
+    group: 'Global',
     // `shift: false` on purpose: Ctrl+Shift+S is Firefox's responsive design
     // mode, and swallowing a devtools key to do the same thing as Ctrl+S is a
     // bad trade.
@@ -224,6 +231,7 @@ export const BINDINGS = [
   {
     key: 's',
     label: 'Save the score as .gp',
+    group: 'Global',
     modifiers: { meta: true, shift: false },
     appliesTo: (_el, player) => player.isScoreLoaded.value,
     run: saveScore,
@@ -236,6 +244,7 @@ export const BINDINGS = [
   {
     key: '?',
     label: 'Show the keyboard shortcuts',
+    group: 'Global',
     appliesTo: (el) => !ownsTypingKeys(el),
     run: () => useHelp().toggleHelp(),
   },
@@ -248,6 +257,7 @@ export const BINDINGS = [
   {
     key: 'z',
     label: 'Undo the last edit',
+    group: 'Global',
     modifiers: { ctrl: true, shift: false },
     appliesTo: (_el, player) => player.isScoreLoaded.value,
     run: (_player, _event, edit) => edit.undo(),
@@ -255,6 +265,7 @@ export const BINDINGS = [
   {
     key: 'z',
     label: 'Undo the last edit',
+    group: 'Global',
     modifiers: { meta: true, shift: false },
     appliesTo: (_el, player) => player.isScoreLoaded.value,
     run: (_player, _event, edit) => edit.undo(),
@@ -270,6 +281,7 @@ export const BINDINGS = [
   {
     key: 'y',
     label: 'Redo the last undone edit',
+    group: 'Global',
     modifiers: { ctrl: true, shift: false },
     appliesTo: (_el, player) => player.isScoreLoaded.value,
     run: (_player, _event, edit) => edit.redo(),
@@ -277,6 +289,7 @@ export const BINDINGS = [
   {
     key: 'y',
     label: 'Redo the last undone edit',
+    group: 'Global',
     modifiers: { meta: true, shift: false },
     appliesTo: (_el, player) => player.isScoreLoaded.value,
     run: (_player, _event, edit) => edit.redo(),
@@ -284,6 +297,7 @@ export const BINDINGS = [
   {
     key: 'z',
     label: 'Redo the last undone edit',
+    group: 'Global',
     modifiers: { ctrl: true, shift: true },
     appliesTo: (_el, player) => player.isScoreLoaded.value,
     run: (_player, _event, edit) => edit.redo(),
@@ -291,6 +305,7 @@ export const BINDINGS = [
   {
     key: 'z',
     label: 'Redo the last undone edit',
+    group: 'Global',
     modifiers: { meta: true, shift: true },
     appliesTo: (_el, player) => player.isScoreLoaded.value,
     run: (_player, _event, edit) => edit.redo(),
@@ -304,18 +319,21 @@ export const BINDINGS = [
   {
     code: 'Delete',
     label: 'Replace the selection with silence',
+    group: 'The selected note',
     appliesTo: (el) => !ownsTypingKeys(el),
     run: (_player, _event, edit) => edit.deleteSelection(),
   },
   {
     code: 'Backspace',
     label: 'Replace the selection with silence',
+    group: 'The selected note',
     appliesTo: (el) => !ownsTypingKeys(el),
     run: (_player, _event, edit) => edit.deleteSelection(),
   },
   {
     code: 'ArrowUp',
     label: 'Move up one string, same pitch',
+    group: 'The selected note',
     modifiers: { alt: true, shift: false },
     // Repeats, unlike Space: holding the key to walk a note across the neck is
     // exactly the point. The midi rebuild is debounced downstream so a held key
@@ -327,6 +345,7 @@ export const BINDINGS = [
   {
     code: 'ArrowDown',
     label: 'Move down one string, same pitch',
+    group: 'The selected note',
     modifiers: { alt: true, shift: false },
     allowRepeat: true,
     appliesTo: (el) => !ownsAltArrows(el),
@@ -335,6 +354,7 @@ export const BINDINGS = [
   {
     code: 'ArrowUp',
     label: 'Up one semitone',
+    group: 'The selected note',
     modifiers: { alt: true, shift: true },
     allowRepeat: true,
     appliesTo: (el) => !ownsAltArrows(el),
@@ -343,6 +363,7 @@ export const BINDINGS = [
   {
     code: 'ArrowDown',
     label: 'Down one semitone',
+    group: 'The selected note',
     modifiers: { alt: true, shift: true },
     allowRepeat: true,
     appliesTo: (el) => !ownsAltArrows(el),
@@ -362,6 +383,7 @@ export const BINDINGS = [
   {
     code: 'PageUp',
     label: 'Up one octave',
+    group: 'The selected note',
     modifiers: { alt: true },
     allowRepeat: true,
     appliesTo: (el) => !ownsAltArrows(el),
@@ -370,6 +392,7 @@ export const BINDINGS = [
   {
     code: 'PageDown',
     label: 'Down one octave',
+    group: 'The selected note',
     modifiers: { alt: true },
     allowRepeat: true,
     appliesTo: (el) => !ownsAltArrows(el),
@@ -377,18 +400,18 @@ export const BINDINGS = [
   },
   // ---- writing -------------------------------------------------------------
   //
-  // The three keys that put something into the score, and the first ones here
-  // that are plain CHARACTERS rather than a combination.
+  // The keys that put something into the score, and the first ones here that are
+  // plain CHARACTERS rather than a combination.
   //
   // That is what makes them the strictest bindings in the table: a digit typed
   // into a tempo field is a digit, so unlike Alt+arrow these have to stand down
-  // for every element that owns typing keys. The consequence is worth knowing,
-  // because it looks like a bug: alphaTab calls `preventDefault()` on its
-  // mousedown, so clicking a note does NOT move focus out of the field you last
-  // typed in, and "type a tempo, click a note, type a fret" puts the fret in the
-  // tempo field. Clicking anywhere outside a field first is the way out, and
-  // there is no fix available from here - taking the key back from a focused
-  // text field is a worse bug than this one.
+  // for every element that owns typing keys.
+  //
+  // Standing down is safe BECAUSE clicking the score blurs: `useScoreEdit`
+  // listens for a press on alphaTab's host and takes the focus off whatever had
+  // it, since alphaTab's own `preventDefault()` suppresses the focus change. It
+  // used to mean "type a tempo, click a note, type a fret" put the fret in the
+  // tempo field, which looked exactly like a broken key.
   //
   // None of them repeats. Each one calls `score.finish()`, so a held key would
   // be re-deriving the whole score at the keyboard's repeat rate.
@@ -397,6 +420,7 @@ export const BINDINGS = [
     key: ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'],
     keyName: '0-9',
     label: 'Write a fret at the cursor',
+    group: 'Writing',
     // A digit needs a POSITION to write at, which is what a cursor is. With
     // nothing selected the keys are left entirely alone.
     appliesTo: (el, _player, edit) => !ownsTypingKeys(el) && edit.canWriteNote.value,
@@ -412,14 +436,27 @@ export const BINDINGS = [
   {
     key: '+',
     label: 'Shorter note',
+    group: 'Writing',
     appliesTo: (el, _player, edit) => !ownsTypingKeys(el) && edit.canChangeDuration.value,
     run: (_player, _event, edit) => edit.changeDuration(edit.DURATION_SHORTER),
   },
   {
     key: '-',
     label: 'Longer note',
+    group: 'Writing',
     appliesTo: (el, _player, edit) => !ownsTypingKeys(el) && edit.canChangeDuration.value,
     run: (_player, _event, edit) => edit.changeDuration(edit.DURATION_LONGER),
+  },
+  // The dot, which is part of a length rather than a mark of its own, so it
+  // stands with `+` and `-` and acts on exactly what they act on. Matched by
+  // character, which covers the main row and the numeric keypad's decimal, and
+  // Shift is not declared because plenty of layouts need it for a full stop.
+  {
+    key: '.',
+    label: 'Dotted note',
+    group: 'Writing',
+    appliesTo: (el, _player, edit) => !ownsTypingKeys(el) && edit.canChangeDuration.value,
+    run: (_player, _event, edit) => edit.toggleDot(),
   },
   // Enter, which is the SECOND binding on that key: the checkbox toggle above
   // owns it while a checkbox is focused, and this one takes it everywhere else.
@@ -428,6 +465,7 @@ export const BINDINGS = [
   {
     code: 'Enter',
     label: 'Add a rest, or step along the bar',
+    group: 'Writing',
     appliesTo: (el, _player, edit) => !ownsTypingKeys(el) && edit.canWriteNote.value,
     run: (_player, _event, edit) => edit.insertRest(),
   },
@@ -453,6 +491,7 @@ export const BINDINGS = [
   {
     code: 'Insert',
     label: 'Insert a bar before this one',
+    group: 'Writing',
     modifiers: { ctrl: true, shift: false },
     appliesTo: (el, _player, edit) => !ownsTypingKeys(el) && edit.canEditBars.value,
     run: (_player, _event, edit) => edit.insertBar(),
@@ -460,6 +499,7 @@ export const BINDINGS = [
   {
     code: 'Insert',
     label: 'Insert a bar before this one',
+    group: 'Writing',
     modifiers: { meta: true, shift: false },
     appliesTo: (el, _player, edit) => !ownsTypingKeys(el) && edit.canEditBars.value,
     run: (_player, _event, edit) => edit.insertBar(),
@@ -467,6 +507,7 @@ export const BINDINGS = [
   {
     code: 'Delete',
     label: 'Delete this bar',
+    group: 'Writing',
     modifiers: { ctrl: true, shift: false },
     appliesTo: (el, _player, edit) => !ownsTypingKeys(el) && edit.canEditBars.value,
     run: (_player, _event, edit) => edit.removeBars(),
@@ -474,6 +515,7 @@ export const BINDINGS = [
   {
     code: 'Delete',
     label: 'Delete this bar',
+    group: 'Writing',
     modifiers: { meta: true, shift: false },
     appliesTo: (el, _player, edit) => !ownsTypingKeys(el) && edit.canEditBars.value,
     run: (_player, _event, edit) => edit.removeBars(),
@@ -546,27 +588,52 @@ export function describeBinding(binding) {
   return parts.join(' + ')
 }
 
-// One row per distinct action, with every key combination that triggers it.
+// The order the groups read in, which is the order someone learns them: what
+// works everywhere, then getting around, then changing what is there, then
+// putting something new in.
 //
-// Grouped by label, which is what folds Ctrl+S and Cmd+S into one row, and
-// Delete and Backspace into another. Order follows BINDINGS, so the table reads
-// in the order a maintainer sees them.
+// Declared here rather than derived from BINDINGS, because the reading order of
+// a help table is a decision and the order of the binding table is a
+// maintenance one. A test asserts the two sets match, so a group named in a
+// binding and forgotten here fails rather than disappearing from the help.
+export const SHORTCUT_GROUPS = ['Global', 'Moving around', 'The selected note', 'Writing']
+
+// One row per distinct action, with every key combination that triggers it,
+// arranged in groups.
+//
+// Rows are folded by label, which is what puts Ctrl+S and Cmd+S on one row, and
+// Delete and Backspace on another. Within a group the order follows BINDINGS, so
+// the table still reads in the order a maintainer sees them.
 export function shortcutHelp() {
-  const rows = []
   const byLabel = new Map()
+  const groups = new Map(SHORTCUT_GROUPS.map((group) => [group, []]))
+
   for (const binding of BINDINGS) {
     const keys = describeBinding(binding)
     const existing = byLabel.get(binding.label)
     if (existing) {
-      // Deduped: the Ctrl and Cmd twins now render identically.
+      // Deduped: the Ctrl and Cmd twins render identically.
       if (!existing.keys.includes(keys)) existing.keys.push(keys)
       continue
     }
     const row = { label: binding.label, keys: [keys] }
     byLabel.set(binding.label, row)
-    rows.push(row)
+    // An unknown group would silently drop the row, so it goes to the end
+    // instead - and the test on SHORTCUT_GROUPS is what stops it happening.
+    if (!groups.has(binding.group)) groups.set(binding.group, [])
+    groups.get(binding.group).push(row)
   }
-  return rows
+
+  return [...groups]
+    .filter(([, rows]) => rows.length > 0)
+    .map(([group, rows]) => ({ group, rows }))
+}
+
+// Every row, flat, for anything that wants the whole table rather than the
+// grouped one. Kept because "is every binding accounted for" is a question
+// about the table, not about how it is laid out.
+export function shortcutRows() {
+  return shortcutHelp().flatMap((section) => section.rows)
 }
 
 export function useShortcuts() {

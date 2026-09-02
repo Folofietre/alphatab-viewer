@@ -13,9 +13,15 @@ globalThis.localStorage ??= {
   setItem: () => {},
 }
 
-const { BINDINGS, describeBinding, matchesKey, matchesModifiers, shortcutHelp } = await import(
-  '@/composables/useShortcuts'
-)
+const {
+  BINDINGS,
+  SHORTCUT_GROUPS,
+  describeBinding,
+  matchesKey,
+  matchesModifiers,
+  shortcutHelp,
+  shortcutRows,
+} = await import('@/composables/useShortcuts')
 
 // The keyboard half of the fret nudge, on its own.
 //
@@ -356,7 +362,7 @@ describe('the generated help', () => {
   })
 
   it('covers every binding, with no empty cell', () => {
-    const rows = shortcutHelp()
+    const rows = shortcutRows()
     for (const row of rows) {
       expect(row.label.length, JSON.stringify(row)).toBeGreaterThan(0)
       expect(row.keys.length).toBeGreaterThan(0)
@@ -367,7 +373,7 @@ describe('the generated help', () => {
   })
 
   it('shows Ctrl and Cmd as ONE token, since they always come in pairs', () => {
-    const rows = shortcutHelp()
+    const rows = shortcutRows()
     expect(rows.find((r) => r.label.match(/Save the score/)).keys).toEqual(['Ctrl/Cmd + S'])
     expect(rows.find((r) => r.label.match(/Undo/)).keys).toEqual(['Ctrl/Cmd + Z'])
     expect(rows.find((r) => r.label.match(/Redo/)).keys).toEqual([
@@ -388,19 +394,57 @@ describe('the generated help', () => {
   })
 
   it('lists undo before redo, the order they are used in', () => {
-    const labels = shortcutHelp().map((r) => r.label)
+    const labels = shortcutRows().map((r) => r.label)
     expect(labels.findIndex((l) => l.match(/Undo/))).toBeLessThan(
       labels.findIndex((l) => l.match(/Redo/)),
     )
   })
 
   it('lists one row per distinct action', () => {
-    const rows = shortcutHelp()
+    const rows = shortcutRows()
     expect(new Set(rows.map((r) => r.label)).size).toBe(rows.length)
   })
 
+  it('arranges the rows in groups, in the declared order', () => {
+    const sections = shortcutHelp()
+    expect(sections.map((s) => s.group)).toEqual(SHORTCUT_GROUPS)
+    for (const section of sections) expect(section.rows.length).toBeGreaterThan(0)
+  })
+
+  it('every binding declares a group the help knows about', () => {
+    // Without this, a binding with a mistyped group would land in a section the
+    // modal never renders and vanish from the help - silently, which is the one
+    // thing a generated table exists to prevent.
+    for (const binding of BINDINGS) {
+      expect(SHORTCUT_GROUPS, binding.label).toContain(binding.group)
+    }
+    // And no group is declared that nothing uses.
+    const used = new Set(BINDINGS.map((b) => b.group))
+    expect([...SHORTCUT_GROUPS].sort()).toEqual([...used].sort())
+  })
+
+  it('puts each shortcut where someone would look for it', () => {
+    const where = new Map()
+    for (const section of shortcutHelp()) {
+      for (const row of section.rows) where.set(row.label, section.group)
+    }
+    expect(where.get('Play / pause')).toBe('Global')
+    expect(where.get('Save the score as .gp')).toBe('Global')
+    expect(where.get('Move the cursor to the previous beat')).toBe('Moving around')
+    expect(where.get('Up one semitone')).toBe('The selected note')
+    expect(where.get('Replace the selection with silence')).toBe('The selected note')
+    expect(where.get('Write a fret at the cursor')).toBe('Writing')
+    expect(where.get('Dotted note')).toBe('Writing')
+    expect(where.get('Delete this bar')).toBe('Writing')
+  })
+
+  it('and every row is in exactly one group', () => {
+    const rows = shortcutHelp().flatMap((s) => s.rows.map((r) => r.label))
+    expect(new Set(rows).size).toBe(rows.length)
+  })
+
   it('includes the help key itself, so the modal explains how it opened', () => {
-    const rows = shortcutHelp()
+    const rows = shortcutRows()
     expect(rows.find((r) => r.keys.includes('?'))).toBeDefined()
   })
 })
@@ -461,7 +505,7 @@ describe('the writing keys', () => {
   })
 
   it('and the help says "0-9" rather than listing them', () => {
-    const row = shortcutHelp().find((r) => /fret at the cursor/.test(r.label))
+    const row = shortcutRows().find((r) => /fret at the cursor/.test(r.label))
     expect(row.keys).toEqual(['0-9'])
   })
 
@@ -489,6 +533,18 @@ describe('the writing keys', () => {
     const longer = { ...armed, changeDuration: vi.fn() }
     resolve(key('Minus', { types: '-' })).run(null, null, longer)
     expect(longer.changeDuration).toHaveBeenCalledWith('longer')
+  })
+
+  it('the dot key acts on the same beats the length keys do', () => {
+    const edit = { ...armed, toggleDot: vi.fn() }
+    resolve(key('Period', { types: '.' })).run(null, null, edit)
+    expect(edit.toggleDot).toHaveBeenCalled()
+    // The keypad decimal produces the same character.
+    resolve(key('NumpadDecimal', { types: '.' })).run(null, null, edit)
+    expect(edit.toggleDot).toHaveBeenCalledTimes(2)
+    // And it needs the same thing the length keys need.
+    expect(resolve(key('Period', { types: '.' })).appliesTo({ tagName: 'BUTTON' }, null, idle))
+      .toBe(false)
   })
 
   it('Shift is ignored on "+", which needs it on most layouts', () => {
@@ -533,10 +589,10 @@ describe('the writing keys', () => {
       { isContentEditable: true, tagName: 'DIV' },
     ]
     const writers = BINDINGS.filter(
-      (b) => Array.isArray(b.key) || b.key === '+' || b.key === '-' ||
+      (b) => Array.isArray(b.key) || b.key === '+' || b.key === '-' || b.key === '.' ||
         b.label === 'Add a rest, or step along the bar',
     )
-    expect(writers).toHaveLength(4)
+    expect(writers).toHaveLength(5)
     for (const binding of writers) {
       for (const field of fields) {
         expect(binding.appliesTo(field, null, armed), `${binding.label} / ${field.tagName}`).toBe(false)
@@ -548,7 +604,7 @@ describe('the writing keys', () => {
     for (const binding of BINDINGS) {
       const writes =
         Array.isArray(binding.key) || binding.key === '+' || binding.key === '-' ||
-        binding.label === 'Add a rest, or step along the bar'
+        binding.key === '.' || binding.label === 'Add a rest, or step along the bar'
       if (writes) expect(!!binding.allowRepeat, binding.label).toBe(false)
     }
   })
@@ -574,7 +630,7 @@ describe('the writing keys', () => {
   })
 
   it('the help shows them as one row each, under Ctrl/Cmd', () => {
-    const rows = shortcutHelp()
+    const rows = shortcutRows()
     expect(rows.find((r) => r.label === 'Insert a bar before this one').keys)
       .toEqual(['Ctrl/Cmd + Insert'])
     expect(rows.find((r) => r.label === 'Delete this bar').keys)
@@ -649,7 +705,7 @@ describe('binding options', () => {
     // The three writing keys, which need a cursor: the digits, the two duration
     // keys, and Enter - whose FIRST binding is the checkbox toggle and needs
     // nothing.
-    const WRITES = new Set(['+', '-'])
+    const WRITES = new Set(['+', '-', '.'])
     for (const binding of BINDINGS) {
       const name = String(binding.code ?? binding.key)
       const call = () => binding.appliesTo({ tagName: 'BUTTON' })
@@ -740,6 +796,7 @@ describe('binding options', () => {
       // table would print one token per character.
       if (Array.isArray(named)) expect(typeof binding.keyName, binding.label).toBe('string')
       expect(typeof binding.label).toBe('string')
+      expect(typeof binding.group, binding.label).toBe('string')
       expect(typeof binding.appliesTo).toBe('function')
       expect(typeof binding.run).toBe('function')
     }
