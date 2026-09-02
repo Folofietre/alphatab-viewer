@@ -1798,6 +1798,89 @@ export function appendBar(score, settings) {
   })
 }
 
+// 8e. A whole track.
+//
+// The cheapest structural delete in this file, and the measurement is the reason:
+// **no note link crosses a track**. Counted on the fixture and the two large
+// real files - 0 of them, out of the 106 and 191 that cross a bar line - which
+// follows from how `finish()` resolves links at all, by walking `nextBeat` and
+// `previousBeat`, neither of which ever leaves a staff.
+//
+// So there is no link sweep and no derived capture here, unlike `deleteBars`
+// which needs both. A splice and a renumber is exact, and the .gp round trip
+// after an undo is what says so.
+//
+// `track.index` has to be renumbered for the same reason a bar's does: `addTrack`
+// sets it from the current length and no `finish()` ever touches it again, while
+// every descriptor in the UI, every `trackAt` lookup and every `RenderHint` is
+// keyed on it.
+//
+// One consequence worth knowing rather than guarding: `MasterBar.keySignature`
+// is a getter over `score.tracks[0].staves[0].bars[index]`, so deleting the
+// FIRST track makes the score report the key signature of whatever track is
+// first afterwards. That is alphaTab's own definition of a score's key rather
+// than something to work around.
+export function deleteTrack(score, index) {
+  const tracks = score?.tracks ?? []
+  if (tracks.length === 0) return refused('This score has no tracks.')
+
+  const at = Math.round(Number(index))
+  if (!Number.isFinite(at) || at < 0 || at >= tracks.length) {
+    return refused('That is not a track of this score.')
+  }
+  if (tracks.length === 1) {
+    return refused('This is the only track left: a score cannot have none.')
+  }
+
+  const track = tracks[at]
+  const name = track.name?.trim() || `Track ${at + 1}`
+  let noteCount = 0
+  for (const staff of track.staves ?? []) {
+    for (const bar of staff.bars ?? []) {
+      for (const voice of bar.voices ?? []) {
+        for (const beat of voice.beats ?? []) noteCount += beat.notes?.length ?? 0
+      }
+    }
+  }
+
+  function renumber() {
+    score.tracks.forEach((t, i) => {
+      t.index = i
+    })
+  }
+
+  function detach() {
+    const where = score.tracks.indexOf(track)
+    if (where >= 0) score.tracks.splice(where, 1)
+    renumber()
+  }
+
+  // The Track object is still alive and still points at its score, so this is a
+  // re-attach rather than a reconstruction - the same as every other structural
+  // undo here.
+  function attach() {
+    score.tracks.splice(Math.min(at, score.tracks.length), 0, track)
+    track.score = score
+    renumber()
+  }
+
+  detach()
+
+  let isDetached = true
+  return applied({
+    trackIndex: at,
+    trackName: name,
+    noteCount,
+    staffCount: track.staves?.length ?? 0,
+    trackCount: score.tracks.length,
+    undo: () => {
+      if (isDetached) attach()
+      else detach()
+      isDetached = !isDetached
+    },
+  })
+}
+
 // 8f. A bar in the MIDDLE of the score.
 //
 // Everything the append does, plus the renumbering pass - see `renumberBars`,

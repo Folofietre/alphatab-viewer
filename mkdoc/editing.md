@@ -752,6 +752,49 @@ comment. `navigateBeat` is pure navigation - it writes nothing, is not gated on
 playback, and never goes near `propagate` - and the composable's `moveCursorBeat`
 layers the two writes on top of it. The write is not folded into the walk.
 
+### A whole track is the cheapest structural delete here
+
+Deleting a track needs **no link sweep and no derived capture**, where deleting
+bars needs both, and the reason is a measurement: **no note link crosses a
+track.** Counted on the fixture and on both large real files - 0 of them, against
+the 106 and 191 that cross a bar line - which follows from how `finish()`
+resolves links at all, by walking `nextBeat` and `previousBeat`, neither of which
+ever leaves a staff. So a splice and a renumber is exact, and the `.gp` round trip
+after an undo says so.
+
+`track.index` is renumbered for the same reason a bar's is: `addTrack` sets it
+from the current length and no `finish()` touches it again, while every reactive
+descriptor, every `trackAt` lookup and every render hint is keyed on it.
+
+**Half of this operation is app state, which is why it lives in `usePlayer`.**
+The reactive descriptor carries the volume, the mute, the solo and whether the
+track is displayed - none of it in the file - so the descriptor is *spliced* and
+renumbered alongside the model rather than rebuilt, and the undo puts the same
+object back with its mixer state intact. Rebuilding the list would have silently
+reset it. `scoreTracks` needs no splice of its own: it **is** `score.tracks`, the
+same array object, assigned on load.
+
+Two orderings are load-bearing. The model goes first in both directions, because
+the view step ends in `applyRenderedTracks`, which hands alphaTab `Track` objects
+out of the score as it now is. And if the deleted track was the only one
+displayed, the first one left is promoted - alphaTab needs a non-empty selection,
+and `renderTracks([])` is refused rather than rendering nothing.
+
+The render comes from `renderTracks` itself, so the propagation asks for none: a
+second `api.render()` would lay the whole score out twice for one action.
+
+One consequence recorded rather than guarded: `MasterBar.keySignature` is a
+getter over `score.tracks[0].staves[0].bars[index]`, so deleting the **first**
+track makes the score report the key signature of whatever track is first
+afterwards. That is alphaTab's own definition of a score's key rather than
+something to work around.
+
+**No confirmation**, and the line is worth drawing precisely because this is the
+biggest thing that can go. The one control in the app that asks is `Revert`, and
+it asks because it throws away edits the 30-step stack has already dropped. A
+track delete is one step on that stack, so `Ctrl+Z` covers it - the same call the
+note delete and the bar delete already made.
+
 ### Bars in the middle: what the append does not have to do
 
 `appendBar` is cheap because alphaTab's own `addMasterBar` and `addBar` do

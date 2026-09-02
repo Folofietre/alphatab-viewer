@@ -27,6 +27,7 @@ import {
   DURATION_SHORTER,
   appendBar,
   deleteBars,
+  deleteTrack,
   insertBarBefore,
   describeDuration,
   placeRest,
@@ -2194,6 +2195,121 @@ describe('appendBar', () => {
     const before = score.masterBars.length
     appendBar(score, settings).undo()
     expect(roundTrip(score).masterBars).toHaveLength(before)
+  })
+})
+
+describe('deleteTrack', () => {
+  it('takes the track out and renumbers the rest', () => {
+    const score = loadFixture()
+    const before = score.tracks.map((t) => t.name)
+
+    const result = deleteTrack(score, RHYTHM)
+    expect(result).toMatchObject({
+      ok: true,
+      changed: true,
+      trackIndex: RHYTHM,
+      trackName: 'Rhythm',
+      trackCount: before.length - 1,
+    })
+    expect(result.noteCount).toBeGreaterThan(0)
+    expect(score.tracks.map((t) => t.name)).toEqual(before.filter((n) => n !== 'Rhythm'))
+    // No finish() renumbers a track, so this is ours - and every descriptor and
+    // lookup in the UI is keyed on it.
+    expect(score.tracks.map((t) => t.index)).toEqual(score.tracks.map((_, i) => i))
+  })
+
+  it('leaves the notes of every other track exactly as they were', () => {
+    const score = loadFixture()
+    const lead = snapshotTrack(score.tracks[LEAD])
+    const bass = snapshotTrack(score.tracks[BASS])
+
+    deleteTrack(score, RHYTHM)
+    expect(snapshotTrack(score.tracks[0])).toEqual(lead)
+    expect(snapshotTrack(score.tracks[1])).toEqual(bass)
+  })
+
+  it('keeps the bars: a track goes, the score length does not', () => {
+    const score = loadFixture()
+    const bars = score.masterBars.length
+    deleteTrack(score, LEAD)
+    expect(score.masterBars).toHaveLength(bars)
+    for (const track of score.tracks) {
+      for (const staff of track.staves) expect(staff.bars).toHaveLength(bars)
+    }
+  })
+
+  it('refuses the last track, and anything that is not a track', () => {
+    const score = loadFixture()
+    expect(deleteTrack(score, -1).ok).toBe(false)
+    expect(deleteTrack(score, 99).ok).toBe(false)
+    expect(deleteTrack(new alphaTab.model.Score(), 0).ok).toBe(false)
+
+    while (score.tracks.length > 1) expect(deleteTrack(score, 0).ok).toBe(true)
+    const last = deleteTrack(score, 0)
+    expect(last.ok).toBe(false)
+    expect(last.reason).toMatch(/only track left/)
+    expect(score.tracks).toHaveLength(1)
+  })
+
+  it('survives the .gp round trip', () => {
+    const score = loadFixture()
+    deleteTrack(score, RHYTHM)
+    const back = roundTrip(score)
+    expect(back.tracks.map((t) => t.name)).toEqual(['Lead', 'Bass', 'Harm', 'Drums', 'Ties'])
+    expect(back.tracks.map((t) => t.index)).toEqual([0, 1, 2, 3, 4])
+  })
+
+  it('puts the track back, notes and all, and takes it out again', () => {
+    const score = loadFixture()
+    const before = score.tracks.map(snapshotTrack)
+    const midi = midiNoteOns(score)
+
+    const result = deleteTrack(score, RHYTHM)
+    expect(midiNoteOns(score)).not.toEqual(midi)
+
+    result.undo()
+    expect(score.tracks.map(snapshotTrack)).toEqual(before)
+    expect(score.tracks.map((t) => t.index)).toEqual([0, 1, 2, 3, 4, 5])
+    // The generated midi is the assertion that matters: it is built by walking
+    // the tracks, so it catches an order or an index the snapshot would not.
+    expect(midiNoteOns(score)).toEqual(midi)
+
+    result.undo()
+    expect(score.tracks).toHaveLength(5)
+  })
+
+  it('and the restored score still exports', () => {
+    const score = loadFixture()
+    const before = score.tracks.map(snapshotTrack)
+    deleteTrack(score, LEAD).undo()
+    expect(roundTrip(score).tracks.map(snapshotTrack)).toEqual(before)
+  })
+
+  // No note link crosses a track - 0 on the fixture and 0 on both large real
+  // files - because `finish()` resolves links by walking `nextBeat` and
+  // `previousBeat`, which never leave a staff. That is why this operation needs
+  // no link sweep where `deleteBars` needs one.
+  it('needs no link sweep, because no link crosses a track', () => {
+    const score = loadFixture()
+    const FIELDS = [
+      'tieOrigin', 'tieDestination', 'hammerPullOrigin', 'hammerPullDestination',
+      'slurOrigin', 'slurDestination', 'slideOrigin', 'slideTarget',
+      'effectSlurOrigin', 'effectSlurDestination', 'bendOrigin',
+    ]
+    let checked = 0
+    for (const track of score.tracks) {
+      for (const staff of track.staves) {
+        for (const note of notesOf(staff)) {
+          checked += 1
+          for (const field of FIELDS) {
+            const other = note[field]
+            if (!other) continue
+            expect(other.beat.voice.bar.staff.track).toBe(track)
+          }
+        }
+      }
+    }
+    expect(checked).toBeGreaterThan(0)
   })
 })
 

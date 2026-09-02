@@ -253,6 +253,26 @@ onto its far edge - right carries on from the last note, left from the first.
 Running off the start of the score does nothing. Running off the **end** adds a
 bar - see below.
 
+## Deleting a track
+
+Each strip in the Mixer carries a **bin**, which removes that track from the
+score itself - notes, staves and all - rather than from what is heard. It is the
+only control in the strip that changes the file, so it is the only one that is
+disabled while playing and the only one that turns red, on hover.
+
+**`Ctrl+Z` puts it back**, in one step, with its mixer settings: the volume, the
+mute, the solo and whether it was displayed all come back as they were, because
+the strip is put back rather than rebuilt.
+
+The last track cannot be deleted, and the button says so rather than going dead
+without explanation. If the track was the only one being displayed, the first one
+left takes its place on screen.
+
+There is no confirmation, which is the same call as the note and bar deletes: the
+undo covers it in one step, and the unsaved-changes warning covers the file. The
+one control that does ask is `Revert`, because that one throws away edits the
+undo stack has already dropped.
+
 ## Selecting everything
 
 **`Ctrl+A` selects every note of the track you are working on**, and takes the
@@ -393,7 +413,9 @@ and neither are the Mixer tab's **volume**, **mute** and **solo**. Everything in
 the **Track**, **Score** and **Edit** tabs is written into the score and goes out
 with the file.
 
-One control sits on the wrong side of that line and stays there: **panning** is
-in the Mixer tab but IS model-side and does get saved, because alphaTab has no
+Two controls sit on the wrong side of that line. **Panning** is in the Mixer tab
+but IS model-side and does get saved, because alphaTab has no
 live setter for it - see
-[the mixer gotcha](alphatab-gotchas.md#the-model-side-mixer-gotcha).
+[the mixer gotcha](alphatab-gotchas.md#the-model-side-mixer-gotcha). And the
+**bin** is in the Mixer too while being the most model-side control in the app,
+because a mixer strip is where you look for the track it belongs to.

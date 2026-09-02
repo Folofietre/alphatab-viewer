@@ -2,7 +2,7 @@ import { ref, shallowRef, watch } from 'vue'
 import * as alphaTab from '@coderline/alphatab'
 import { familyOf, programName } from '@/utils/gmPrograms'
 import { applyTrackProgram, applyTrackBalance } from '@/utils/trackSound'
-import { countNaturalHarmonics, describeTuning, fretRange } from '@/utils/scoreEdits'
+import { countNaturalHarmonics, deleteTrack, describeTuning, fretRange } from '@/utils/scoreEdits'
 
 // Single shared alphaTab instance for the whole app.
 //
@@ -163,6 +163,94 @@ function reloadMidi(wasPlaying = isPlaying.value) {
   midiStale = false
   pendingRestore = { tick: api.tickPosition, wasPlaying }
   api.loadMidiForScore()
+}
+
+// Tell alphaTab which tracks to draw, from the descriptors' `rendered` flags.
+//
+// Module scope for the same reason `reloadMidi` is: removing a track has to
+// re-apply it, and that lives on the `scoreEditHost` seam.
+function applyRenderedTracks() {
+  if (!api) return
+  const selected = scoreTracks.filter(
+    (t) => tracks.value.find((d) => d.index === t.index)?.rendered,
+  )
+  if (selected.length === 0) return
+  api.renderTracks(selected)
+}
+
+// Delete a track: the model half, and the app-state half that has to move with
+// it.
+//
+// Both halves in one place because the ORDER matters and should be written once:
+// the model goes first, since `applyRenderedTracks` hands alphaTab `Track`
+// objects out of `scoreTracks` and must see the score as it now is.
+//
+// `scoreTracks` needs no splice of its own - it IS `score.tracks`, the same
+// array object, assigned on load - but the reactive descriptors do, and they
+// carry the mixer state (volume, mute, solo, and what is displayed). That is app
+// state rather than file state, and rebuilding the descriptors would lose it.
+//
+// Returns the result shape every other edit returns, with an `undo` that swaps
+// both halves back, so `useScoreEdit` can put it on the history like anything
+// else. Nothing about the undo stack had to change for this: no note link
+// crosses a track, so the model side is a splice and a renumber.
+function removeTrackAt(index) {
+  const score = api?.score ?? null
+  if (!score) return { ok: false, changed: false, reason: 'No score is open.' }
+
+  const at = tracks.value.findIndex((d) => d.index === index)
+  const descriptor = at >= 0 ? tracks.value[at] : null
+  if (!descriptor) {
+    return { ok: false, changed: false, reason: 'That is not a track of this score.' }
+  }
+
+  const result = deleteTrack(score, index)
+  if (!result.changed) return result
+
+  // Every displayed flag as it was, so the undo restores what was on screen
+  // rather than guessing. Held as pairs, because the array is about to be
+  // spliced and positions will not line up afterwards.
+  const wasRendered = tracks.value.map((d) => ({ descriptor: d, rendered: d.rendered }))
+
+  function renumber() {
+    tracks.value.forEach((d, i) => {
+      d.index = i
+    })
+  }
+
+  function detachView() {
+    tracks.value.splice(at, 1)
+    renumber()
+    // alphaTab needs a non-empty selection, so deleting the only displayed
+    // track promotes the first one left rather than rendering nothing.
+    if (tracks.value.length > 0 && !tracks.value.some((d) => d.rendered)) {
+      tracks.value[0].rendered = true
+    }
+    applyRenderedTracks()
+  }
+
+  function attachView() {
+    tracks.value.splice(Math.min(at, tracks.value.length), 0, descriptor)
+    renumber()
+    for (const entry of wasRendered) entry.descriptor.rendered = entry.rendered
+    applyRenderedTracks()
+  }
+
+  detachView()
+
+  let isDetached = true
+  const swapModel = result.undo
+  return {
+    ...result,
+    undo: () => {
+      // The model first in both directions: the view step ends in
+      // `applyRenderedTracks`, which reads the score as it now is.
+      swapModel()
+      if (isDetached) attachView()
+      else detachView()
+      isDetached = !isDetached
+    },
+  }
 }
 
 // An edit has changed what would be PLAYED, but the midi has not been rebuilt.
@@ -433,15 +521,9 @@ export function usePlayer() {
   }
 
   // ---- track rendering ----------------------------------------------------
-
-  function applyRenderedTracks() {
-    if (!api) return
-    const selected = scoreTracks.filter(
-      (t) => tracks.value.find((d) => d.index === t.index)?.rendered,
-    )
-    if (selected.length === 0) return
-    api.renderTracks(selected)
-  }
+  //
+  // `applyRenderedTracks` is at module scope, because deleting a track has to
+  // re-apply it from the `scoreEditHost` seam below.
 
   function setTrackRendered(index, rendered) {
     const descriptor = tracks.value.find((t) => t.index === index)
@@ -753,6 +835,8 @@ export const scoreEditHost = {
     api.playBeat(beat)
     return true
   },
+  // Delete a track, model and mixer together. See `removeTrackAt`.
+  removeTrack: removeTrackAt,
   // Set by useScoreEdit. Called by clearScore(), which has no alphaTab event to
   // hang off.
   onScoreCleared: null,

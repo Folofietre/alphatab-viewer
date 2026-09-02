@@ -221,3 +221,34 @@ header {
     @include control-active;
   }
 }
+
+// The one control in the strip that changes the file rather than what is heard,
+// so it is the one that is coloured for it - on hover only, because a row of
+// permanently red bins along the bottom of the window would read as an alarm
+// rather than as an action.
+//
+// Narrower than S and M: it is not a toggle in the same family, and giving it an
+// equal third of the row would say it is.
+.trash {
+  flex: 0 0 1.6rem;
+  display: grid;
+  place-items: center;
+
+  &:hover:not(:disabled),
+  &:focus-visible:not(:disabled) {
+    border-color: var(--warn-solid);
+    color: var(--warn-solid);
+  }
+
+  &:disabled {
+    opacity: 0.4;
+  }
+}
+
+// The icon is black on transparent, so the alpha channel is the mask and the
+// fill is `currentColor` - which is what lets it turn red on hover with no
+// second asset and no filter. Same mechanism as the loop and metronome icons;
+// see the mask-icon mixin.
+.trash-icon {
+  @include mask-icon('@/assets/trash.png', 0.72rem);
+}

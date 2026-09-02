@@ -15,6 +15,8 @@ src/
     ScoreHeader.vue          document strip: title / tempo / bars, the bar fill, close
     BarFill.vue              how full the cursor's bar is, in beats (in the strip)
     TrackList.vue            "Mixer": the bottom dock, one channel strip per track
+                             - the only panel that both plays and edits, since
+                               the bin that deletes a track lives on the strip
     TrackEditPanel.vue       "Track": name, instrument, transpose, tuning
     ScoreEditPanel.vue       "Score": tempo, save, revert
     SelectionEditPanel.vue   "Edit": the selected note or passage, and the cursor
@@ -26,6 +28,7 @@ src/
     FileMenu.vue             the File menu: open / save / save as / close
   assets/
     loop.png metronome.png   monochrome toggle icons, used as CSS masks
+    trash.png                the same, for the mixer's delete-a-track button
   styles/
     main.scss                :root custom properties + element resets (global)
     _tokens.scss             SCSS spacing / radius / transition scale

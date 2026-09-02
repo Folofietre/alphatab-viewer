@@ -77,6 +77,42 @@ const host = {
   clearDirty() {
     host.dirty = false
   },
+  // Models `removeTrackAt`: the model splice from scoreEdits, plus the reactive
+  // descriptor that carries the mixer state, spliced and renumbered with it.
+  // Both halves in one undo, which is the thing worth pinning here.
+  removeTrack(index) {
+    const at = player.tracks.value.findIndex((d) => d.index === index)
+    const descriptor = at >= 0 ? player.tracks.value[at] : null
+    if (!descriptor) {
+      return { ok: false, changed: false, reason: 'That is not a track of this score.' }
+    }
+    const result = deleteTrack(host.score, index)
+    if (!result.changed) return result
+
+    const renumber = () => player.tracks.value.forEach((d, i) => { d.index = i })
+    const detachView = () => {
+      player.tracks.value.splice(at, 1)
+      renumber()
+      host.renderedTracks += 1
+    }
+    const attachView = () => {
+      player.tracks.value.splice(Math.min(at, player.tracks.value.length), 0, descriptor)
+      renumber()
+      host.renderedTracks += 1
+    }
+    detachView()
+    let isDetached = true
+    const swapModel = result.undo
+    return {
+      ...result,
+      undo: () => {
+        swapModel()
+        if (isDetached) attachView()
+        else detachView()
+        isDetached = !isDetached
+      },
+    }
+  },
 }
 
 const player = {
@@ -113,6 +149,7 @@ apiSettings.core.includeNoteBounds = true
 const { useScoreEdit, focusToRelease } = await import('@/composables/useScoreEdit')
 const { loadFixture } = await import('./helpers')
 const {
+  deleteTrack,
   stringedNotes,
   MAX_FRET,
   RETUNE_KEEP_PITCH,
@@ -391,6 +428,7 @@ beforeEach(async () => {
 
   // The flat descriptors the panel reads, in the shape usePlayer builds.
   host.midiStale = false
+  host.renderedTracks = 0
   host.previews = []
   host.beatPreviews = []
   player.isPlaying.value = false
@@ -2630,6 +2668,112 @@ describe('Enter places a rest, or steps along the bar', () => {
     player.isPlaying.value = true
     expect(edit.insertRest().ok).toBe(false)
     expect(edit.editMessage.value.text).toMatch(/Pause playback/)
+  })
+})
+
+// A whole track, which is the biggest thing that can go - and it goes in one
+// undoable step, because no note link crosses a track.
+describe('deleting a track', () => {
+  function names() {
+    return score.tracks.map((t) => t.name)
+  }
+  function descriptorNames() {
+    return player.tracks.value.map((t) => t.name)
+  }
+
+  it('takes the track out of the score AND out of the mixer', () => {
+    const before = names()
+    const result = edit.removeTrack(RHYTHM)
+
+    expect(result).toMatchObject({ ok: true, changed: true, trackName: 'Rhythm' })
+    expect(names()).toEqual(before.filter((n) => n !== 'Rhythm'))
+    expect(descriptorNames()).toEqual(before.filter((n) => n !== 'Rhythm'))
+    // Both lists renumbered together, which is what every lookup is keyed on.
+    expect(score.tracks.map((t) => t.index)).toEqual([0, 1, 2, 3, 4])
+    expect(player.tracks.value.map((t) => t.index)).toEqual([0, 1, 2, 3, 4])
+    expect(host.dirty).toBe(true)
+  })
+
+  it('rebuilds the midi now, and renders through renderTracks rather than twice', () => {
+    host.renders = []
+    host.midiReloads = 0
+    edit.removeTrack(RHYTHM)
+
+    expect(host.midiReloads).toBe(1)
+    // The re-render comes from re-applying the displayed tracks, so nothing
+    // asks for a second one.
+    expect(host.renders).toEqual([])
+    expect(host.renderedTracks).toBe(1)
+  })
+
+  it('drops the selection, which may have been on the track that went', () => {
+    clickAt(score.tracks[RHYTHM].staves[0].bars[0].voices[0].beats[0].notes[0])
+    expect(edit.selectedNote.value).not.toBeNull()
+
+    edit.removeTrack(RHYTHM)
+    expect(edit.selectedNote.value).toBeNull()
+    expect(edit.cursor.value).toBeNull()
+    expect(edit.selectedRange.value).toBeNull()
+  })
+
+  it('keeps the panel pointing at a track that still exists', () => {
+    edit.selectTrack(score.tracks.length - 1)
+    edit.removeTrack(score.tracks.length - 1)
+    expect(edit.selectedTrackIndex.value).toBeLessThan(score.tracks.length)
+    expect(edit.editedTrack.value).not.toBeNull()
+  })
+
+  it('refuses the last track', () => {
+    while (score.tracks.length > 1) expect(edit.removeTrack(0).ok).toBe(true)
+    const result = edit.removeTrack(0)
+    expect(result.ok).toBe(false)
+    expect(edit.editMessage.value.text).toMatch(/only track left/)
+    expect(score.tracks).toHaveLength(1)
+  })
+
+  it('and stands down while playing', () => {
+    player.isPlaying.value = true
+    expect(edit.removeTrack(RHYTHM).ok).toBe(false)
+    expect(edit.editMessage.value.text).toMatch(/Pause playback/)
+    expect(score.tracks).toHaveLength(6)
+  })
+
+  it('names the track in the undo label, so it can be recognised', () => {
+    edit.removeTrack(RHYTHM)
+    expect(edit.undoLabel.value).toBe('Delete track Rhythm')
+  })
+
+  it('CTRL+Z puts it back, in the score and in the mixer', () => {
+    const before = names()
+    edit.removeTrack(RHYTHM)
+
+    expect(edit.undo().ok).toBe(true)
+    expect(names()).toEqual(before)
+    expect(descriptorNames()).toEqual(before)
+    expect(score.tracks.map((t) => t.index)).toEqual([0, 1, 2, 3, 4, 5])
+    expect(host.dirty).toBe(false)
+  })
+
+  it('and the mixer state comes back with it, not reset', () => {
+    // The descriptor is the same object, so volume, mute and solo survive the
+    // round trip - rebuilding the list would have lost them.
+    const strip = player.tracks.value.find((t) => t.index === RHYTHM)
+    strip.volume = 0.42
+    strip.isMute = true
+
+    edit.removeTrack(RHYTHM)
+    expect(edit.undo().ok).toBe(true)
+
+    const back = player.tracks.value.find((t) => t.index === RHYTHM)
+    expect(back).toMatchObject({ name: 'Rhythm', volume: 0.42, isMute: true })
+  })
+
+  it('and redo takes it out again', () => {
+    edit.removeTrack(RHYTHM)
+    edit.undo()
+    expect(edit.redo().ok).toBe(true)
+    expect(names()).not.toContain('Rhythm')
+    expect(descriptorNames()).not.toContain('Rhythm')
   })
 })
 

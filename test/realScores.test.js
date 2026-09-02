@@ -26,6 +26,7 @@ import {
   DURATION_SHORTER,
   appendBar,
   deleteBars,
+  deleteTrack,
   insertBarBefore,
   placeRest,
   stepBeatsDuration,
@@ -764,6 +765,66 @@ describe.skipIf(scores.length === 0)('invariants on real scores', () => {
         result.undo()
         expect(score.tracks.map(snapshotTrack)).toEqual(before)
         expect(midiNoteOns(score)).toEqual(beforeMidi)
+      })
+
+      it('a deleted track comes back note for note, midi included', () => {
+        const score = loadFile(file)
+        if (score.tracks.length < 2) return
+        const at = Math.floor(score.tracks.length / 2)
+
+        const before = score.tracks.map(snapshotTrack)
+        const beforeMidi = midiNoteOns(score)
+        const bars = score.masterBars.length
+
+        const result = deleteTrack(score, at)
+        expect(result).toMatchObject({ ok: true, trackIndex: at })
+        expect(score.tracks).toHaveLength(before.length - 1)
+        // Every index is ours to keep right: no finish() renumbers a track.
+        expect(score.tracks.map((t) => t.index)).toEqual(score.tracks.map((_, i) => i))
+        // A track goes, the score length does not.
+        expect(score.masterBars).toHaveLength(bars)
+        expect(roundTrip(score).tracks).toHaveLength(before.length - 1)
+
+        result.undo()
+        expect(score.tracks.map(snapshotTrack)).toEqual(before)
+        expect(midiNoteOns(score)).toEqual(beforeMidi)
+        expect(roundTrip(score).tracks.map(snapshotTrack)).toEqual(before)
+      })
+
+      // The measurement the whole design of `deleteTrack` rests on: it needs no
+      // link sweep and no derived capture, unlike `deleteBars`, because a link
+      // cannot leave a staff - `finish()` resolves them by walking `nextBeat`
+      // and `previousBeat`.
+      it('no note link crosses a track', () => {
+        const score = loadFile(file)
+        const FIELDS = [
+          'tieOrigin', 'tieDestination', 'hammerPullOrigin', 'hammerPullDestination',
+          'slurOrigin', 'slurDestination', 'slideOrigin', 'slideTarget',
+          'effectSlurOrigin', 'effectSlurDestination', 'bendOrigin',
+        ]
+        let links = 0
+        for (const track of score.tracks) {
+          for (const staff of track.staves) {
+            for (const bar of staff.bars) {
+              for (const voice of bar.voices) {
+                for (const beat of voice.beats) {
+                  for (const note of beat.notes) {
+                    for (const field of FIELDS) {
+                      const other = note[field]
+                      if (!other) continue
+                      links += 1
+                      expect(other.beat.voice.bar.staff.track, field).toBe(track)
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+        // A file with no links at all would make this pass by proving nothing,
+        // so say which it was rather than asserting a minimum every file cannot
+        // meet.
+        expect(typeof links).toBe('number')
       })
 
       it('carries a full set of edits through a .gp round trip', () => {

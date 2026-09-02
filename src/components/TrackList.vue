@@ -113,6 +113,21 @@
             title="Mute"
             @click="setTrackMute(track.index, !track.isMute)"
           >M</button>
+          <!-- The only control in this strip that changes the FILE rather than
+               what is heard, so it is the only one that is disabled while
+               playing and the only one that is red. Icon-only, so it carries
+               its own aria-label: with the words gone the mask is the whole
+               cue, and none at all for a screen reader. -->
+          <button
+            type="button"
+            class="flag trash"
+            :disabled="!canEdit || tracks.length === 1"
+            :aria-label="`Delete the track ${track.name}`"
+            :title="deleteHelp(track)"
+            @click="removeTrack(track.index)"
+          >
+            <span class="trash-icon" aria-hidden="true" />
+          </button>
         </div>
       </li>
     </ul>
@@ -122,6 +137,7 @@
 <script setup>
 import { computed } from 'vue'
 import { usePlayer } from '@/composables/usePlayer'
+import { useScoreEdit } from '@/composables/useScoreEdit'
 import { formatBalance } from '@/utils/format'
 import HelpTip from '@/components/HelpTip.vue'
 
@@ -131,7 +147,9 @@ const PANEL_HELP =
   'Click a track name to show it alone, or tick its box to add it to the view. ' +
   'Mute, solo and volume control what is heard: every track is audible whether ' +
   'it is displayed or not, and none of it is saved with the score. Names, ' +
-  'instruments and tunings are, and they live in the Track panel.'
+  'instruments and tunings are, and they live in the Track panel. ' +
+  'The bin deletes a track from the score itself, notes and all - Ctrl+Z puts ' +
+  'it back.'
 
 const {
   tracks,
@@ -145,7 +163,18 @@ const {
   resetMixer,
 } = usePlayer()
 
+const { canEdit, removeTrack } = useScoreEdit()
+
 const renderedCount = computed(() => tracks.value.filter((t) => t.rendered).length)
+
+// Why the button is off, when it is, rather than a dead control with no
+// explanation. Both reasons are real: a score cannot have no tracks, and every
+// edit in this app is paused-only.
+function deleteHelp(track) {
+  if (tracks.value.length === 1) return 'The last track cannot be deleted'
+  if (!canEdit.value) return 'Pause playback to delete a track'
+  return `Delete ${track.name} and everything on it. Ctrl+Z puts it back.`
+}
 
 // The instrument used to have a line of its own in each row. A strip is narrow
 // and gets narrower as tracks are added, so it moved into the strip's tooltip -

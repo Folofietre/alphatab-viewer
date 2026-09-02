@@ -1222,6 +1222,44 @@ export function useScoreEdit() {
     message(null, null)
   }
 
+  // Delete a whole track, mixer strip and all.
+  //
+  // The write itself lives in usePlayer, because half of it is app state: the
+  // reactive descriptor carries the volume, mute, solo and displayed flags, and
+  // rebuilding the list would lose them. Same division as `setInstrument`, which
+  // is there for the automation rewrite.
+  //
+  // It IS undoable, in one step, and that needed no change to the undo stack:
+  // no note link crosses a track, so the model side is a splice and a renumber.
+  // Which is also why there is no confirmation here - the one control that asks
+  // is Revert, and it asks because it throws away edits the 30-step stack has
+  // already dropped.
+  //
+  // The selection goes unconditionally. Whatever was picked out may have been on
+  // the track that just left, and there is no cheap way to know from a flat
+  // descriptor - so it is dropped rather than guessed at.
+  function removeTrack(index) {
+    if (!canEdit.value) return refusePlayback()
+
+    const result = scoreEditHost.removeTrack(index)
+    if (result.changed) {
+      clearSelection()
+      clearRange()
+      // The panel edits by index, and the indexes above the hole all moved.
+      selectedTrackIndex.value = Math.min(
+        selectedTrackIndex.value,
+        Math.max(0, (result.trackCount ?? 1) - 1),
+      )
+      scoreEditHost.syncAllTracks()
+    }
+    return propagate(result, {
+      // No `render`: `renderTracks` inside the write already re-renders, and
+      // asking for a second one would lay the score out twice for one action.
+      midi: 'now',
+      label: `Delete track ${result.trackName ?? ''}`.trim(),
+    })
+  }
+
   // Ctrl+A: every note of the track being edited.
   //
   // NOT gated on being paused, because it writes nothing - the same reason
@@ -2128,6 +2166,7 @@ export function useScoreEdit() {
     editedTrack,
     selectTrack,
     selectAll,
+    removeTrack,
     clearSelection,
 
     // the cursor: a position, which may or may not hold a note
