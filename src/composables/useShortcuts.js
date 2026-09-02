@@ -236,6 +236,33 @@ export const BINDINGS = [
     appliesTo: (_el, player) => player.isScoreLoaded.value,
     run: saveScore,
   },
+  // Ctrl+A, taken from the browser's select-all-the-text.
+  //
+  // Two entries for the two platforms, like Ctrl+S, and `shift: false` so
+  // Ctrl+Shift+A stays free. It selects every note of the track being edited,
+  // because a range here is a tick window on ONE track - the same rule the drag
+  // and the double click follow.
+  //
+  // It stands down for anything that owns typing keys, where select-all means
+  // the text in the field, and with no score open, where the browser's own is
+  // the only sensible answer. Not gated on being paused: selecting writes
+  // nothing.
+  {
+    key: 'a',
+    label: 'Select every note of the track',
+    modifiers: { ctrl: true, shift: false },
+    group: 'Global',
+    appliesTo: (el, player) => !ownsTypingKeys(el) && player.isScoreLoaded.value,
+    run: (_player, _event, edit) => edit.selectAll(),
+  },
+  {
+    key: 'a',
+    label: 'Select every note of the track',
+    modifiers: { meta: true, shift: false },
+    group: 'Global',
+    appliesTo: (el, player) => !ownsTypingKeys(el) && player.isScoreLoaded.value,
+    run: (_player, _event, edit) => edit.selectAll(),
+  },
   // The help itself. `?` needs Shift on most layouts and Shift is not declared,
   // so it is ignored - matching the CHARACTER is what makes this work on any
   // keyboard, whatever combination produces it there.

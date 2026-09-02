@@ -72,6 +72,26 @@ in `Beat.noteStringLookup` (pitfall 5), or the reverse, depending on order.
 `applyNoteStringMoves()` therefore drops **every** mover from its lookup first
 and only then writes, which makes the result independent of order.
 
+### Selecting everything is the same notion, at full width
+
+`Ctrl+A` builds a range over the whole of one track rather than over the score.
+That is not a limitation being worked around, it is the notion itself: a range is
+a tick window on ONE track, which is what keeps every batch operation
+single-track like the transposition and the retuning. "All" is the whole of that
+window.
+
+Two details are worth the lines they take. The first and last beat are found by
+**tick, across every staff and voice**, rather than read off
+`bars[0].voices[0].beats[0]`: a track's first bar can be empty on one staff and
+written on another, and a voice can be empty anywhere. And the band comes from
+alphaTab in the same order the double click uses it - `highlightPlaybackRange`
+first, the range after - so selecting everything also loops everything, which is
+what a drag across the whole score would have done.
+
+It refuses on percussion, and the message says why rather than leaving an empty
+selection: `notesInTickRange` keeps only notes with a string and a fret, so a
+drum track yields none however much is written on it.
+
 ## Double click a bar: detected from alphaTab, not from the DOM
 
 There is no `dblclick` in alphaTab's event set, and using the DOM one would mean

@@ -253,6 +253,22 @@ onto its far edge - right carries on from the last note, left from the first.
 Running off the start of the score does nothing. Running off the **end** adds a
 bar - see below.
 
+## Selecting everything
+
+**`Ctrl+A` selects every note of the track you are working on**, and takes the
+key from the browser so it no longer selects the page as text. One track, not all
+of them, because that is what a selection is here: a span of time on the track
+the last click landed on, which is what keeps a transposition or a retuning from
+quietly reaching into a track you were not looking at. It is also the `Select
+all` button in the Edit panel.
+
+It sets the loop range as well, exactly as dragging across the whole score would,
+so select-all then play loops the track.
+
+Two places it stands down: inside a text field, where select-all means the text,
+and with no score open, where the browser's own is the only sensible answer. And
+it works while playing, because selecting writes nothing.
+
 ## Bars that hold too much
 
 The document strip shows **how full the cursor's bar is**, centred, in beats of

@@ -2633,6 +2633,96 @@ describe('Enter places a rest, or steps along the bar', () => {
   })
 })
 
+// Ctrl+A. Taken from the browser, which is the point: it must select the music
+// rather than the page as text.
+describe('select all', () => {
+  function beatAt(bar, index, track = LEAD) {
+    return score.tracks[track].staves[0].bars[bar].voices[0].beats[index]
+  }
+  function everyStringedNote(trackIndex) {
+    return [...stringedNotes(score.tracks[trackIndex].staves[0])]
+  }
+
+  it('selects every note of the track being edited', () => {
+    edit.selectTrack(LEAD)
+    const result = edit.selectAll()
+    expect(result).toMatchObject({ ok: true, changed: true })
+    expect(edit.selectedRange.value).toMatchObject({
+      trackIndex: LEAD,
+      startBar: 0,
+      endBar: score.masterBars.length - 1,
+      noteCount: everyStringedNote(LEAD).length,
+    })
+  })
+
+  it('works from nothing selected, since it is where you start', () => {
+    edit.clearSelection()
+    edit.clearRange()
+    expect(edit.selectAll().ok).toBe(true)
+    expect(edit.selectedRange.value.noteCount).toBeGreaterThan(0)
+  })
+
+  it('replaces a cursor, and rings every note it took', () => {
+    clickAt(beatAt(0, 0).notes[0])
+    expect(edit.cursor.value).not.toBeNull()
+
+    edit.selectAll()
+    expect(edit.cursor.value).toBeNull()
+    expect(edit.selectedNoteRects.value.length).toBeGreaterThan(0)
+  })
+
+  it('and sets the loop range, like a drag over everything would', () => {
+    edit.selectTrack(LEAD)
+    edit.selectAll()
+    expect(host.api.playbackRange).not.toBeNull()
+    expect(host.api.appliedHighlights).toBeGreaterThan(0)
+  })
+
+  it('follows the track the panel is on, not always the first', () => {
+    edit.selectTrack(BASS)
+    expect(edit.selectAll().ok).toBe(true)
+    expect(edit.selectedRange.value).toMatchObject({
+      trackIndex: BASS,
+      noteCount: everyStringedNote(BASS).length,
+    })
+  })
+
+  it('so a batch edit then acts on the whole track', () => {
+    edit.selectTrack(LEAD)
+    edit.selectAll()
+    const before = everyStringedNote(LEAD).map((n) => n.fret)
+
+    expect(edit.nudgeSelectedFret(1).ok).toBe(true)
+    expect(everyStringedNote(LEAD).map((n) => n.fret)).toEqual(before.map((f) => f + 1))
+  })
+
+  it('says why when a track has nothing a range can hold', () => {
+    // A range is built from notes with a string and a fret, so percussion
+    // yields none however much is written on it.
+    edit.selectTrack(DRUMS)
+    const result = edit.selectAll()
+    expect(result.ok).toBe(false)
+    expect(edit.editMessage.value.text).toMatch(/Percussion/)
+    expect(edit.selectedRange.value).toBeNull()
+  })
+
+  it('still works while playing, because it writes nothing', () => {
+    player.isPlaying.value = true
+    edit.selectTrack(LEAD)
+    expect(edit.selectAll().ok).toBe(true)
+    expect(edit.selectedRange.value).not.toBeNull()
+  })
+
+  it('and survives the render that follows, without the range re-selecting itself', () => {
+    edit.selectTrack(LEAD)
+    edit.selectAll()
+    const count = edit.selectedRange.value.noteCount
+
+    host.api.replayPostRenderHighlight()
+    expect(edit.selectedRange.value).toMatchObject({ noteCount: count })
+  })
+})
+
 // Whole bars, which is the one thing the writing keys cannot reach: the right
 // arrow only ever adds one at the END of the score.
 describe('inserting and deleting bars', () => {

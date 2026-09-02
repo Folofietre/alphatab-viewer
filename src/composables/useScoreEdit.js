@@ -895,6 +895,42 @@ function syncPlayheadToCursor(beat) {
   }
 }
 
+// Every note of a track, which is what Ctrl+A means here.
+//
+// A range is a TICK WINDOW on ONE track - the design the drag and the double
+// click already follow, and what keeps every batch operation single-track like
+// the transposition and the retuning - so "all" is the whole of that window
+// rather than every track at once.
+//
+// The first and last beat are found by TICK across every staff and voice rather
+// than read off `bars[0].voices[0].beats[0]`: a track's first bar can be empty on
+// one staff and written on another, and a voice can be empty anywhere.
+//
+// The band comes from alphaTab the same way the double click's does, in the same
+// order and for the same reason - `highlightPlaybackRange` first, the range
+// after - so selecting everything also loops everything, which is what a
+// dragged selection over the whole score would have done.
+function selectWholeTrack(track) {
+  let first = null
+  let last = null
+  for (const staff of track?.staves ?? []) {
+    for (const bar of staff.bars ?? []) {
+      for (const voice of bar.voices ?? []) {
+        for (const beat of voice.beats ?? []) {
+          if (!first || beat.absolutePlaybackStart < first.absolutePlaybackStart) first = beat
+          const end = beat.absolutePlaybackStart + beat.playbackDuration
+          if (!last || end > last.absolutePlaybackStart + last.playbackDuration) last = beat
+        }
+      }
+    }
+  }
+  if (!first || !last) return false
+
+  scoreEditHost.api?.highlightPlaybackRange(first, last)
+  scoreEditHost.api?.applyPlaybackRangeFromHighlight()
+  return setRangeFromBeats(first, last)
+}
+
 function clearRange() {
   const hadRange = rangeNotes.length > 0
   rangeNotes = []
@@ -1184,6 +1220,35 @@ export function useScoreEdit() {
     if (!player.tracks.value.some((t) => t.index === index)) return
     selectedTrackIndex.value = index
     message(null, null)
+  }
+
+  // Ctrl+A: every note of the track being edited.
+  //
+  // NOT gated on being paused, because it writes nothing - the same reason
+  // clicking a note still works during playback. What it is gated on is the key
+  // being taken from the browser at all: `appliesTo` stands down with no score
+  // open, so Ctrl+A still selects the page text on the empty state.
+  //
+  // The track is the one the panel edits, which is the one the last click or
+  // cursor move landed on - the same `selectedTrackIndex` every other
+  // track-scoped operation uses, so Ctrl+A cannot select a different track from
+  // the one Rename or Retune would act on.
+  function selectAll() {
+    const index = selectedTrackIndex.value
+    const track = scoreEditHost.trackAt(index)
+    if (!track) return refused('No track to select.')
+
+    if (selectWholeTrack(track)) {
+      return { ok: true, changed: true, reason: null }
+    }
+
+    // Nothing selectable, and the two reasons read differently. A range is
+    // built from notes that have a string and a fret, so percussion yields
+    // none however much is written on it.
+    if (!track.staves?.some((staff) => staff.isStringed)) {
+      return refused('Percussion has no strings or frets, so there is nothing here to select.')
+    }
+    return refused('This track has no notes to select.')
   }
 
   // ---- the seven operations ------------------------------------------------
@@ -2062,6 +2127,7 @@ export function useScoreEdit() {
     clearRange,
     editedTrack,
     selectTrack,
+    selectAll,
     clearSelection,
 
     // the cursor: a position, which may or may not hold a note

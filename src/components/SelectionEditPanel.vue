@@ -212,6 +212,18 @@
           <kbd>Delete</kbd>
         </div>
       </template>
+      <!-- Outside both branches, because it applies whatever is selected and
+           whatever is not - it is how you START a selection as much as how you
+           widen one. Every note of the track the panel is on, which is the
+           track Rename and Retune act on too. -->
+      <div class="row">
+        <button
+          type="button"
+          title="Select every note of this track, so the tools above act on all of it"
+          @click="selectAll"
+        >Select all</button>
+        <kbd>Ctrl/Cmd + A</kbd>
+      </div>
     </div>
 
     <hr />
@@ -375,6 +387,7 @@ const selectionHelp = computed(() =>
 )
 
 const {
+  selectAll,
   selectedNote,
   selectedRange,
   cursor,

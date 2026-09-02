@@ -103,6 +103,19 @@ need a **position** to write at, which only a cursor is (`canWriteNote`); a
 duration belongs to a beat, and a dragged passage is a set of beats even with no
 cursor on any of them (`canChangeDuration`).
 
+## Ctrl+A is taken from the browser
+
+Select-all is one of the few browser shortcuts worth claiming outright: on a page
+that is mostly a rendered score, selecting the text of the chrome around it is
+never what anyone means. So the binding claims it and `preventDefault()` does the
+rest.
+
+It stands down in two places, and both matter. Inside anything that owns typing
+keys, where select-all means the text in the field. And with **no score open**,
+where there is no music to select and the browser's own behaviour is the only
+sensible answer - the same reasoning `Ctrl+S` uses to leave Save-page alone on
+the empty state.
+
 ## One key, two sizes of delete
 
 `Delete` alone replaces the selection with silence; `Ctrl+Delete` removes the

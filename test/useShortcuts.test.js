@@ -190,6 +190,50 @@ describe('Ctrl+S saves the score', () => {
   })
 })
 
+// Taken from the browser, which is the whole point: Ctrl+A must not select the
+// page as text.
+describe('Ctrl+A selects the notes, not the page', () => {
+  it('claims Ctrl+A and Cmd+A', () => {
+    expect(resolve(key('KeyA', { ctrl: true, types: 'a' }))?.label).toMatch(/Select every note/)
+    expect(resolve(key('KeyA', { meta: true, types: 'a' }))?.label).toMatch(/Select every note/)
+  })
+
+  it('leaves a bare A alone, and Ctrl+Shift+A too', () => {
+    expect(resolve(key('KeyA', { types: 'a' }))).toBeNull()
+    expect(resolve(key('KeyA', { ctrl: true, shift: true, types: 'a' }))).toBeNull()
+  })
+
+  it('matches the CHARACTER, so it works on any layout', () => {
+    // The key labelled A sits elsewhere on several layouts - AZERTY puts it
+    // where QWERTY puts Q.
+    expect(resolve(key('KeyQ', { ctrl: true, types: 'a' }))?.label).toMatch(/Select every note/)
+  })
+
+  it('stands down in a text field, where select-all means the text', () => {
+    const binding = resolve(key('KeyA', { ctrl: true, types: 'a' }))
+    const player = { isScoreLoaded: { value: true } }
+    expect(binding.appliesTo({ tagName: 'INPUT', type: 'number' }, player)).toBe(false)
+    expect(binding.appliesTo({ tagName: 'TEXTAREA' }, player)).toBe(false)
+    expect(binding.appliesTo({ tagName: 'BUTTON' }, player)).toBe(true)
+  })
+
+  it('and with no score open, so the empty page still selects', () => {
+    const binding = resolve(key('KeyA', { ctrl: true, types: 'a' }))
+    expect(binding.appliesTo({ tagName: 'BUTTON' }, { isScoreLoaded: { value: false } }))
+      .toBe(false)
+  })
+
+  it('does not repeat', () => {
+    expect(!!resolve(key('KeyA', { ctrl: true, types: 'a' })).allowRepeat).toBe(false)
+  })
+
+  it('calls selectAll and nothing else', () => {
+    const edit = { selectAll: vi.fn() }
+    resolve(key('KeyA', { ctrl: true, types: 'a' })).run(null, null, edit)
+    expect(edit.selectAll).toHaveBeenCalledTimes(1)
+  })
+})
+
 describe('redo', () => {
   const redoKey = (mods) => resolve(key('KeyY', mods))
 
@@ -700,7 +744,7 @@ describe('binding options', () => {
     // there is no cursor, and so do the writing keys, so they need the edit
     // state. Everything else looks at the focused element only and must not
     // break when the rest is absent.
-    const NEEDS_PLAYER = new Set(['s', 'z', 'y'])
+    const NEEDS_PLAYER = new Set(['s', 'z', 'y', 'a'])
     const NEEDS_EDIT = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'])
     // The three writing keys, which need a cursor: the digits, the two duration
     // keys, and Enter - whose FIRST binding is the checkbox toggle and needs
