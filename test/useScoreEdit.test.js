@@ -208,6 +208,7 @@ function fakeApi() {
   return {
     noteMouseDown: emitter(),
     beatMouseDown: emitter(),
+    beatMouseUp: emitter(),
     playbackRangeHighlightChanged: emitter(),
     scoreLoaded: emitter(),
     postRenderFinished: emitter(),
@@ -235,6 +236,11 @@ function fakeApi() {
     // highlight from its own retained state, after every single render.
     replayPostRenderHighlight() {
       if (this._selectionStart) {
+        // alphaTab reads `this._selectionEnd.beat` here without checking it
+        // either, so a start with no end is the mirror image of the crash.
+        if (!this._selectionEnd) {
+          throw new TypeError('can\'t access property "beat", this._selectionEnd is undefined')
+        }
         this.highlightPlaybackRange(this._selectionStart, this._selectionEnd)
       }
       this.postRenderFinished.emit()
@@ -242,8 +248,23 @@ function fakeApi() {
     // Models the branch that matters: with the start and end on the SAME beat,
     // alphaTab seeks, then clears its own selection and the playback range
     // outright. With different beats it keeps the selection and sets a range.
+    //
+    // AND MODELS WHERE IT THROWS, which a forgiving early return here hid until
+    // it reached the browser. alphaTab 1.8.4 reads `this._selectionStart.beat`
+    // inside `if (this._selectionEnd)` without checking the start:
+    //
+    //   if (this._selectionEnd) {
+    //     const startTick = ... this._selectionStart.beat ...
+    //
+    // So an end with no start is not a no-op, it is
+    // `TypeError: can't access property "beat", this._selectionStart is
+    // undefined` - and that pair is a state only WE can produce, by calling this
+    // after a same-beat highlight (which clears the start and leaves the end).
     applyPlaybackRangeFromHighlight() {
       this.appliedHighlights += 1
+      if (this._selectionEnd && !this._selectionStart) {
+        throw new TypeError('can\'t access property "beat", this._selectionStart is undefined')
+      }
       if (!this._selectionStart) return
       this.seeks.push(this._selectionStart)
       if (this._selectionEnd && this._selectionStart !== this._selectionEnd) {
@@ -253,6 +274,44 @@ function fakeApi() {
         this.playbackRange = null
         this.playbackRangeHighlightChanged.emit({})
       }
+    },
+    // The mouse sequence alphaTab itself runs, in ITS order: the selection state
+    // is set BEFORE the typed event is triggered, so whatever our handler does
+    // runs with that state already in place. `beats` is the beat the button went
+    // down on followed by the beats it was dragged over.
+    //
+    // `point` is the mousedown's coordinates, and leaving it out is not the same
+    // gesture: alphaTab dispatches a DOM CustomEvent alongside the typed one and
+    // only the DOM one carries them, so without it the click resolves to no
+    // position and the cursor is never placed. That is exactly the difference
+    // between a drag that works in a test and one that breaks in a browser.
+    async dragOverBeats(beats, point = null) {
+      const [down, ...moves] = beats
+      this._selectionStart = down
+      this._selectionEnd = null
+      this.beatMouseDown.emit(down)
+      if (point) host.hostElement.fire('alphaTab.beatMouseDown', { originalEvent: point })
+      // The deselect microtask, which in a browser really does run between the
+      // mousedown task and the first mousemove task.
+      await Promise.resolve()
+      for (const beat of moves) {
+        if (this._selectionEnd === beat) continue
+        this._selectionEnd = beat
+        // _cursorSelectRange: empty args when there is no start or the two beats
+        // are the same.
+        if (!this._selectionStart || this._selectionStart === beat) {
+          this.playbackRangeHighlightChanged.emit({})
+        } else {
+          this.playbackRangeHighlightChanged.emit({
+            startBeat: this._selectionStart,
+            endBeat: beat,
+          })
+        }
+      }
+      // mouseup: alphaTab applies its selection first, then triggers the event
+      // that hands the state back to us.
+      this.applyPlaybackRangeFromHighlight()
+      this.beatMouseUp.emit(this._selectionEnd ?? down)
     },
     settings: apiSettings,
     boundsLookup: fakeBoundsLookup(),
@@ -266,6 +325,11 @@ function fakeApi() {
 function clickAt(hitNote) {
   host.api.beatMouseDown.emit(null)
   if (hitNote) host.api.noteMouseDown.emit(hitNote)
+  // The release, which is what hands the selection state back to us. alphaTab
+  // fires it for every press on the score. `dragOverBeats` is the faithful
+  // gesture; this one stays synchronous, because forty tests read the selection
+  // on the line after calling it.
+  host.api.beatMouseUp.emit(null)
 }
 
 // Reproduce a double click: two presses on the SAME beat, close together.
@@ -1447,6 +1511,44 @@ describe('editing only while paused', () => {
   })
 })
 
+// The seam between the two files that nothing was checking, and it let a real
+// `TypeError: edit.canEditBars is undefined` reach the browser: every shortcut
+// test passes a STUB `edit`, so a binding could reach for a key the composable
+// never returned and no test would notice.
+describe('the shortcut table and the composable agree', () => {
+  it('every key a binding reaches for is really on the composable', async () => {
+    const { BINDINGS } = await import('@/composables/useShortcuts')
+
+    // What each `appliesTo` and `run` touches, read off the source rather than
+    // guessed: `edit.<name>` for the argument they are given.
+    const wanted = new Set()
+    for (const binding of BINDINGS) {
+      for (const fn of [binding.appliesTo, binding.run]) {
+        for (const match of String(fn).matchAll(/\bedit\.([A-Za-z_$][\w$]*)/g)) {
+          wanted.add(match[1])
+        }
+      }
+    }
+    // A sanity check on the reading itself: if the regex ever stops matching,
+    // this test would pass by finding nothing.
+    expect(wanted.size).toBeGreaterThan(8)
+    expect(wanted.has('canEditBars')).toBe(true)
+
+    for (const name of wanted) {
+      expect(edit[name], `edit.${name} is missing`).toBeDefined()
+    }
+  })
+
+  it('and the ones the bindings read as refs really are refs', () => {
+    // `appliesTo` reads `.value` off them, so a plain boolean would throw the
+    // same way a missing key does.
+    for (const name of ['canNavigate', 'canWriteNote', 'canChangeDuration', 'canEditBars']) {
+      expect(edit[name], name).toHaveProperty('value')
+      expect(typeof edit[name].value, name).toBe('boolean')
+    }
+  })
+})
+
 describe('reads for the panel', () => {
   it('exposes the tempo and how many automations the field is moving', () => {
     expect(edit.tempo.value).toMatchObject({ tempo: 120, automationCount: 3 })
@@ -2043,10 +2145,15 @@ describe('the playhead follows the cursor', () => {
     expect(host.api.seeks[0]).toBe(beatAt(0, 1))
   })
 
-  it('seeks on a click too, not only on the keyboard', () => {
+  it('and a click seeks too, but alphaTab is the one that does it', async () => {
+    // Driven as a whole gesture, because that is the difference: while the
+    // button is down alphaTab owns its selection, and its own mouseup both seeks
+    // to the beat that was pressed and clears the selection afterwards. Doing it
+    // ourselves in between is what broke click-and-drag.
     host.api.seeks = []
-    clickAt(beatAt(0, 2).notes[0])
+    await host.api.dragOverBeats([beatAt(0, 2)])
     expect(host.api.seeks).toContain(beatAt(0, 2))
+    expect(host.api.playbackRange).toBeNull()
   })
 
   it('does NOT seek while playing, or every arrow would jump the music', () => {
@@ -2417,8 +2524,292 @@ describe('Enter places a rest, or steps along the bar', () => {
   })
 })
 
+// Whole bars, which is the one thing the writing keys cannot reach: the right
+// arrow only ever adds one at the END of the score.
+describe('inserting and deleting bars', () => {
+  function voiceAt(bar, track = LEAD) {
+    return score.tracks[track].staves[0].bars[bar].voices[0]
+  }
+  function beatAt(bar, index, track = LEAD) {
+    return voiceAt(bar, track).beats[index]
+  }
+  function fretsAt(bar) {
+    return voiceAt(bar).beats.map((b) => b.notes[0]?.fret ?? null)
+  }
+
+  // ---- Ctrl+Insert ----
+
+  it('inserts before the cursor bar, pushing the rest along', () => {
+    clickAt(beatAt(2, 0).notes[0])
+    const displaced = fretsAt(2)
+    host.syncedScoreInfo = 0
+
+    const result = edit.insertBar()
+    expect(result).toMatchObject({ ok: true, changed: true, barIndex: 2 })
+    expect(score.masterBars).toHaveLength(5)
+    expect(voiceAt(2).isEmpty).toBe(true)
+    expect(fretsAt(3)).toEqual(displaced)
+    expect(host.syncedScoreInfo).toBe(1)
+  })
+
+  it('lands the cursor on the new bar, ready to write in it', () => {
+    clickAt(beatAt(2, 0).notes[0])
+    const string = edit.cursor.value.string
+    const moves = edit.cursorMoves.value
+
+    edit.insertBar()
+    expect(edit.cursor.value).toMatchObject({
+      barIndex: 2,
+      beatIndex: 0,
+      string,
+      isUnwritten: true,
+    })
+    expect(edit.cursorBarFill.value).toMatchObject({ state: 'exact' })
+    // The view follows, like any other cursor move.
+    expect(edit.cursorMoves.value).toBe(moves + 1)
+  })
+
+  it('renders fully and rebuilds the midi now, since every later tick moved', () => {
+    clickAt(beatAt(2, 0).notes[0])
+    host.renders = []
+    host.midiReloads = 0
+
+    edit.insertBar()
+    expect(host.renders).toEqual([{ reuseViewport: true }])
+    expect(host.midiReloads).toBe(1)
+    expect(host.dirty).toBe(true)
+  })
+
+  it('inserts before the FIRST bar of a dragged passage', () => {
+    dragOver(beatAt(1, 0), beatAt(2, 3))
+    expect(edit.selectedRange.value).toMatchObject({ startBar: 1, endBar: 2 })
+
+    expect(edit.insertBar()).toMatchObject({ ok: true, barIndex: 1 })
+    expect(voiceAt(1).isEmpty).toBe(true)
+  })
+
+  it('works on the very first bar, tempo included', () => {
+    // `score.tempo` reads masterBars[0], so a new first bar has to carry the
+    // automations or the whole score drops to the 120 fallback.
+    const beforeTempo = score.tempo
+    clickAt(beatAt(0, 0).notes[0])
+
+    expect(edit.insertBar().ok).toBe(true)
+    expect(score.tempo).toBe(beforeTempo)
+    expect(score.masterBars[0].tempoAutomations.length).toBeGreaterThan(0)
+  })
+
+  it('and the undo takes it back out', () => {
+    clickAt(beatAt(2, 0).notes[0])
+    const frets = fretsAt(2)
+    edit.insertBar()
+
+    expect(edit.undo().ok).toBe(true)
+    expect(score.masterBars).toHaveLength(4)
+    expect(fretsAt(2)).toEqual(frets)
+    expect(host.dirty).toBe(false)
+  })
+
+  // ---- Ctrl+Delete ----
+
+  it('deletes the cursor bar and closes the gap', () => {
+    clickAt(beatAt(1, 0).notes[0])
+    const after = fretsAt(2)
+    host.syncedAllTracks = 0
+
+    const result = edit.removeBars()
+    expect(result).toMatchObject({ ok: true, changed: true, barIndex: 1, barCount: 1 })
+    expect(result.noteCount).toBeGreaterThan(0)
+    expect(score.masterBars).toHaveLength(3)
+    expect(fretsAt(1)).toEqual(after)
+    // The panel's fret range and harmonic count are read off the notes.
+    expect(host.syncedAllTracks).toBe(1)
+  })
+
+  it('lands the cursor on whatever moved up into the hole', () => {
+    clickAt(beatAt(1, 0).notes[0])
+    const string = edit.cursor.value.string
+    edit.removeBars()
+    expect(edit.cursor.value).toMatchObject({ barIndex: 1, beatIndex: 0, string })
+  })
+
+  it('and on the new LAST bar when the tail is what went', () => {
+    clickAt(beatAt(3, 0).notes[0])
+    edit.removeBars()
+    expect(score.masterBars).toHaveLength(3)
+    expect(edit.cursor.value).toMatchObject({ barIndex: 2 })
+  })
+
+  it('deletes every bar of a dragged passage', () => {
+    dragOver(beatAt(1, 0), beatAt(2, 3))
+    const result = edit.removeBars()
+    expect(result).toMatchObject({ ok: true, barIndex: 1, barCount: 2 })
+    expect(score.masterBars).toHaveLength(2)
+    expect(edit.selectedRange.value).toBeNull()
+  })
+
+  it('refuses to empty the score, and says why', () => {
+    dragOver(beatAt(0, 0), beatAt(3, 3))
+    const result = edit.removeBars()
+    expect(result.ok).toBe(false)
+    expect(edit.editMessage.value).toMatchObject({ kind: 'error' })
+    expect(edit.editMessage.value.text).toMatch(/cannot have none/)
+    expect(score.masterBars).toHaveLength(4)
+  })
+
+  it('and the undo puts the bars and their notes back', () => {
+    clickAt(beatAt(1, 0).notes[0])
+    const frets = fretsAt(1)
+    edit.removeBars()
+
+    expect(edit.undo().ok).toBe(true)
+    expect(score.masterBars).toHaveLength(4)
+    expect(fretsAt(1)).toEqual(frets)
+    expect(host.dirty).toBe(false)
+  })
+
+  // ---- both ----
+
+  it('both refuse with nothing designated', () => {
+    edit.clearSelection()
+    expect(edit.insertBar().ok).toBe(false)
+    expect(edit.removeBars().ok).toBe(false)
+    expect(score.masterBars).toHaveLength(4)
+  })
+
+  it('and both stand down while playing', () => {
+    clickAt(beatAt(1, 0).notes[0])
+    player.isPlaying.value = true
+
+    expect(edit.insertBar().ok).toBe(false)
+    expect(edit.editMessage.value.text).toMatch(/Pause playback/)
+    expect(edit.removeBars().ok).toBe(false)
+    expect(score.masterBars).toHaveLength(4)
+  })
+
+  it('a bar inserted then deleted leaves the score as it was', () => {
+    clickAt(beatAt(2, 0).notes[0])
+    const frets = fretsAt(2)
+
+    expect(edit.insertBar().ok).toBe(true)
+    expect(edit.removeBars().ok).toBe(true)
+    expect(score.masterBars).toHaveLength(4)
+    expect(fretsAt(2)).toEqual(frets)
+  })
+})
+
 // The right arrow is the key a passage is written with: it walks, and on the last
 // beat of a bar that is not EXACTLY full it makes room.
+// The whole mouse gesture, driven the way alphaTab drives it. Everything else
+// about the range starts from `playbackRangeHighlightChanged`, which is halfway
+// through the story: it is the mousedown at the START of the drag that broke it.
+describe('click and drag, as a real gesture', () => {
+  function beatAt(bar, index, track = LEAD) {
+    return score.tracks[track].staves[0].bars[bar].voices[0].beats[index]
+  }
+
+  // The coordinates matter: they are what makes the mousedown place a CURSOR,
+  // which is the thing that used to corrupt alphaTab's selection state.
+  const ON_THE_TAB = { clientX: 160, clientY: 133 }
+
+  beforeEach(() => {
+    host.api.boundsLookup.staffSystems = fakeStaffSystems(
+      score.tracks[LEAD].staves[0].bars[0],
+    )
+  })
+
+  it('builds a range from a drag, and does not throw on mouseup', async () => {
+    await host.api.dragOverBeats([beatAt(0, 0), beatAt(0, 1), beatAt(0, 3)], ON_THE_TAB)
+
+    expect(edit.selectedRange.value).toMatchObject({ trackIndex: LEAD, startBar: 0, endBar: 0 })
+    expect(edit.selectedRange.value.noteCount).toBeGreaterThan(1)
+    // The loop range alphaTab applies on mouseup.
+    expect(host.api.playbackRange).not.toBeNull()
+  })
+
+  it('and the rings mark every note the drag covers', async () => {
+    await host.api.dragOverBeats([beatAt(0, 0), beatAt(0, 2)], ON_THE_TAB)
+    expect(edit.selectedNoteRects.value.length).toBeGreaterThan(0)
+    expect(edit.cursor.value).toBeNull()
+  })
+
+  it('a drag across bars keeps the track it started on', async () => {
+    await host.api.dragOverBeats([beatAt(0, 2), beatAt(1, 1)], ON_THE_TAB)
+    expect(edit.selectedRange.value).toMatchObject({ trackIndex: LEAD, startBar: 0, endBar: 1 })
+  })
+
+  it('a drag that starts where a range already was replaces it', async () => {
+    await host.api.dragOverBeats([beatAt(0, 0), beatAt(0, 1)], ON_THE_TAB)
+    const first = edit.selectedRange.value.noteCount
+    await host.api.dragOverBeats([beatAt(2, 0), beatAt(3, 3)], ON_THE_TAB)
+    expect(edit.selectedRange.value).toMatchObject({ startBar: 2, endBar: 3 })
+    expect(edit.selectedRange.value.noteCount).not.toBe(first)
+  })
+
+  it('and a drag still works after the cursor has been moved by the keyboard', async () => {
+    // The keyboard path is the one that DOES drop alphaTab's own selection, so
+    // this is the order that has to keep working in both directions.
+    clickAt(beatAt(0, 0).notes[0])
+    expect(edit.moveCursorBeat(1).ok).toBe(true)
+
+    await host.api.dragOverBeats([beatAt(1, 0), beatAt(1, 2)], ON_THE_TAB)
+    expect(edit.selectedRange.value).toMatchObject({ startBar: 1 })
+  })
+
+  it('a plain click places the cursor and leaves no range behind', async () => {
+    // One press and one release, which is what a click is. The coordinates
+    // decide where the CURSOR goes: on this stub they land on beat 1 of bar 0.
+    await host.api.dragOverBeats([beatAt(0, 2)], ON_THE_TAB)
+
+    expect(edit.selectedRange.value).toBeNull()
+    expect(edit.cursor.value).toMatchObject({ barIndex: 0, beatIndex: 1 })
+    // The playhead moved to the beat alphaTab's own hit-test found under the
+    // press, on its own mouseup - we no longer seek during the gesture.
+    expect(host.api.seeks).toContain(beatAt(0, 2))
+    expect(host.api.playbackRange).toBeNull()
+  })
+
+  it('and a click after a drag replaces the range with a cursor', async () => {
+    await host.api.dragOverBeats([beatAt(0, 0), beatAt(0, 3)], ON_THE_TAB)
+    expect(edit.selectedRange.value).not.toBeNull()
+
+    await host.api.dragOverBeats([beatAt(0, 2)], ON_THE_TAB)
+    expect(edit.selectedRange.value).toBeNull()
+    expect(edit.cursor.value).not.toBeNull()
+  })
+
+  // alphaTab reads its own selection pair unguarded in BOTH directions - the
+  // mouseup reads the start without checking it, the post-render echo reads the
+  // end without checking it - so the state it is left in has to survive a render
+  // whatever the last gesture was. The fake throws exactly where alphaTab does.
+  it('leaves a state that survives a render, after every gesture', async () => {
+    await host.api.dragOverBeats([beatAt(0, 0), beatAt(0, 2)], ON_THE_TAB)
+    expect(() => host.api.replayPostRenderHighlight(), 'after a drag').not.toThrow()
+
+    await host.api.dragOverBeats([beatAt(1, 1)], ON_THE_TAB)
+    expect(() => host.api.replayPostRenderHighlight(), 'after a click').not.toThrow()
+
+    expect(edit.moveCursorBeat(1).ok).toBe(true)
+    expect(() => host.api.replayPostRenderHighlight(), 'after an arrow').not.toThrow()
+
+    edit.clearSelection()
+    expect(() => host.api.replayPostRenderHighlight(), 'after clearing').not.toThrow()
+  })
+
+  it('and a drag survives an edit rendering in the middle of the session', async () => {
+    // The sequence the playhead work was written for: drag, move the cursor off
+    // it with a key, then let an edit render. The range must not come back from
+    // alphaTab's retained selection and wipe the cursor.
+    await host.api.dragOverBeats([beatAt(0, 0), beatAt(0, 2)], ON_THE_TAB)
+    expect(edit.moveCursorBeat(1).ok).toBe(true)
+    expect(edit.selectedRange.value).toBeNull()
+
+    host.api.replayPostRenderHighlight()
+    expect(edit.selectedRange.value).toBeNull()
+    expect(edit.cursor.value).not.toBeNull()
+  })
+})
+
 describe('the right arrow makes room at the end of a bar', () => {
   function voiceAt(bar, track = LEAD) {
     return score.tracks[track].staves[0].bars[bar].voices[0]

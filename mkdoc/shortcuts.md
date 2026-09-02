@@ -103,6 +103,21 @@ need a **position** to write at, which only a cursor is (`canWriteNote`); a
 duration belongs to a beat, and a dragged passage is a set of beats even with no
 cursor on any of them (`canChangeDuration`).
 
+## One key, two sizes of delete
+
+`Delete` alone replaces the selection with silence; `Ctrl+Delete` removes the
+whole bar it is in. The modifier match is exact, so the two never collide, and
+`Ctrl+Shift+Delete` is left to the browser - swallowing clear-browsing-data to do
+something else is the same bad trade `Ctrl+Shift+S` was.
+
+`Ctrl+Insert` is its counterpart, and the pair are the only bar-sized operations
+on the keyboard: the right arrow can add a bar but only at the very end of the
+score, and nothing else removes one. Both stand down for anything that owns
+typing keys, unlike `Alt`+arrow - `Ctrl+Delete` in a text field is
+delete-word-forward, which is a real shortcut somebody may be using in the tempo
+field - and neither repeats, because each one is a structural edit that finishes
+the score.
+
 ## The writing keys are the strictest in the table
 
 `0-9`, `+`, `-` and `Enter` are the first bindings here that are plain

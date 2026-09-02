@@ -9,6 +9,8 @@ import {
   MIN_FRET,
   appendBar,
   barFill,
+  deleteBars,
+  insertBarBefore,
   describeBarFill,
   describeDuration,
   deleteNotes,
@@ -515,6 +517,14 @@ function bind() {
     lastClickPoint = { x: mouse.clientX - box.left, y: mouse.clientY - box.top }
   })
 
+  // The other half of `gestureOnScore`. alphaTab fires this for every release
+  // that followed a mousedown on the score, with or without a beat under the
+  // pointer, and its own handler has already applied the selection by then - so
+  // from here on the state is ours to touch again.
+  api.beatMouseUp.on(() => {
+    gestureOnScore = false
+  })
+
   // A render rebuilds the bounds lookup, so every rectangle has to be re-read
   // from it. This covers every path at once: an edit, a track change, a resize,
   // a bars-per-row change.
@@ -572,6 +582,9 @@ function bind() {
   // inside a bar (`if (beat)` guards it), so clicking the page well away from
   // any staff does not reach this and leaves the selection alone.
   api.beatMouseDown.on((beat) => {
+    // alphaTab owns its selection from here until the release. See
+    // `gestureOnScore`.
+    gestureOnScore = true
     const now = Date.now()
     const isDouble = beat && beat === lastBeatDown && now - lastBeatDownAt <= DOUBLE_CLICK_MS
     lastBeatDown = isDouble ? null : beat
@@ -597,6 +610,7 @@ function bind() {
   // Closing a score has no alphaTab event, so usePlayer calls this directly.
   // Dropping the selection is what lets the old score graph be collected.
   scoreEditHost.onScoreCleared = () => {
+    gestureOnScore = false
     clearSelection()
     clearRange()
     forgetLastClick()
@@ -610,6 +624,7 @@ function bind() {
   // that is no longer displayed. This also covers a revert, which reloads the
   // original bytes.
   api.scoreLoaded.on(() => {
+    gestureOnScore = false
     clearSelection()
     clearRange()
     forgetLastClick()
@@ -745,6 +760,25 @@ function selectBar(beat) {
 // call each other until the stack runs out.
 let droppingRange = false
 
+// True from a mousedown on the score until the release that ends it.
+//
+// While it is true, alphaTab OWNS its selection: the mousedown has just recorded
+// where a drag would start, every mousemove extends it, and the mouseup applies
+// it. Touching that state in between is what broke click-and-drag - and our own
+// deselect microtask runs exactly in between, on every single press.
+//
+// Two ways it went wrong, both from one `highlightPlaybackRange` + `apply` pair:
+// the start alphaTab recorded was REPLACED by the beat our own hit-test
+// resolved (which uses Y where alphaTab's uses X only, so on a multi-track score
+// they need not agree), and the `apply` then cleared it outright, which left
+// nothing for the drag to draw from.
+//
+// If a release ever happens somewhere that fires no mouseup - alphaTab listens
+// on its own container, so letting go outside it does - this stays true until
+// the next complete press and release inside the score. What is lost meanwhile
+// is the playhead following the cursor, not correctness.
+let gestureOnScore = false
+
 // Drop the selection alphaTab keeps of its OWN, which is not the same object as
 // ours and does not go away when ours does.
 //
@@ -781,7 +815,7 @@ let droppingRange = false
 // passage, click away, and still have playback loop the passage.
 function syncPlayheadToCursor(beat) {
   const api = scoreEditHost.api
-  if (!api || droppingRange) return
+  if (!api || droppingRange || gestureOnScore) return
   droppingRange = true
   try {
     if (!beat) {
@@ -789,7 +823,35 @@ function syncPlayheadToCursor(beat) {
       return
     }
     api.highlightPlaybackRange(beat, beat)
-    if (!scoreEditHost.isPlaying) api.applyPlaybackRangeFromHighlight()
+    if (!scoreEditHost.isPlaying) {
+      api.applyPlaybackRangeFromHighlight()
+      // And PUT THE START BACK, which is not a tidy-up: it is the difference
+      // between a working drag and a crash.
+      //
+      // `applyPlaybackRangeFromHighlight` on a degenerate range clears
+      // `_selectionStart` and LEAVES `_selectionEnd` set, and alphaTab 1.8.4
+      // cannot survive that half-state - it reads the start without checking it:
+      //
+      //   applyPlaybackRangeFromHighlight() {
+      //     if (this._selectionEnd) {
+      //       const startTick = ... this._selectionStart.beat ...     // throws
+      //
+      //   _cursorSelectRange(startBeat, endBeat) {
+      //     if (!startBeat || ...) { trigger({}); return }            // no band
+      //
+      // Left half, the mousedown of the next drag landed in it (our own
+      // deselect microtask runs between that mousedown and the first mousemove),
+      // so the drag drew nothing at all and its mouseup threw
+      // `TypeError: can't access property "beat", this._selectionStart is
+      // undefined`.
+      //
+      // A second same-beat highlight restores the pair. alphaTab draws nothing
+      // for it - `_cursorSelectRange` bails on start === end - so it is
+      // invisible, and every path that reads the pair afterwards finds it whole:
+      // the post-render echo re-collapses it to nothing, and the next mousedown
+      // overwrites both halves anyway.
+      api.highlightPlaybackRange(beat, beat)
+    }
   } finally {
     droppingRange = false
   }
@@ -1057,6 +1119,14 @@ export function useScoreEdit() {
   // no setter and no event, so a preview fires no `playerStateChanged` and
   // cannot lock the panel against itself.
   const canEdit = computed(() => player.isScoreLoaded.value && !player.isPlaying.value)
+
+  // "Something in the score is designated", which is what four keys stand down
+  // on: the bare arrows, the two duration keys and the two bar keys. One
+  // computed behind three names, because each name answers a different question
+  // and the day one of them stops accepting a dragged passage they part company.
+  const hasTarget = computed(
+    () => cursorInfo.value !== null || selectedRange.value !== null,
+  )
 
   const canUndo = computed(() => canEdit.value && undoDepth.value > 0)
   const canRedo = computed(() => canEdit.value && redoDepth.value > 0)
@@ -1617,6 +1687,124 @@ export function useScoreEdit() {
     })
   }
 
+  // Which bars `Ctrl+Insert` and `Ctrl+Delete` act on.
+  //
+  // A dragged passage first, since it is the more deliberate gesture and the
+  // only way to name more than one bar; otherwise the cursor's own bar. Both
+  // report MASTER bar indexes, which is what the bar operations take.
+  function targetBars() {
+    const range = selectedRange.value
+    if (range) return { from: range.startBar, to: range.endBar }
+    const at = cursorInfo.value?.barIndex
+    return typeof at === 'number' ? { from: at, to: at } : null
+  }
+
+  // Put the cursor on the first beat of a bar by INDEX, after the bars around it
+  // have moved.
+  //
+  // By index rather than by object, because that is the whole point: after an
+  // insertion the bar at this index is the new one, and after a deletion it is
+  // whatever moved up into the hole. Clamped, so deleting the last bars of a
+  // score lands on the new last one rather than nowhere.
+  function landOnBar(staff, index, voiceIndex, string) {
+    const bars = staff?.bars ?? []
+    const bar = bars[Math.min(index, bars.length - 1)] ?? null
+    const voice = bar?.voices?.[voiceIndex] ?? bar?.voices?.[0] ?? null
+    const beat = voice?.beats?.[0] ?? null
+    if (!beat) {
+      clearSelection()
+      clearRange()
+      return
+    }
+    setCursor(beat, string)
+    cursorMoves.value += 1
+  }
+
+  // Where the cursor is standing, in terms that survive the bars around it being
+  // spliced: the staff and voice objects rather than their indexes, and the
+  // string. Read before the write, used after it.
+  function cursorLane() {
+    const anchor = cursorAnchor(1)
+    return {
+      staff: anchor?.beat?.voice?.bar?.staff ?? null,
+      voiceIndex: anchor?.beat?.voice?.index ?? 0,
+      string: anchor?.string ?? null,
+    }
+  }
+
+  // Ctrl+Insert: one more bar, before this one.
+  //
+  // The counterpart to the right arrow's bar, which can only ever land at the
+  // END of the score - and that limit is why this exists. Everything after the
+  // insertion point moves along, which needs the renumbering pass alphaTab does
+  // not do for us and the tempo move when the new bar becomes the first one. See
+  // `insertBarBefore`.
+  //
+  // The cursor follows onto the new bar rather than staying with the music it
+  // displaced: asking for a bar here is asking for somewhere to write.
+  function insertBar() {
+    if (!canEdit.value) return refusePlayback()
+    const target = targetBars()
+    if (!target) return refused('Click a note or a bar in the score first.')
+
+    const lane = cursorLane()
+    const result = insertBarBefore(scoreEditHost.score, target.from, scoreEditHost.api?.settings)
+    if (result.changed) {
+      // The bar count in the document strip, and the tempo with it: inserting
+      // before the first bar moves the automations that `score.tempo` reads.
+      scoreEditHost.syncScoreInfo()
+      landOnBar(lane.staff, target.from, lane.voiceIndex, lane.string)
+    }
+    return propagate(result, {
+      // A full render, and no `firstChangedMasterBar`: every bar after the
+      // insertion point has moved, so there is no prefix worth keeping and the
+      // systems re-flow from there anyway.
+      render: true,
+      // Every tick after the insertion point moved, and the score is longer.
+      midi: 'now',
+      label: 'Insert a bar',
+    })
+  }
+
+  // Ctrl+Delete: this bar, or every bar of a dragged passage.
+  //
+  // The most destructive key here, and deliberately without a confirmation - the
+  // same call the note delete made, for the same reasons: a prompt every time
+  // would make it useless, a threshold on the count would be arbitrary, `Ctrl+Z`
+  // takes it back in one step, and `isDirty` warns before the score is replaced
+  // or closed. The score visibly shrinks, which is the feedback.
+  //
+  // `syncAllTracks` here and not on the insert: the panel's fret range and
+  // natural-harmonic count are read off the notes, and this is the operation
+  // that removes some.
+  function removeBars() {
+    if (!canEdit.value) return refusePlayback()
+    const target = targetBars()
+    if (!target) return refused('Click a note or a bar in the score first.')
+
+    const lane = cursorLane()
+    const result = deleteBars(
+      scoreEditHost.score,
+      target.from,
+      target.to,
+      scoreEditHost.api?.settings,
+    )
+    if (result.changed) {
+      // Whatever was selected is gone with the bar, so neither the rings nor the
+      // cursor can point at it any more.
+      clearSelection()
+      clearRange()
+      scoreEditHost.syncScoreInfo()
+      scoreEditHost.syncAllTracks()
+      landOnBar(lane.staff, target.from, lane.voiceIndex, lane.string)
+    }
+    return propagate(result, {
+      render: true,
+      midi: 'now',
+      label: result.barCount === 1 ? 'Delete a bar' : `Delete ${result.barCount} bars`,
+    })
+  }
+
   // The left and right arrows, whole job included.
   //
   // The LEFT arrow only ever walks. The right arrow walks too, until it reaches
@@ -1811,24 +1999,25 @@ export function useScoreEdit() {
     // shortcut table rather than by a component, because `appliesTo` has to
     // answer before `preventDefault()` runs: deciding inside `run` would be too
     // late and the page would have stopped scrolling either way.
-    canNavigate: computed(() => cursorInfo.value !== null || selectedRange.value !== null),
+    canNavigate: hasTarget,
 
     // writing
     typeFret,
     changeDuration,
     insertRest,
-    // The two conditions the writing keys stand down on, and they are not the
-    // same one. A digit and a rest need a POSITION to write at, which only a
-    // cursor is; a duration belongs to a beat, and a dragged passage is a set of
-    // beats even with no cursor on any of them.
+    insertBar,
+    removeBars,
+    // What the writing keys stand down on, and there are two conditions rather
+    // than one. A digit and a rest need a POSITION to write at, which only a
+    // cursor is; a duration and a whole bar are named by a dragged passage just
+    // as well, with no cursor on any of it.
     //
-    // Both are read from `appliesTo` for the reason `canNavigate` is: bare
-    // digits are characters, and a key that is not going to be used has to be
-    // left alone BEFORE `preventDefault()`, not after.
+    // Read from `appliesTo` for the reason `canNavigate` is: bare digits are
+    // characters, and a key that is not going to be used has to be left alone
+    // BEFORE `preventDefault()`, not after.
     canWriteNote: computed(() => cursorInfo.value !== null),
-    canChangeDuration: computed(
-      () => cursorInfo.value !== null || selectedRange.value !== null,
-    ),
+    canChangeDuration: hasTarget,
+    canEditBars: hasTarget,
     DURATION_SHORTER,
     DURATION_LONGER,
 

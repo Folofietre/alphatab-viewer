@@ -25,6 +25,8 @@ import {
   DURATION_LONGER,
   DURATION_SHORTER,
   appendBar,
+  deleteBars,
+  insertBarBefore,
   placeRest,
   stepBeatsDuration,
   writeNoteAtString,
@@ -638,6 +640,130 @@ describe.skipIf(scores.length === 0)('invariants on real scores', () => {
           for (const staff of track.staves) expect(staff.bars).toHaveLength(before)
         }
         expect(roundTrip(score).masterBars).toHaveLength(before)
+      })
+
+      it('a bar inserted in the middle renumbers everything after it', () => {
+        const score = loadFile(file)
+        const before = score.masterBars.length
+        const at = Math.floor(before / 2)
+
+        const result = insertBarBefore(score, at, settings)
+        expect(result).toMatchObject({ ok: true, barIndex: at })
+        expect(score.masterBars).toHaveLength(before + 1)
+        // No `finish()` renumbers a bar, so this is ours to get right - and it
+        // is what every later RenderHint and tick depends on. See gotcha 11.
+        expect(score.masterBars.map((m) => m.index)).toEqual(
+          score.masterBars.map((_, i) => i),
+        )
+        for (const track of score.tracks) {
+          for (const staff of track.staves) {
+            expect(staff.bars).toHaveLength(before + 1)
+            expect(staff.bars.map((b) => b.index)).toEqual(staff.bars.map((_, i) => i))
+          }
+        }
+        // Starts are strictly increasing from zero, which is what says the ticks
+        // were rebuilt rather than inherited.
+        expect(score.masterBars[0].start).toBe(0)
+        for (let i = 1; i < score.masterBars.length; i += 1) {
+          expect(score.masterBars[i].start).toBeGreaterThan(score.masterBars[i - 1].start)
+        }
+        expect(roundTrip(score).masterBars).toHaveLength(before + 1)
+
+        result.undo()
+        expect(score.masterBars).toHaveLength(before)
+        expect(score.masterBars[0].start).toBe(0)
+      })
+
+      it('inserting before the first bar keeps the tempo the score had', () => {
+        // `Score.tempo` is a getter over masterBars[0], with a 120 fallback.
+        const score = loadFile(file)
+        const was = score.tempo
+        const result = insertBarBefore(score, 0, settings)
+        expect(result.ok).toBe(true)
+        expect(score.tempo).toBe(was)
+        result.undo()
+        expect(score.tempo).toBe(was)
+      })
+
+      // The invariant that needs a real file: links crossing a bar line. The
+      // fixture has none at all; these two have 106 and 191.
+      it('deleting a bar leaves no link pointing into it', () => {
+        const score = loadFile(file)
+        if (score.masterBars.length < 3) return
+        const at = Math.floor(score.masterBars.length / 2)
+
+        const victims = new Set()
+        for (const track of score.tracks) {
+          for (const staff of track.staves) {
+            for (const voice of staff.bars[at]?.voices ?? []) {
+              for (const beat of voice.beats) for (const note of beat.notes) victims.add(note)
+            }
+          }
+        }
+
+        const before = score.masterBars.length
+        const result = deleteBars(score, at, at, settings)
+        expect(result).toMatchObject({ ok: true, barIndex: at, barCount: 1 })
+        expect(score.masterBars).toHaveLength(before - 1)
+
+        const FIELDS = [
+          'tieOrigin', 'tieDestination', 'hammerPullOrigin', 'hammerPullDestination',
+          'slurOrigin', 'slurDestination', 'slideOrigin', 'slideTarget',
+          'effectSlurOrigin', 'effectSlurDestination', 'bendOrigin',
+        ]
+        let checked = 0
+        for (const track of score.tracks) {
+          for (const staff of track.staves) {
+            for (const bar of staff.bars) {
+              for (const voice of bar.voices) {
+                for (const beat of voice.beats) {
+                  for (const note of beat.notes) {
+                    checked += 1
+                    for (const field of FIELDS) {
+                      expect(victims.has(note[field]), field).toBe(false)
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+        expect(checked).toBeGreaterThan(0)
+        expect(roundTrip(score).masterBars).toHaveLength(before - 1)
+      })
+
+      it('deleting the first bar puts the score back at tick zero', () => {
+        const score = loadFile(file)
+        if (score.masterBars.length < 2) return
+        const before = score.masterBars.length
+
+        const result = deleteBars(score, 0, 0, settings)
+        expect(result.ok).toBe(true)
+        // `MasterBar.finish` only recomputes `start` for index > 0, so this one
+        // is ours - and `absolutePlaybackStart` is what the drag selection and
+        // the loop range are built from.
+        expect(score.masterBars[0].start).toBe(0)
+        const first = score.tracks[0].staves[0].bars[0].voices.find((v) => v.beats.length > 0)
+        if (first) expect(first.beats[0].absolutePlaybackStart).toBe(0)
+
+        result.undo()
+        expect(score.masterBars).toHaveLength(before)
+        expect(score.masterBars[0].start).toBe(0)
+      })
+
+      it('and a deleted bar comes back note for note, midi included', () => {
+        const score = loadFile(file)
+        if (score.masterBars.length < 3) return
+        const at = Math.floor(score.masterBars.length / 2)
+
+        const before = score.tracks.map(snapshotTrack)
+        const beforeMidi = midiNoteOns(score)
+        const result = deleteBars(score, at, at, settings)
+        expect(result.ok).toBe(true)
+
+        result.undo()
+        expect(score.tracks.map(snapshotTrack)).toEqual(before)
+        expect(midiNoteOns(score)).toEqual(beforeMidi)
       })
 
       it('carries a full set of edits through a .gp round trip', () => {

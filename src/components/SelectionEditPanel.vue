@@ -108,6 +108,27 @@
           >Silence</button>
           <kbd>Delete</kbd>
         </div>
+
+        <!-- Whole BARS, which no other control here reaches: the right arrow
+             only ever adds one at the end of the score. Repeated in both
+             branches of this panel because a dragged passage hides the cursor
+             field below, and a passage is the only way to name several bars. -->
+        <div class="row">
+          <button
+            type="button"
+            :disabled="!canEdit"
+            title="Add an empty bar before this one, on every track. Everything after it moves along."
+            @click="insertBar"
+          >Insert bar</button>
+          <button
+            type="button"
+            class="danger"
+            :disabled="!canEdit"
+            title="Remove this bar and everything in it, on every track"
+            @click="removeBars"
+          >Delete bar</button>
+          <kbd title="Ctrl and Insert adds a bar before this one; Ctrl and Delete removes it">Ctrl + Ins / Del</kbd>
+        </div>
       </template>
 
       <p v-else-if="!selectedNote" class="hint">
@@ -246,6 +267,27 @@
           <kbd>Enter</kbd>
         </div>
 
+        <!-- Whole BARS, which no other control here reaches: the right arrow
+             only ever adds one at the end of the score. Repeated in both
+             branches of this panel because a dragged passage hides the cursor
+             field below, and a passage is the only way to name several bars. -->
+        <div class="row">
+          <button
+            type="button"
+            :disabled="!canEdit"
+            title="Add an empty bar before this one, on every track. Everything after it moves along."
+            @click="insertBar"
+          >Insert bar</button>
+          <button
+            type="button"
+            class="danger"
+            :disabled="!canEdit"
+            title="Remove this bar and everything in it, on every track"
+            @click="removeBars"
+          >Delete bar</button>
+          <kbd title="Ctrl and Insert adds a bar before this one; Ctrl and Delete removes it">Ctrl + Ins / Del</kbd>
+        </div>
+
         <p v-if="cursor.string" class="hint">
           Type <kbd>0-9</kbd> to write a fret on this string.
         </p>
@@ -288,7 +330,8 @@ const CURSOR_HELP =
   'beat, so on every note of a chord, and on every beat of a dragged passage. ' +
   'The right arrow makes room: on the last beat of a bar that is not exactly ' +
   'full it inserts a rest for the next note, and past the end of the score it ' +
-  'adds a bar.'
+  'adds a bar. Insert bar and Delete bar act on the bar the cursor is in, on ' +
+  'every track at once, and Delete bar takes its notes with it.'
 
 // Everything that acts on what is SELECTED, split out of the Track panel.
 //
@@ -308,12 +351,14 @@ const selectionHelp = computed(() =>
     ? 'String and Pitch apply to every note at once, or to none: if one would run off the neck, the whole selection is refused. ' +
       'Shorter and Longer act on every BEAT the passage covers, so on every note of a chord - and not on a rest inside it, which belongs to no note. ' +
       'Octave is the exception, and does what it can: a note the tuning cannot reach stays at the pitch it had rather than being moved to a wrong one. ' +
-      'Drag on the score to change the range, or click a note to leave it. ' +
-      'Silence cannot be undone: use Revert in the Score panel to get the file back.'
+      'Delete bar removes every bar the passage covers, on every track, and is the only way to name more than one. ' +
+      'Drag on the score to change the range, or click a note to leave it.'
     : 'String keeps the pitch and only moves the fingering, so it stays silent. ' +
       'Pitch moves the note by a semitone on the same string, and plays it. ' +
       'Octave moves it twelve semitones and re-fingers it, changing string when the fret alone cannot reach, and refuses when no string can. ' +
-      'Silence removes it, leaving a rest of the same length, and cannot be undone.',
+      'Silence removes it, leaving a rest of the same length. ' +
+      'Insert bar and Delete bar act on the whole bar this note is in, on every track at once. ' +
+      'Everything here is one Ctrl+Z away.',
 )
 
 const {
@@ -329,6 +374,8 @@ const {
   deleteSelection,
   changeDuration,
   insertRest,
+  insertBar,
+  removeBars,
   DURATION_SHORTER,
   DURATION_LONGER,
 } = useScoreEdit()

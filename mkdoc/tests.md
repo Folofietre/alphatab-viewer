@@ -46,6 +46,11 @@ positions spread across the whole file is what it takes instead. That same cost 
 why none of the writing keys repeats - see
 [what finish() actually costs](editing.md#what-finish-on-every-keystroke-actually-costs).
 
+One invariant can only be checked against a real file: **the fixture has no note
+link that crosses a bar line at all**, while the two large real scores carry 106
+and 191 of them. So the sweep that stops a deleted bar leaving a tie pointing
+into it is exercised there and nowhere else.
+
 Two shapes of real file are worth knowing about, because both broke an invariant
 that looked safe. One carries a **stringed track whose every bar is still an
 untouched placeholder**, so "pick the first stringed staff and edit its first
@@ -53,6 +58,16 @@ beat" finds nothing to edit - the suite now looks for voices somebody has actual
 written into and says so. And the fixture has no empty bar at all, so the
 placeholder path is reached in tests by adding a bar first, which is the same
 route a user takes.
+
+One test double had to be made **less** forgiving to be useful. The fake
+`AlphaTabApi` returned early where alphaTab 1.8.4 throws - reading
+`_selectionStart.beat` inside `if (_selectionEnd)` - and that kindness let a
+broken click-and-drag reach the browser. It now throws in both of the places
+alphaTab does, and the drag is driven as a whole gesture (press, moves, release,
+with the coordinates that make the press place a cursor) rather than from the
+`playbackRangeHighlightChanged` event alone, which is halfway through the story.
+The lesson generalises: a double that is safer than the real thing hides exactly
+the bugs worth finding.
 
 Not covered by any test, and needing a browser: whether the incremental render is
 visibly faster on a large score, how a held `Alt`+arrow feels, whether the view

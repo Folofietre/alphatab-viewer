@@ -238,13 +238,23 @@ describe('Delete replaces the selection with silence', () => {
     expect(resolve(key('Backspace'))?.label).toMatch(/silence/)
   })
 
-  it('leaves them to the browser under a modifier', () => {
+  it('leaves them to the browser under a modifier that is not ours', () => {
     // Ctrl+Backspace deletes a word in a field, Alt+Backspace navigates back on
-    // some platforms. Neither is ours.
+    // some platforms. Neither is ours - and neither is Alt+Delete.
     for (const mods of [{ ctrl: true }, { alt: true }, { meta: true }]) {
-      expect(resolve(key('Delete', mods))).toBeNull()
       expect(resolve(key('Backspace', mods))).toBeNull()
     }
+    expect(resolve(key('Delete', { alt: true }))).toBeNull()
+    // Ctrl+Shift+Delete stays the browser's clear-browsing-data.
+    expect(resolve(key('Delete', { ctrl: true, shift: true }))).toBeNull()
+  })
+
+  it('but Ctrl+Delete is a different, bigger delete: the whole bar', () => {
+    // The pair the modifier separates: the bare key is note-sized, the Ctrl one
+    // is bar-sized. The modifier match is exact, so they never collide.
+    expect(resolve(key('Delete'))?.label).toMatch(/silence/i)
+    expect(resolve(key('Delete', { ctrl: true }))?.label).toBe('Delete this bar')
+    expect(resolve(key('Delete', { meta: true }))?.label).toBe('Delete this bar')
   })
 
   it('stands down wherever the key is the text-editing one', () => {
@@ -424,6 +434,7 @@ describe('the writing keys', () => {
     canNavigate: { value: true },
     canWriteNote: { value: true },
     canChangeDuration: { value: true },
+    canEditBars: { value: true },
     DURATION_SHORTER: 'shorter',
     DURATION_LONGER: 'longer',
   }
@@ -431,6 +442,7 @@ describe('the writing keys', () => {
     canNavigate: { value: false },
     canWriteNote: { value: false },
     canChangeDuration: { value: false },
+    canEditBars: { value: false },
   }
 
   function digit(character) {
@@ -541,6 +553,34 @@ describe('the writing keys', () => {
     }
   })
 
+  it('Ctrl+Insert and Ctrl+Delete act on whole bars', () => {
+    const insert = { ...armed, insertBar: vi.fn() }
+    resolve(key('Insert', { ctrl: true })).run(null, null, insert)
+    expect(insert.insertBar).toHaveBeenCalled()
+
+    const remove = { ...armed, removeBars: vi.fn() }
+    resolve(key('Delete', { ctrl: true })).run(null, null, remove)
+    expect(remove.removeBars).toHaveBeenCalled()
+  })
+
+  it('and both stand down with nothing designated, or in a text field', () => {
+    for (const event of [key('Insert', { ctrl: true }), key('Delete', { ctrl: true })]) {
+      const binding = resolve(event)
+      expect(binding.appliesTo({ tagName: 'BUTTON' }, null, idle)).toBe(false)
+      // Ctrl+Delete in a field is delete-word-forward, which is somebody's.
+      expect(binding.appliesTo({ tagName: 'INPUT', type: 'number' }, null, armed)).toBe(false)
+      expect(binding.appliesTo({ tagName: 'BUTTON' }, null, armed)).toBe(true)
+    }
+  })
+
+  it('the help shows them as one row each, under Ctrl/Cmd', () => {
+    const rows = shortcutHelp()
+    expect(rows.find((r) => r.label === 'Insert a bar before this one').keys)
+      .toEqual(['Ctrl/Cmd + Insert'])
+    expect(rows.find((r) => r.label === 'Delete this bar').keys)
+      .toEqual(['Ctrl/Cmd + Delete'])
+  })
+
   it('the right arrow only writes when the key is NOT repeating', () => {
     // A held arrow walks. Without this it would insert a beat, or append a bar,
     // at the keyboard's repeat rate for as long as the finger is down.
@@ -618,7 +658,11 @@ describe('binding options', () => {
         (NEEDS_EDIT.has(binding.code) && !binding.modifiers?.alt) ||
         Array.isArray(binding.key) ||
         WRITES.has(binding.key) ||
-        binding.label === 'Add a rest, or step along the bar'
+        binding.label === 'Add a rest, or step along the bar' ||
+        // The two bar keys, which need a bar to act on.
+        binding.code === 'Insert' ||
+        (binding.code === 'Delete' && !!binding.modifiers?.ctrl) ||
+        (binding.code === 'Delete' && !!binding.modifiers?.meta)
       if (NEEDS_PLAYER.has(binding.key) || needsEdit) expect(call, name).toThrow()
       else expect(call, name).not.toThrow()
     }
@@ -628,6 +672,7 @@ describe('binding options', () => {
       canNavigate: { value: true },
       canWriteNote: { value: true },
       canChangeDuration: { value: true },
+      canEditBars: { value: true },
     }
     for (const binding of BINDINGS) {
       expect(typeof binding.appliesTo({ tagName: 'BUTTON' }, player, edit)).toBe('boolean')

@@ -303,21 +303,40 @@ a staff with no tablature - it becomes a full-height caret on every row of the
 beat.
 
 **The playhead follows the cursor**, so pressing play starts from where you were
-working rather than from wherever the transport was last left. Clicking a note
-does it too, which alphaTab already did on its own for a click on a bar.
+working rather than from wherever the transport was last left. A click does it
+too, and there alphaTab does it on its own.
 
 Only while PAUSED, though. Seeking under a running transport would make
 navigating during playback impossible - every arrow would jump the music - so
 while playing the cursor still moves and alphaTab's selection is still dropped,
 and only the seek is skipped.
 
-It comes free with the selection clean-up rather than as a second mechanism.
-`highlightPlaybackRange(beat, beat)` followed by
+For a KEYBOARD move it comes free with the selection clean-up rather than as a
+second mechanism. `highlightPlaybackRange(beat, beat)` followed by
 `applyPlaybackRangeFromHighlight()` takes alphaTab's same-beat branch, which
 seeks, and then clears `_selectionStart` and the playback range outright - so the
 post-render echo of gotcha 10 has nothing left to replay. alphaTab passes
 `shouldScroll: false` on that path, so it does not fight the view following the
-cursor.
+cursor. A second same-beat highlight then restores the pair, because the branch
+that clears the start leaves the end behind.
+
+**And none of it happens while the mouse is down on the score**, which is the
+rule the whole thing turns on: between a mousedown and its release, alphaTab owns
+its selection - the press records where a drag would start, each move extends it,
+the release applies it. Our own deselect microtask runs exactly in that gap, on
+every single press, and doing the clean-up there left alphaTab holding half a
+selection: **click-and-drag then drew nothing and its mouseup threw.** The
+clean-up stands down between `beatMouseDown` and `beatMouseUp`, and nothing is
+lost - alphaTab's own mouseup already seeks to the beat that was pressed and
+clears its selection afterwards. Full story, with the four-step sequence and the
+two smaller lessons in it, in
+[gotcha 10](alphatab-gotchas.md#and-it-leaves-half-a-selection-which-alphatab-cannot-survive).
+
+That is also why the drag is tested as a whole GESTURE - press, moves, release,
+with the coordinates that make the press place a cursor - rather than from
+`playbackRangeHighlightChanged` alone. Starting halfway through the story is what
+let this through: the test double returned early exactly where alphaTab throws,
+so it now throws there too.
 
 **The measure the cursor is in gets a papyrus wash**, drawn by our own overlay
 from `barRects`, following the arrow keys. alphaTab has a bar highlight of its
@@ -698,6 +717,89 @@ The division of labour that keeps this honest is in the code rather than in a
 comment. `navigateBeat` is pure navigation - it writes nothing, is not gated on
 playback, and never goes near `propagate` - and the composable's `moveCursorBeat`
 layers the two writes on top of it. The write is not folded into the walk.
+
+### Bars in the middle: what the append does not have to do
+
+`appendBar` is cheap because alphaTab's own `addMasterBar` and `addBar` do
+everything at the end of a score: they set `index` from the current length,
+compute `start` from the previous bar, and file the new bar into the open repeat
+group. `Ctrl+Insert` and `Ctrl+Delete` land in the middle, where none of that
+holds, so they share a `renumberBars` pass that does four things by hand:
+
+| | why |
+| --- | --- |
+| renumber `MasterBar.index` and `Bar.index` | no `finish()` renumbers either - only `Voice.finish` does, and only beats |
+| re-chain `previousMasterBar` / `nextMasterBar` and `previousBar` / `nextBar` | `finish()`'s link resolution walks them |
+| `masterBars[0].start = 0` | `MasterBar.finish` recomputes `start` only for `index > 0` |
+| `rebuildRepeatGroups()` | groups are built by appending, so leaving one has no inverse |
+
+All four are in [gotcha 11](alphatab-gotchas.md#11-nothing-can-be-removed-from-the-model-and-only-beats-get-renumbered),
+with the measurements. The third was a real bug before it was a line of code:
+deleting bar 0 left the bars starting at 3840 and the first beat's
+`absolutePlaybackStart` at 3840, which is the field the drag selection and the
+loop range are built from - so selecting a passage was broken after deleting the
+first bar of a score, with nothing on screen to say why.
+
+A fourth thing bit during the build and is worth the sentence: **a bar spliced
+into `staff.bars` has no `staff`,** because that is what `Staff.addBar` is for.
+The first thing to read it is `Beat.finish`, which throws inside alphaTab with a
+message naming neither the field nor the bar.
+
+### Inserting: the tempo is the trap at index 0
+
+`Score.tempo` is a getter over `masterBars[0].tempoAutomations[0].value` with a
+fallback of 120, so **a new first bar with no automation silently drops the whole
+score to 120**. Measured: 168 before, 120 after. So the automations *move* onto
+the new first bar rather than being copied - which also keeps the tempo marking
+drawn at the start of the piece, where a copy would have left a duplicate
+mid-score. The undo moves them back.
+
+The new bar is shaped like the bar **before** the insertion point rather than
+like the one it displaces, which is the conservative choice at a metre or key
+change: copying the displaced bar's signature would move where that change is
+drawn one bar earlier. Inserting before bar 0 has no previous bar, so there it is
+the displaced one.
+
+### Deleting: `deleteNotes` and the renumbering at once
+
+Every note in the removed bars goes, so this carries the whole of the note
+delete's machinery on top of the renumbering:
+
+- **The link sweep.** A link to a deleted note survives `finish()`
+  ([gotcha 6](alphatab-gotchas.md#6-deleting-a-note-leaves-stale-links-that-survive-finish)),
+  and links really do cross bar lines: measured, **106 and 191** of them on the
+  two large real test files, mostly ties and bend origins. The fixture has
+  **none at all**, which is why this invariant is checked against real files.
+- **The derived capture.** `finish()` creates links as well as clearing them, so
+  restoring only the cuts leaves a note carrying a tie it never had. Every staff
+  loses a bar here, so the capture is every surviving note of the score:
+  335-855KB on the two real files, against 9.4-18.6MB for a `JsonConverter`
+  snapshot of the same score.
+- **At least one bar has to remain.** alphaTab renders `masterBars.length` bars
+  and `ModelUtils.consolidate` exists to put one back, so an empty score is a
+  state to refuse rather than to produce. Refused with the count, like every
+  other refusal here.
+
+What it costs, measured end to end including the capture and `finish()`:
+
+| file | insert a bar | delete one bar | delete eight |
+| --- | --- | --- | --- |
+| 77 bars, 2856 notes | 1.6ms | 5.9ms | 4.5ms |
+| 118 bars, 7295 notes | 3.7ms | 12.0ms | 9.5ms |
+
+Deleting eight bars is *cheaper* than deleting one, which is not a mistake: the
+capture is over the notes that SURVIVE, so removing more of them leaves less to
+capture.
+
+Neither key repeats, and both are `Ctrl` combinations rather than bare keys -
+these are the two most destructive operations in the editor, and a held key
+eating a bar per repeat would be undoable only one step at a time.
+
+**No confirmation on the delete**, which is the call the note delete already
+made, for the same reasons: a prompt every time would make it useless, a
+threshold on the count would be arbitrary, `Ctrl+Z` takes it back in one step,
+and `isDirty` warns before the score is replaced or closed. The score visibly
+shrinks, which is the feedback.
 
 ### Where Enter and the right arrow differ, and why
 

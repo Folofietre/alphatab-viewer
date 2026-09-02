@@ -37,6 +37,14 @@ on every edit.
 `score.finish()` guarantees `masterBars[0]` has a `Tempo` automation at ratio
 position 0, so there is always something to write.
 
+One consequence worth its own line, because it is silent and it bites the moment
+bars can be inserted: **a new first bar with no tempo automation drops the whole
+score to 120.** Measured - a score reading 168 read back 120 after a bare
+`MasterBar` was put at index 0. So `insertBarBefore` moves the automations onto
+the new first bar, and `deleteBars` moves them onto the survivor when the first
+bar is what went (unless that survivor has a tempo change of its own, in which
+case it really is the tempo there).
+
 ## 2. String numbering is inverted relative to storage
 
 ```js
@@ -311,6 +319,55 @@ navigating during playback impossible.
 One trap in doing it: that call fires the very event that handles it, so the
 clear-down needs a re-entrancy guard or it recurses until the stack goes.
 
+### And it leaves HALF a selection, which alphaTab cannot survive
+
+The same-beat branch of `apply` clears `_selectionStart` and **leaves
+`_selectionEnd` set**. That pair is a state alphaTab never produces itself, and
+two of its own methods read the pair without checking it:
+
+```js
+applyPlaybackRangeFromHighlight() {
+  if (this._selectionEnd) {
+    const startTick = ... this._selectionStart.beat ...        // no start check
+
+_cursorSelectRange(startBeat, endBeat) {
+  if (!startBeat || !endBeat || ...) { trigger({}); return }   // draws nothing
+
+_onPostRenderFinished() {
+  if (this._selectionStart) this.highlightPlaybackRange(..., this._selectionEnd.beat)
+                                                              // no end check
+```
+
+**This is what broke click-and-drag**, and it took a browser to find because the
+whole gesture matters and the test double was kinder than the real thing. The
+sequence:
+
+1. mousedown records the start and clears the end.
+2. Our deselect microtask runs - *between the mousedown task and the first
+   mousemove task*, on every single press - and does the clear-down above, which
+   ends with no start and an end.
+3. every mousemove then calls `_cursorSelectRange` with no start, so **nothing
+   is ever drawn** and the range event arrives empty.
+4. mouseup calls `apply`, the end is set, the start is not:
+   `TypeError: can't access property "beat", this._selectionStart is undefined`.
+
+The fix is a rule rather than a patch: **while the mouse is down on the score,
+alphaTab owns its selection.** `beatMouseDown` and `beatMouseUp` are public
+events, so the clear-down simply stands down between them - and nothing is lost,
+because alphaTab's own mouseup already seeks to the beat that was pressed and
+clears its selection cleanly afterwards. The clear-down is only ever needed for
+cursor moves that come from the keyboard, which is where the resurrection
+happened in the first place.
+
+Two smaller lessons in the same bug. Replacing `_selectionStart` with a beat from
+**our** hit-test is wrong even when it does not crash: ours reads Y and
+alphaTab's `findBarAtPos` reads X only (gotcha 9), so on a multi-track score they
+need not agree, and a drag would silently start from a different beat than the
+one pressed. And a keyboard clear-down should end with a second
+`highlightPlaybackRange(beat, beat)`, which restores the pair - invisible,
+because equal beats draw nothing - so the state the render echo reads is never
+half either.
+
 ## 11. Nothing can be removed from the model, and only beats get renumbered
 
 Three asymmetries in one, all verified in Node, and together they are the shape
@@ -353,6 +410,29 @@ hints pointing at the wrong bar until it did.
 `addMasterBar` files a bar into the open repeat group, and removing a bar from
 the middle of a group has no inverse. Rebuilding the groups from what is left
 does.
+
+**And `masterBars[0].start` is not recomputed either.** `MasterBar.finish` does
+it only `if (this.index > 0)`:
+
+```js
+if (this.index > 0) this.start = this.previousMasterBar.start + this.previousMasterBar.calculateDuration();
+```
+
+So a new FIRST bar keeps whatever start it had. Measured on the fixture: deleting
+bar 0 left the bars starting at 3840, 7680, 11520 and the first beat's
+`absolutePlaybackStart` at 3840. Nothing throws, and the midi generator still
+emits its first note at tick 0 - but `absolutePlaybackStart` is what the drag
+selection and the loop range are built from, so selecting a passage was quietly
+broken after the first bar of a score was deleted. `renumberBars` sets it to 0
+by hand, before the finish.
+
+**One more, for bars that are SPLICED rather than appended: `bar.staff` is set by
+`Staff.addBar`, so splicing straight into `staff.bars` leaves it undefined.** The
+first thing that reads it is `Beat.finish`, which throws
+`Cannot read properties of undefined (reading 'index')` on
+`this.voice.bar.staff.index` - a stack trace inside alphaTab with nothing in it
+about the field that was missing. The same goes for `masterBar.score`, which
+`Score.addMasterBar` sets.
 
 ## And one non-gotcha: `finish()` is not needed after the OTHER edits
 

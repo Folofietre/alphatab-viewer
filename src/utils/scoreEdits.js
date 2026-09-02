@@ -1582,17 +1582,93 @@ export function placeRest(beat, settings) {
   })
 }
 
+// Renumber and re-chain every bar of the score, and reset where it starts.
+//
+// The pass that makes an insertion or a deletion anywhere but the end possible
+// at all. `addBar` and `addMasterBar` set `index` from the current length and no
+// `finish()` ever renumbers either of them - only `Voice.finish` renumbers, and
+// only beats - so a splice in the middle leaves every later bar claiming the
+// index it used to have. See gotcha 11.
+//
+// `masterBars[0].start = 0` is the third thing here and the least obvious.
+// `MasterBar.finish` recomputes `start` from the previous bar only `if
+// (this.index > 0)`, so a new first bar keeps whatever start it had: measured,
+// deleting bar 0 of the fixture left the bars starting at 3840, 7680, 11520 and
+// the first beat's `absolutePlaybackStart` at 3840. That field is what the drag
+// selection and the loop range are built from, so a stale one breaks selecting a
+// passage after the first bar of a score is deleted.
+//
+// It runs BEFORE `finish()`, which is what makes one finish enough.
+function renumberBars(score) {
+  score.masterBars.forEach((masterBar, index) => {
+    masterBar.index = index
+    masterBar.previousMasterBar = score.masterBars[index - 1] ?? null
+    masterBar.nextMasterBar = score.masterBars[index + 1] ?? null
+  })
+  if (score.masterBars.length > 0) score.masterBars[0].start = 0
+
+  for (const track of score.tracks ?? []) {
+    for (const staff of track.staves ?? []) {
+      staff.bars.forEach((bar, index) => {
+        bar.index = index
+        bar.previousBar = staff.bars[index - 1] ?? null
+        bar.nextBar = staff.bars[index + 1] ?? null
+      })
+    }
+  }
+
+  // The groups are built by appending, so a bar leaving or joining the middle of
+  // one has no inverse. Rebuilding them from what is there does.
+  score.rebuildRepeatGroups()
+}
+
+// One empty `Bar` per staff of every track, shaped like the bar at `reference`.
+//
+// A bar is not one object: it is a `MasterBar` - the metre, the key, the repeats,
+// shared by the whole score - plus a `Bar` on every staff of every track. Adding
+// one to a single track desynchronises the score.
+//
+// Each voice gets the placeholder beat alphaTab's own `ModelUtils.consolidate`
+// gives an unwritten voice. `isEmpty` is what makes it a whole-bar rest rather
+// than a beat somebody wrote.
+function makeBarsLike(score, reference) {
+  const made = []
+  for (const track of score.tracks ?? []) {
+    for (const staff of track.staves ?? []) {
+      const bar = new alphaTab.model.Bar()
+      // By hand, because these bars are SPLICED in rather than appended, so
+      // `Staff.addBar` - which is what normally sets this - never runs. Without
+      // it `Beat.finish` throws on `this.voice.bar.staff.index`, which is the
+      // first thing that ever reads it.
+      bar.staff = staff
+      const like = staff.bars?.[reference] ?? null
+      if (like) {
+        bar.clef = like.clef
+        bar.clefOttava = like.clefOttava
+        bar.keySignature = like.keySignature
+        bar.keySignatureType = like.keySignatureType
+      }
+      const voiceCount = Math.max(1, like?.voices?.length ?? 1)
+      for (let i = 0; i < voiceCount; i += 1) {
+        const voice = new alphaTab.model.Voice()
+        bar.addVoice(voice)
+        const beat = new alphaTab.model.Beat()
+        beat.isEmpty = true
+        voice.addBeat(beat)
+      }
+      made.push({ staff, bar })
+    }
+  }
+  return made
+}
+
 // 8d. One more bar, at the end of the score.
 //
-// A bar is not one object. It is a `MasterBar` - the time signature, the key,
-// the repeats, shared by the whole score - plus a `Bar` on every staff of every
-// track. Adding one to a single track desynchronises the score, so this adds
-// them everywhere or not at all.
-//
-// Appended only, never inserted, and that is what keeps it cheap: `addMasterBar`
-// and `addBar` set `index` from the current length and `finish()` never
-// renumbers either of them (only `Voice.finish` renumbers beats), so inserting in
-// the middle would need a renumbering pass this does not.
+// The cheap case, and the reason it is kept separate from the insertion below:
+// `addMasterBar` and `addBar` set `index` from the current length, compute
+// `start` from the previous bar and file the new bar into the open repeat group,
+// so at the END of the score alphaTab's own methods do everything and no
+// renumbering pass is needed.
 export function appendBar(score, settings) {
   const masterBars = score?.masterBars ?? []
   if (masterBars.length === 0) return refused('This score has no bars to add one after.')
@@ -1677,6 +1753,228 @@ export function appendBar(score, settings) {
       if (isAttached) detach()
       else attach()
       isAttached = !isAttached
+    },
+  })
+}
+
+// 8f. A bar in the MIDDLE of the score.
+//
+// Everything the append does, plus the renumbering pass - see `renumberBars`,
+// and gotcha 11 for why alphaTab cannot do it for us.
+//
+// The new bar is shaped like the bar BEFORE the insertion point rather than like
+// the one it displaces, which is the conservative choice at a metre or key
+// change: copying the displaced bar's signature would move where that change is
+// drawn one bar earlier. Inserting before bar 0 has no previous bar, so there it
+// is the displaced one.
+//
+// THE TEMPO IS THE TRAP AT INDEX 0. `Score.tempo` is a getter over
+// `masterBars[0].tempoAutomations[0].value`, falling back to 120 - so a new first
+// bar with no automation silently drops the whole score to 120. Measured: a
+// score at 168 read back 168 before and 120 after. The automations therefore
+// MOVE onto the new first bar, which also keeps the tempo marking drawn at the
+// start of the piece where it belongs.
+export function insertBarBefore(score, index, settings) {
+  const masterBars = score?.masterBars ?? []
+  if (masterBars.length === 0) return refused('This score has no bars.')
+  const at = Math.round(Number(index))
+  if (!Number.isFinite(at) || at < 0 || at >= masterBars.length) {
+    return refused(`There is no bar ${at + 1} to insert before.`)
+  }
+
+  const like = masterBars[at - 1] ?? masterBars[at]
+  const masterBar = new alphaTab.model.MasterBar()
+  masterBar.score = score
+  masterBar.timeSignatureNumerator = like.timeSignatureNumerator
+  masterBar.timeSignatureDenominator = like.timeSignatureDenominator
+  masterBar.timeSignatureCommon = like.timeSignatureCommon
+  masterBar.tripletFeel = like.tripletFeel
+
+  const staffBars = makeBarsLike(score, at > 0 ? at - 1 : at)
+
+  // Only when the new bar becomes the first one. `tempoAutomations` is a plain
+  // array, so this is a move of the array itself and its undo is the move back.
+  const displacedFirst = at === 0 ? masterBars[0] : null
+  const movedTempo = displacedFirst?.tempoAutomations ?? null
+
+  function attach() {
+    score.masterBars.splice(at, 0, masterBar)
+    for (const { staff, bar } of staffBars) staff.bars.splice(at, 0, bar)
+    if (displacedFirst) {
+      masterBar.tempoAutomations = movedTempo
+      displacedFirst.tempoAutomations = []
+    }
+    renumberBars(score)
+    score.finish(settings ?? null)
+  }
+
+  function detach() {
+    const where = score.masterBars.indexOf(masterBar)
+    if (where >= 0) score.masterBars.splice(where, 1)
+    for (const { staff, bar } of staffBars) {
+      const at2 = staff.bars.indexOf(bar)
+      if (at2 >= 0) staff.bars.splice(at2, 1)
+    }
+    if (displacedFirst) {
+      displacedFirst.tempoAutomations = movedTempo
+      masterBar.tempoAutomations = []
+    }
+    renumberBars(score)
+    score.finish(settings ?? null)
+  }
+
+  attach()
+
+  let isAttached = true
+  return applied({
+    barIndex: at,
+    barCount: score.masterBars.length,
+    staffCount: staffBars.length,
+    numerator: masterBar.timeSignatureNumerator,
+    denominator: masterBar.timeSignatureDenominator,
+    undo: () => {
+      if (isAttached) detach()
+      else attach()
+      isAttached = !isAttached
+    },
+  })
+}
+
+// 8g. Take bars out.
+//
+// The most destructive operation here, and the one that needed the most care,
+// because it is `deleteNotes` and `insertBarBefore` at the same time:
+//
+//  1. Every note in the removed bars goes, so every cross-note link POINTING AT
+//     one of them has to be nulled - a link to a deleted note survives
+//     `finish()` (gotcha 6). Not hypothetical across a bar line: measured, two
+//     of the real test files carry 106 and 191 links that cross one, mostly ties
+//     and bend origins.
+//  2. Everything `finish()` derives has to be captured, for the same reason the
+//     note delete captures it: `finish()` CREATES links as well as clearing
+//     them, so restoring only the cuts leaves a note carrying a tie it never
+//     had. Every staff loses a bar here, so the capture is the whole score -
+//     about 0.9MB on the largest test file, against 18.6MB for a snapshot of it.
+//  3. The renumbering pass, plus the tempo move when the first bar goes.
+//
+// A score must keep at least one bar: alphaTab renders `masterBars.length` bars
+// and `ModelUtils.consolidate` exists to put one back, so an empty score is a
+// state to refuse rather than to produce.
+export function deleteBars(score, from, to, settings) {
+  const masterBars = score?.masterBars ?? []
+  if (masterBars.length === 0) return refused('This score has no bars.')
+
+  const first = Math.round(Number(from))
+  const last = Math.round(Number(to ?? from))
+  if (!Number.isFinite(first) || !Number.isFinite(last) || first < 0 || last >= masterBars.length) {
+    return refused('That is not a range of bars in this score.')
+  }
+  const start = Math.min(first, last)
+  const end = Math.max(first, last)
+  const count = end - start + 1
+  if (count >= masterBars.length) {
+    return refused(
+      count === 1
+        ? 'This is the only bar left: a score cannot have none.'
+        : `Those are all ${count} bars of the score, and a score cannot have none.`,
+    )
+  }
+
+  const removedMasters = masterBars.slice(start, end + 1)
+  const removedBars = []
+  const victims = new Set()
+  let noteCount = 0
+  for (const track of score.tracks ?? []) {
+    for (const staff of track.staves ?? []) {
+      for (const bar of staff.bars.slice(start, end + 1)) {
+        removedBars.push({ staff, bar })
+        for (const voice of bar.voices ?? []) {
+          for (const beat of voice.beats ?? []) {
+            for (const note of beat.notes ?? []) {
+              victims.add(note)
+              noteCount += 1
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // Everything finish() may re-derive, for every note that SURVIVES. Captured
+  // before the write, restored before the finish that follows a re-attach.
+  const derived = []
+  for (const note of everyNote(score)) {
+    if (victims.has(note)) continue
+    const state = {}
+    for (const field of NOTE_LINK_FIELDS) state[field] = note[field]
+    for (const field of NOTE_DERIVED_FIELDS) state[field] = note[field]
+    derived.push({ note, state })
+  }
+
+  // The tempo, when the first bar of the score is one of the ones going. The
+  // survivor keeps its own automations if it has any - it really is a tempo
+  // change at that point - and inherits otherwise, so the piece goes on sounding
+  // at the tempo that was in force where it now starts.
+  const survivor = masterBars[end + 1] ?? null
+  const inheritsTempo =
+    start === 0 && survivor && (survivor.tempoAutomations?.length ?? 0) === 0
+      ? { survivor, automations: removedMasters[0].tempoAutomations }
+      : null
+
+  function detach() {
+    score.masterBars.splice(start, count)
+    for (const { staff, bar } of removedBars) {
+      const at = staff.bars.indexOf(bar)
+      if (at >= 0) staff.bars.splice(at, 1)
+    }
+    // The link sweep walks what is LEFT, which is what makes it provably
+    // complete: several of these fields have no inverse to follow back.
+    for (const note of everyNote(score)) {
+      for (const field of NOTE_LINK_FIELDS) {
+        if (victims.has(note[field])) note[field] = null
+      }
+    }
+    if (inheritsTempo) {
+      inheritsTempo.survivor.tempoAutomations = inheritsTempo.automations
+      removedMasters[0].tempoAutomations = []
+    }
+    renumberBars(score)
+    score.finish(settings ?? null)
+  }
+
+  function attach() {
+    score.masterBars.splice(start, 0, ...removedMasters)
+    // Ascending original index per staff, so each splice lands in a slot the
+    // earlier ones have already made room for.
+    const byStaff = new Map()
+    for (const entry of removedBars) {
+      if (!byStaff.has(entry.staff)) byStaff.set(entry.staff, [])
+      byStaff.get(entry.staff).push(entry.bar)
+    }
+    for (const [staff, bars] of byStaff) staff.bars.splice(start, 0, ...bars)
+    if (inheritsTempo) {
+      removedMasters[0].tempoAutomations = inheritsTempo.automations
+      inheritsTempo.survivor.tempoAutomations = []
+    }
+    // Before the finish, not after: finish() would overwrite it, and its own
+    // caches have to be built from the restored values.
+    for (const entry of derived) Object.assign(entry.note, entry.state)
+    renumberBars(score)
+    score.finish(settings ?? null)
+  }
+
+  detach()
+
+  let isDetached = true
+  return applied({
+    barIndex: start,
+    barCount: count,
+    noteCount,
+    staffCount: removedBars.length,
+    undo: () => {
+      if (isDetached) attach()
+      else detach()
+      isDetached = !isDetached
     },
   })
 }

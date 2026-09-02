@@ -26,6 +26,8 @@ import {
   DURATION_LONGER,
   DURATION_SHORTER,
   appendBar,
+  deleteBars,
+  insertBarBefore,
   describeDuration,
   placeRest,
   stepBeatsDuration,
@@ -1162,6 +1164,26 @@ describe('undo restores exactly', () => {
       (score) => appendBar(score, settings),
     ],
     [
+      'insert a bar in the middle',
+      (score) => insertBarBefore(score, 2, settings),
+    ],
+    [
+      'insert a bar before the first one, which moves the tempo',
+      (score) => insertBarBefore(score, 0, settings),
+    ],
+    [
+      'delete a bar',
+      (score) => deleteBars(score, 1, 1, settings),
+    ],
+    [
+      'delete a range of bars, in the track full of ties',
+      (score) => deleteBars(score, 2, 3, settings),
+    ],
+    [
+      'delete the FIRST bar, which moves the tempo and the score start',
+      (score) => deleteBars(score, 0, 0, settings),
+    ],
+    [
       'silence one note of a chord',
       (score) => {
         let chord = null
@@ -2077,6 +2099,317 @@ describe('appendBar', () => {
     const score = loadFixture()
     const before = score.masterBars.length
     appendBar(score, settings).undo()
+    expect(roundTrip(score).masterBars).toHaveLength(before)
+  })
+})
+
+// Bars in the MIDDLE of the score, which is where alphaTab's own add methods
+// stop being enough. See gotcha 11.
+describe('insertBarBefore', () => {
+  function barCounts(score) {
+    return {
+      masters: score.masterBars.length,
+      staves: score.tracks.flatMap((t) => t.staves.map((s) => s.bars.length)),
+    }
+  }
+
+  it('puts a bar on every staff, at the index asked for', () => {
+    const score = loadFixture()
+    const staffCount = score.tracks.reduce((n, t) => n + t.staves.length, 0)
+    const before = score.masterBars.length
+
+    const result = insertBarBefore(score, 2, settings)
+    expect(result).toMatchObject({ ok: true, changed: true, barIndex: 2, staffCount })
+    expect(barCounts(score).masters).toBe(before + 1)
+    for (const count of barCounts(score).staves) expect(count).toBe(before + 1)
+  })
+
+  it('renumbers and re-chains every bar after it, which no finish() does', () => {
+    const score = loadFixture()
+    insertBarBefore(score, 1, settings)
+
+    expect(score.masterBars.map((m) => m.index)).toEqual([0, 1, 2, 3, 4])
+    for (let i = 1; i < score.masterBars.length; i += 1) {
+      expect(score.masterBars[i].previousMasterBar).toBe(score.masterBars[i - 1])
+      expect(score.masterBars[i - 1].nextMasterBar).toBe(score.masterBars[i])
+    }
+    for (const track of score.tracks) {
+      for (const staff of track.staves) {
+        expect(staff.bars.map((b) => b.index)).toEqual([0, 1, 2, 3, 4])
+        for (let i = 1; i < staff.bars.length; i += 1) {
+          expect(staff.bars[i].previousBar).toBe(staff.bars[i - 1])
+        }
+      }
+    }
+  })
+
+  it('pushes the ticks of everything after it along', () => {
+    const score = loadFixture()
+    insertBarBefore(score, 1, settings)
+    expect(score.masterBars.map((m) => m.start)).toEqual([0, 3840, 7680, 11520, 15360])
+    // And the music itself moved a bar later, unchanged.
+    const beats = score.tracks[LEAD].staves[0].bars[2].voices[0].beats
+    expect(beats.map((b) => b.notes[0].fret)).toEqual([12, 10, 8, 7])
+  })
+
+  it('leaves the new bar empty, which reads as a whole-bar rest', () => {
+    const score = loadFixture()
+    insertBarBefore(score, 1, settings)
+    const bar = score.tracks[LEAD].staves[0].bars[1]
+    expect(bar.voices[0].beats).toHaveLength(1)
+    expect(bar.voices[0].isEmpty).toBe(true)
+    expect(barFill(bar).state).toBe(BAR_EXACT)
+  })
+
+  // The conservative choice at a metre change: copying the DISPLACED bar's
+  // signature would move where that change is drawn one bar earlier.
+  it('takes the metre of the bar before it, not of the one it displaces', () => {
+    const score = loadFixture()
+    score.masterBars[1].timeSignatureNumerator = 7
+    score.masterBars[1].timeSignatureDenominator = 8
+
+    const result = insertBarBefore(score, 1, settings)
+    expect(result).toMatchObject({ numerator: 4, denominator: 4 })
+    expect(score.masterBars[1].timeSignatureNumerator).toBe(4)
+    // The 7/8 is still on the bar that had it, one place later.
+    expect(score.masterBars[2].timeSignatureNumerator).toBe(7)
+  })
+
+  it('and of the displaced bar when there is nothing before it', () => {
+    const score = loadFixture()
+    score.masterBars[0].timeSignatureNumerator = 3
+    const result = insertBarBefore(score, 0, settings)
+    expect(result).toMatchObject({ numerator: 3 })
+  })
+
+  // `Score.tempo` is a getter over masterBars[0].tempoAutomations[0].value with
+  // a 120 fallback, so a new first bar with no automation silently drops the
+  // whole score to 120. Measured: 168 before, 120 after.
+  it('carries the tempo onto the new FIRST bar, or the score would drop to 120', () => {
+    const score = loadFixture()
+    score.masterBars[0].tempoAutomations[0].value = 168
+    expect(score.tempo).toBe(168)
+
+    insertBarBefore(score, 0, settings)
+    expect(score.tempo).toBe(168)
+    expect(score.masterBars[0].tempoAutomations).toHaveLength(1)
+    // Moved, not copied: no duplicate marking left on the bar it came from.
+    expect(score.masterBars[1].tempoAutomations).toHaveLength(0)
+  })
+
+  it('and the rest of a tempo MAP stays where it was', () => {
+    const score = loadFixture()
+    // The fixture carries three automations, on bars 0, 1 and 3.
+    expect(tempoMap(score)).toEqual([[0, 120], [1, 90], [3, 140]])
+    insertBarBefore(score, 2, settings)
+    expect(tempoMap(score)).toEqual([[0, 120], [1, 90], [4, 140]])
+  })
+
+  it('refuses an index that is not a bar of this score', () => {
+    const score = loadFixture()
+    expect(insertBarBefore(score, -1, settings).ok).toBe(false)
+    expect(insertBarBefore(score, score.masterBars.length, settings).ok).toBe(false)
+    expect(insertBarBefore(new alphaTab.model.Score(), 0, settings).ok).toBe(false)
+  })
+
+  it('survives the .gp round trip', () => {
+    const score = loadFixture()
+    insertBarBefore(score, 2, settings)
+    const back = roundTrip(score)
+    expect(back.masterBars).toHaveLength(5)
+    expect(back.tracks[LEAD].staves[0].bars[2].voices[0].beats.every((b) => b.isRest)).toBe(true)
+    expect(back.tracks[LEAD].staves[0].bars[3].voices[0].beats.map((b) => b.notes[0].fret))
+      .toEqual([5, 7, 9, 10])
+  })
+
+  it('takes the bar back out, and puts it back on a second call', () => {
+    const score = loadFixture()
+    const before = score.masterBars.length
+    const result = insertBarBefore(score, 1, settings)
+
+    result.undo()
+    expect(score.masterBars).toHaveLength(before)
+    expect(score.masterBars.map((m) => m.index)).toEqual([0, 1, 2, 3])
+    expect(score.masterBars.map((m) => m.start)).toEqual([0, 3840, 7680, 11520])
+    for (const track of score.tracks) {
+      for (const staff of track.staves) expect(staff.bars).toHaveLength(before)
+    }
+
+    result.undo()
+    expect(score.masterBars).toHaveLength(before + 1)
+    expect(score.tracks[LEAD].staves[0].bars[1].voices[0].isEmpty).toBe(true)
+  })
+
+  it('and the tempo move comes back with it', () => {
+    const score = loadFixture()
+    score.masterBars[0].tempoAutomations[0].value = 168
+    const result = insertBarBefore(score, 0, settings)
+    result.undo()
+    expect(score.tempo).toBe(168)
+    expect(tempoMap(score)).toEqual([[0, 168], [1, 90], [3, 140]])
+  })
+})
+
+describe('deleteBars', () => {
+  it('takes one bar off every staff, and the master bar with it', () => {
+    const score = loadFixture()
+    const staffCount = score.tracks.reduce((n, t) => n + t.staves.length, 0)
+    const before = score.masterBars.length
+
+    const result = deleteBars(score, 1, 1, settings)
+    expect(result).toMatchObject({ ok: true, changed: true, barIndex: 1, barCount: 1, staffCount })
+    expect(result.noteCount).toBeGreaterThan(0)
+    expect(score.masterBars).toHaveLength(before - 1)
+    for (const track of score.tracks) {
+      for (const staff of track.staves) expect(staff.bars).toHaveLength(before - 1)
+    }
+  })
+
+  it('closes the gap: the bar after it takes its place, ticks included', () => {
+    const score = loadFixture()
+    deleteBars(score, 1, 1, settings)
+
+    expect(score.masterBars.map((m) => m.index)).toEqual([0, 1, 2])
+    expect(score.masterBars.map((m) => m.start)).toEqual([0, 3840, 7680])
+    // Bar 2 of the fixture is now bar 1.
+    expect(score.tracks[LEAD].staves[0].bars[1].voices[0].beats.map((b) => b.notes[0].fret))
+      .toEqual([5, 7, 9, 10])
+  })
+
+  it('takes a whole range at once', () => {
+    const score = loadFixture()
+    const result = deleteBars(score, 1, 2, settings)
+    expect(result).toMatchObject({ ok: true, barCount: 2 })
+    expect(score.masterBars).toHaveLength(2)
+    expect(score.tracks[LEAD].staves[0].bars[1].voices[0].beats.map((b) => b.notes[0].fret))
+      .toEqual([3, 5, 7, 8])
+  })
+
+  it('accepts its bounds either way round', () => {
+    const score = loadFixture()
+    expect(deleteBars(score, 2, 1, settings)).toMatchObject({ ok: true, barIndex: 1, barCount: 2 })
+  })
+
+  // `MasterBar.finish` recomputes `start` only for `index > 0`, so a new first
+  // bar keeps the start it had. Measured: the bars stayed at 3840, 7680, 11520
+  // and the first beat's absolutePlaybackStart at 3840 - the field the drag
+  // selection and the loop range are built from.
+  it('resets where the score starts when the FIRST bar goes', () => {
+    const score = loadFixture()
+    deleteBars(score, 0, 0, settings)
+    expect(score.masterBars.map((m) => m.start)).toEqual([0, 3840, 7680])
+    expect(score.tracks[LEAD].staves[0].bars[0].voices[0].beats[0].absolutePlaybackStart).toBe(0)
+  })
+
+  it('and the tempo goes on being the one in force there', () => {
+    const score = loadFixture()
+    // Bar 0 is 120 and bar 1 is 90, so deleting bar 0 leaves bar 1's own change
+    // in charge: it really is a tempo change at that point.
+    deleteBars(score, 0, 0, settings)
+    expect(score.tempo).toBe(90)
+
+    // But a first bar with no change of its own INHERITS, or the score would
+    // fall back to 120.
+    const other = loadFixture()
+    other.masterBars[0].tempoAutomations[0].value = 168
+    other.masterBars[1].tempoAutomations = []
+    deleteBars(other, 0, 0, settings)
+    expect(other.tempo).toBe(168)
+  })
+
+  it('refuses to leave the score with no bars at all', () => {
+    const score = loadFixture()
+    expect(deleteBars(score, 0, score.masterBars.length - 1, settings).ok).toBe(false)
+    expect(score.masterBars).toHaveLength(4)
+
+    deleteBars(score, 1, 3, settings)
+    expect(score.masterBars).toHaveLength(1)
+    const last = deleteBars(score, 0, 0, settings)
+    expect(last.ok).toBe(false)
+    expect(last.reason).toMatch(/only bar left/)
+  })
+
+  it('refuses a range that is not in the score', () => {
+    const score = loadFixture()
+    expect(deleteBars(score, -1, 0, settings).ok).toBe(false)
+    expect(deleteBars(score, 0, 99, settings).ok).toBe(false)
+    expect(deleteBars(new alphaTab.model.Score(), 0, 0, settings).ok).toBe(false)
+  })
+
+  it('leaves no link pointing at a note it removed', () => {
+    // A link to a deleted note SURVIVES finish() (gotcha 6), and links really do
+    // cross bar lines: 106 and 191 of them on the two large real test files.
+    const score = loadFixture()
+    const victims = new Set()
+    for (const track of score.tracks) {
+      for (const staff of track.staves) {
+        for (const voice of staff.bars[1].voices) {
+          for (const beat of voice.beats) for (const note of beat.notes) victims.add(note)
+        }
+      }
+    }
+    expect(victims.size).toBeGreaterThan(0)
+
+    deleteBars(score, 1, 1, settings)
+
+    const FIELDS = [
+      'tieOrigin', 'tieDestination', 'hammerPullOrigin', 'hammerPullDestination',
+      'slurOrigin', 'slurDestination', 'slideOrigin', 'slideTarget',
+      'effectSlurOrigin', 'effectSlurDestination', 'bendOrigin',
+    ]
+    for (const track of score.tracks) {
+      for (const staff of track.staves) {
+        for (const bar of staff.bars) {
+          for (const voice of bar.voices) {
+            for (const beat of voice.beats) {
+              for (const note of beat.notes) {
+                for (const field of FIELDS) expect(victims.has(note[field])).toBe(false)
+              }
+            }
+          }
+        }
+      }
+    }
+  })
+
+  it('survives the .gp round trip', () => {
+    const score = loadFixture()
+    deleteBars(score, 1, 1, settings)
+    const back = roundTrip(score)
+    expect(back.masterBars).toHaveLength(3)
+    expect(back.tracks[LEAD].staves[0].bars[1].voices[0].beats.map((b) => b.notes[0].fret))
+      .toEqual([5, 7, 9, 10])
+  })
+
+  it('puts the bars back, and takes them out again on a second call', () => {
+    const score = loadFixture()
+    const before = score.masterBars.length
+    const frets = score.tracks[LEAD].staves[0].bars[1].voices[0].beats.map((b) => b.notes[0].fret)
+    const result = deleteBars(score, 1, 1, settings)
+
+    result.undo()
+    expect(score.masterBars).toHaveLength(before)
+    expect(score.masterBars.map((m) => m.index)).toEqual([0, 1, 2, 3])
+    expect(score.masterBars.map((m) => m.start)).toEqual([0, 3840, 7680, 11520])
+    expect(score.tracks[LEAD].staves[0].bars[1].voices[0].beats.map((b) => b.notes[0].fret))
+      .toEqual(frets)
+
+    result.undo()
+    expect(score.masterBars).toHaveLength(before - 1)
+  })
+
+  it('and the same for a range, on every staff', () => {
+    const score = loadFixture()
+    const before = score.masterBars.length
+    const result = deleteBars(score, 1, 2, settings)
+    result.undo()
+    expect(score.masterBars).toHaveLength(before)
+    for (const track of score.tracks) {
+      for (const staff of track.staves) {
+        expect(staff.bars).toHaveLength(before)
+        expect(staff.bars.map((b) => b.index)).toEqual([0, 1, 2, 3])
+      }
+    }
     expect(roundTrip(score).masterBars).toHaveLength(before)
   })
 })

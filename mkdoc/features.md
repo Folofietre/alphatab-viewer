@@ -218,7 +218,7 @@ action bar carries an icon-only undo button whose tooltip names what would go
 and how many steps are left. It sits there rather than in a sidebar panel because
 it reaches edits made from either of them, and the bar stays visible with the
 sidebar collapsed. Every
-operation can be taken back, the delete and the added bar included.
+operation can be taken back, the delete and the whole-bar operations included.
 
 **`Ctrl+Y` / `Cmd+Y` redoes**, and so does `Ctrl+Shift+Z` for people who reach
 for that instead. A new edit throws away the redo branch, as everywhere else.
@@ -330,8 +330,30 @@ length of the one before it. There is no separate "current duration" to keep an
 eye on: it is the length of the beat the cursor is standing on, shown in the Edit
 panel, and a fresh bar starts on a quarter.
 
-**Deliberately out of scope for this tier:** deleting a bar, dots and tuplets,
-changing a time signature, changing the number of strings, and copy and paste.
+## Adding and removing bars
+
+**`Ctrl+Insert` puts an empty bar before the one the cursor is in**, and
+everything after it moves along. With a passage dragged, it goes before the
+first bar of the passage. The new bar is in the metre of the bar *before* it,
+which is what keeps a metre change where it was drawn, and it appears on every
+track at once - a bar added to one track alone would desynchronise the score.
+
+**`Ctrl+Delete` removes the bar the cursor is in**, notes and all, on every
+track. With a passage dragged it removes every bar the passage covers, which is
+the only way to name more than one. A score cannot be left with no bars at all,
+so the last one is refused with a message rather than taken.
+
+Both are also buttons in the Edit panel, and both are one `Ctrl+Z` away - the
+delete puts the bars back note for note, with the ties and slides that pointed
+out of them.
+
+The bare `Delete` still means the small thing: **`Delete` silences the
+selection, `Ctrl+Delete` takes the bar it is in.** There is no confirmation on
+either, which is the same call as everywhere else here: undo covers it, and the
+unsaved-changes warning covers the file.
+
+**Deliberately out of scope for this tier:** dots and tuplets, changing a time
+signature, changing the number of strings, and copy and paste.
 
 ## What is NOT saved with the score
 

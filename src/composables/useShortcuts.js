@@ -431,6 +431,53 @@ export const BINDINGS = [
     appliesTo: (el, _player, edit) => !ownsTypingKeys(el) && edit.canWriteNote.value,
     run: (_player, _event, edit) => edit.insertRest(),
   },
+  // Whole BARS, which is the one thing the writing keys above cannot reach: the
+  // right arrow only ever adds a bar at the END of the score, and nothing
+  // removed one at all.
+  //
+  // `Ctrl` because they are the destructive pair of a set whose bare keys are
+  // note-sized: `Delete` alone silences the selection, `Ctrl+Delete` takes the
+  // bar it is in. The modifier match is exact, so the two never collide.
+  //
+  // `shift: false` leaves `Ctrl+Shift+Delete` to the browser, where it opens
+  // clear-browsing-data - swallowing that to do something else is the same bad
+  // trade `Ctrl+Shift+S` was.
+  //
+  // They stand down for anything that owns typing keys, unlike Alt+arrow:
+  // `Ctrl+Delete` in a text field is delete-word-forward, which is a real
+  // shortcut somebody may be using in the tempo field.
+  //
+  // No repeat. Each one is a structural edit that finishes the score, and a held
+  // key would eat a bar per repeat - which is undoable, but only one step at a
+  // time.
+  {
+    code: 'Insert',
+    label: 'Insert a bar before this one',
+    modifiers: { ctrl: true, shift: false },
+    appliesTo: (el, _player, edit) => !ownsTypingKeys(el) && edit.canEditBars.value,
+    run: (_player, _event, edit) => edit.insertBar(),
+  },
+  {
+    code: 'Insert',
+    label: 'Insert a bar before this one',
+    modifiers: { meta: true, shift: false },
+    appliesTo: (el, _player, edit) => !ownsTypingKeys(el) && edit.canEditBars.value,
+    run: (_player, _event, edit) => edit.insertBar(),
+  },
+  {
+    code: 'Delete',
+    label: 'Delete this bar',
+    modifiers: { ctrl: true, shift: false },
+    appliesTo: (el, _player, edit) => !ownsTypingKeys(el) && edit.canEditBars.value,
+    run: (_player, _event, edit) => edit.removeBars(),
+  },
+  {
+    code: 'Delete',
+    label: 'Delete this bar',
+    modifiers: { meta: true, shift: false },
+    appliesTo: (el, _player, edit) => !ownsTypingKeys(el) && edit.canEditBars.value,
+    run: (_player, _event, edit) => edit.removeBars(),
+  },
 ]
 
 // Exact match on Alt, Ctrl and Meta, always. Shift only when the binding says so.
@@ -477,6 +524,7 @@ const KEY_NAMES = {
   ArrowRight: '\u2192',
   PageUp: 'PageUp',
   PageDown: 'PageDown',
+  Insert: 'Insert',
 }
 
 export function describeBinding(binding) {
