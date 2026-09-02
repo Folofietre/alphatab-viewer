@@ -5,14 +5,12 @@
     <header class="action-bar">
       <div class="bar-side">
         <!-- One File menu instead of an Open button here and a Close button in
-             the strip below. The four things you can do to the document as a
-             whole now live together, which is also the only place `Save as` had
-             to go: it is a sibling of Save, not of anything in a side panel. -->
+             the strip below: everything you can do to the document as a whole,
+             in the one place you would look for it. -->
         <FileMenu
           :is-score-loaded="isScoreLoaded"
           @file="openFile"
           @save="saveScore"
-          @save-as="saveScoreAs"
           @close="closeScore"
         />
 
@@ -262,7 +260,6 @@ const {
   undo, canUndo, undoLabel, undoDepth,
   redo, canRedo, redoLabel, redoDepth,
   download,
-  downloadAs,
 } = useScoreEdit()
 
 // Saving from the menu blurs first, for the same reason Ctrl+S does: the edit
@@ -273,10 +270,6 @@ function saveScore() {
   download()
 }
 
-function saveScoreAs() {
-  document.activeElement?.blur?.()
-  downloadAs()
-}
 
 // The shortcut help. Driven from here and from the "?" key, which is why the
 // state lives in its own composable rather than in either.

@@ -95,14 +95,8 @@ vi.mock('@/composables/usePlayer', () => ({
 }))
 
 const download = vi.fn(() => ({ fileName: 'Edit Fixture (edited).gp', byteLength: 42 }))
-const saveAs = vi.fn(async () => ({
-  fileName: 'Chosen name.gp',
-  byteLength: 42,
-  picked: true,
-}))
 vi.mock('@/utils/exportScore', () => ({
   downloadScoreAsGp: (...args) => download(...args),
-  saveScoreAsGp: (...args) => saveAs(...args),
 }))
 
 const alphaTab = await import('@coderline/alphatab')
@@ -1870,39 +1864,3 @@ describe('the cursor stays in step with the edits', () => {
   })
 })
 
-describe('the File menu actions', () => {
-  it('Save as reports the name the user actually chose', async () => {
-    host.dirty = true
-    const saved = await edit.downloadAs()
-    expect(saveAs).toHaveBeenCalledWith(score, host.api.settings, 'fixture.gp')
-    expect(saved.fileName).toBe('Chosen name.gp')
-    // The file is on disk, so there is nothing unsaved any more.
-    expect(host.dirty).toBe(false)
-    expect(edit.editMessage.value).toMatchObject({ kind: 'ok' })
-  })
-
-  it('Save as says NOTHING when the user cancels', async () => {
-    // Cancelling is not a failure. A red message over a deliberate Escape is
-    // worse than no feedback at all, and it would sit there until the next edit.
-    saveAs.mockResolvedValueOnce(null)
-    host.dirty = true
-
-    expect(await edit.downloadAs()).toBeNull()
-    expect(edit.editMessage.value).toBeNull()
-    // And it must not pretend the score was written.
-    expect(host.dirty).toBe(true)
-  })
-
-  it('Save as reports a real failure without throwing at the caller', async () => {
-    saveAs.mockRejectedValueOnce(new Error('disk on fire'))
-    expect(await edit.downloadAs()).toBeNull()
-    expect(edit.editMessage.value).toMatchObject({ kind: 'error', text: 'disk on fire' })
-    expect(edit.isExporting.value).toBe(false)
-  })
-
-  it('Save as refuses with no score, like Save', async () => {
-    host.score = null
-    expect(await edit.downloadAs()).toBeNull()
-    expect(edit.editMessage.value).toMatchObject({ kind: 'error' })
-  })
-})

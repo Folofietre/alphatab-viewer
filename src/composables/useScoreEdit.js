@@ -29,7 +29,7 @@ import {
   cursorRects as rectsForCursor,
   positionAtPoint,
 } from '@/utils/scoreGeometry'
-import { downloadScoreAsGp, saveScoreAsGp } from '@/utils/exportScore'
+import { downloadScoreAsGp } from '@/utils/exportScore'
 import { createHistory } from '@/utils/scoreHistory'
 
 // Editing state and orchestration: selection, the "modified" flag, and deciding
@@ -1316,41 +1316,6 @@ export function useScoreEdit() {
     }
   }
 
-  // Save, choosing the name and the folder.
-  //
-  // Async, unlike `download`, because the picker is a dialog the user answers.
-  // Three outcomes, not two: saved, cancelled, failed. CANCELLED is the one
-  // worth spelling out - it returns null and says nothing, because opening a
-  // save dialog by accident and pressing Escape is not an error and must not
-  // leave a red message behind.
-  //
-  // Where the browser has no picker this degrades to exactly what `Save` does.
-  // The menu says so in the item's tooltip rather than letting the difference
-  // be a surprise.
-  async function downloadAs() {
-    const score = scoreEditHost.score
-    if (!score) {
-      message('error', 'No score to save.')
-      return null
-    }
-    isExporting.value = true
-    try {
-      const saved = await saveScoreAsGp(score, scoreEditHost.api?.settings, player.fileName.value)
-      if (!saved) {
-        message(null, null)
-        return null
-      }
-      scoreEditHost.clearDirty()
-      message('ok', `Saved ${saved.fileName}.`)
-      return saved
-    } catch (error) {
-      message('error', error?.message || 'Could not export this score.')
-      return null
-    } finally {
-      isExporting.value = false
-    }
-  }
-
   // Throw away every edit. The confirmation is the caller's job, because only
   // the UI knows whether it can ask.
   function revert() {
@@ -1428,7 +1393,6 @@ export function useScoreEdit() {
 
     // saving
     download,
-    downloadAs,
     revert,
     canRevert: player.canRevert,
 

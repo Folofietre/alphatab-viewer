@@ -25,17 +25,6 @@
           <span>Save</span><kbd>Ctrl+S</kbd>
         </button>
       </li>
-      <li role="none">
-        <button
-          role="menuitem"
-          type="button"
-          :disabled="!isScoreLoaded"
-          :title="saveAsTitle"
-          @click="choose('save-as')"
-        >
-          <span>Save as...</span>
-        </button>
-      </li>
       <li role="none" class="sep">
         <button role="menuitem" type="button" :disabled="!isScoreLoaded" @click="choose('close')">
           <span>Close</span>
@@ -58,27 +47,17 @@
 </template>
 
 <script setup>
-import { computed, ref, onMounted, onBeforeUnmount } from 'vue'
+import { ref, onMounted, onBeforeUnmount } from 'vue'
 import { SCORE_FILE_ACCEPT } from '@/utils/scoreFiles'
-import { canPickSaveLocation } from '@/utils/exportScore'
 
 defineProps({
   isScoreLoaded: { type: Boolean, default: false },
 })
-const emit = defineEmits(['file', 'save', 'save-as', 'close'])
+const emit = defineEmits(['file', 'save', 'close'])
 
 const root = ref(null)
 const picker = ref(null)
 const isOpen = ref(false)
-
-// Said out loud, because "Save as..." that cannot choose a folder is a lie.
-// `showSaveFilePicker` is Chromium-only; everywhere else the item still works
-// and still lets the file out, it just lands wherever downloads land.
-const saveAsTitle = computed(() =>
-  canPickSaveLocation()
-    ? 'Choose a name and a folder'
-    : 'This browser cannot choose a folder, so this saves to your downloads',
-)
 
 function choose(action) {
   isOpen.value = false
