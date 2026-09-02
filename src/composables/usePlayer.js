@@ -699,6 +699,13 @@ export const scoreEditHost = {
   get hostElement() {
     return hostElement
   },
+  // Read by the editing layer to decide whether moving the cursor should also
+  // move the PLAYHEAD. It should while paused and must not while playing:
+  // seeking under a running transport would make navigating during playback
+  // impossible.
+  get isPlaying() {
+    return isPlaying.value
+  },
   trackAt(index) {
     return scoreTracks.find((t) => t.index === index) ?? null
   },

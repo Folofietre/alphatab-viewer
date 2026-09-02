@@ -128,6 +128,18 @@ const cursorInfo = shallowRef(null)
 // marking that position, and two markers on one place would say there are two.
 const cursorRects = shallowRef([])
 
+// The bar the cursor is in, as a rectangle to wash in behind it.
+//
+// This is OUR "current measure", following the edit cursor and the arrow keys.
+// alphaTab has a bar highlight of its own but it follows the PLAYHEAD, which is
+// a different question - where playback is, not where you are working - and the
+// two part company the moment you press an arrow while paused.
+//
+// One track's bar, not the whole column across every displayed staff. Same rule
+// the ring already follows: the cursor belongs to one track, and a band spanning
+// every staff would say "all tracks" about a position that is in exactly one.
+const cursorBarRects = shallowRef([])
+
 // The bars holding more than their time signature allows, as rectangles.
 //
 // This is not decoration. alphaTab's model, its midi generator and its .gp
@@ -302,11 +314,13 @@ function setCursor(beat, string, note = undefined) {
   // second time for nothing.
   //
   // alphaTab's own selection has to go as well, or it survives this and comes
-  // back on the next render. See dropAlphaTabRange.
-  const hadRange = rangeNotes.length > 0
+  // back on the next render - and the playhead moves here too, so play starts
+  // from where the cursor is. Unconditional, unlike the range clearing it grew
+  // out of: following the cursor is the point, not a tidy-up. See
+  // syncPlayheadToCursor.
   rangeNotes = []
   selectedRange.value = null
-  if (hadRange) dropAlphaTabRange(beat)
+  syncPlayheadToCursor(beat)
 
   cursorBeat = beat
   cursorString = string ?? null
@@ -574,6 +588,7 @@ function clearSelection() {
   cursorString = null
   cursorInfo.value = null
   cursorRects.value = []
+  cursorBarRects.value = []
   cursorBarFill.value = null
   missedNote = false
 }
@@ -666,7 +681,7 @@ function selectBar(beat) {
   return setRangeFromBeats(first, last)
 }
 
-// Guards `dropAlphaTabRange` against itself. Collapsing alphaTab's selection
+// Guards `syncPlayheadToCursor` against itself. Resetting alphaTab's selection
 // makes it fire `playbackRangeHighlightChanged`, which lands back in
 // `setRangeFromBeats` and calls `clearRange` again - so without this the two
 // call each other until the stack runs out.
@@ -685,23 +700,38 @@ let droppingRange = false
 // and the cursor was wiped - which looked like the selection re-selecting
 // itself a moment after the note moved.
 //
-// Collapsing the selection onto ONE beat is the public way out.
-// `_cursorSelectRange` draws nothing when the start and end beats are the same,
-// so the band goes now, and the post-render echo degrades to a harmless empty
-// event instead of a range. The alternative that fully clears alphaTab's
-// internal state, `applyPlaybackRangeFromHighlight`, also seeks the playhead,
-// which an arrow key has no business doing.
+// Collapsing the selection onto ONE beat is the public way out, and the pair of
+// calls below does it: `highlightPlaybackRange(beat, beat)` makes the selection
+// degenerate, which `_cursorSelectRange` draws as nothing, and
+// `applyPlaybackRangeFromHighlight` then takes the same-beat branch, which
+// clears `_selectionStart` and the playback range outright. The post-render echo
+// has nothing left to replay.
 //
-// The playback range goes with it. A loop range that outlives the selection it
-// was made from is its own small bug: drag a passage, click away, and playback
-// would still loop the passage.
-function dropAlphaTabRange(beat) {
+// That second call also SEEKS, which is the other half of this function's job:
+// the playhead follows the cursor, so pressing play starts from where you were
+// working rather than from wherever the transport was left. alphaTab guards its
+// own cursor repaint on being paused, and passes `shouldScroll: false`, so this
+// does not fight our own scroll-into-view.
+//
+// Only while PAUSED, though. Seeking under a running transport would make
+// navigating during playback impossible - every arrow would jump the music.
+// While playing, the cursor still moves and alphaTab's selection is still
+// dropped; only the seek is skipped.
+//
+// The playback range going with it also fixes a small bug of its own: a loop
+// range that outlives the selection it was made from meant you could drag a
+// passage, click away, and still have playback loop the passage.
+function syncPlayheadToCursor(beat) {
   const api = scoreEditHost.api
   if (!api || droppingRange) return
   droppingRange = true
   try {
-    if (api.playbackRange) api.playbackRange = null
-    if (beat) api.highlightPlaybackRange(beat, beat)
+    if (!beat) {
+      if (api.playbackRange) api.playbackRange = null
+      return
+    }
+    api.highlightPlaybackRange(beat, beat)
+    if (!scoreEditHost.isPlaying) api.applyPlaybackRangeFromHighlight()
   } finally {
     droppingRange = false
   }
@@ -711,7 +741,7 @@ function clearRange() {
   const hadRange = rangeNotes.length > 0
   rangeNotes = []
   selectedRange.value = null
-  if (hadRange) dropAlphaTabRange(cursorBeat)
+  if (hadRange) syncPlayheadToCursor(cursorBeat)
   // The rings went with it, unless a single note is selected.
   refreshSelectionRects()
 }
@@ -737,6 +767,13 @@ function clearRange() {
 // non-empty at all.
 function refreshSelectionRects() {
   const lookup = scoreEditHost.api?.boundsLookup ?? null
+
+  // The wash behind the cursor's own bar. Computed here rather than in its own
+  // pass because it is invalidated by exactly the same two things as the rings:
+  // the cursor moving, and a render rebuilding every rectangle in the lookup.
+  const cursorBar = cursorBeat?.voice?.bar ?? null
+  cursorBarRects.value =
+    lookup && cursorBar ? barRects(lookup, (bar) => bar === cursorBar) : []
 
   // The cursor's own rectangle, drawn only where the ring is NOT.
   //
@@ -1395,6 +1432,7 @@ export function useScoreEdit() {
     // the cursor: a position, which may or may not hold a note
     cursor: cursorInfo,
     cursorRects,
+    cursorBarRects,
     cursorMoves,
     moveCursorBeat,
     moveCursorString,

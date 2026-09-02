@@ -90,6 +90,26 @@
   will-change: transform;
 }
 
+// The bar the edit cursor is in.
+//
+// Below every other overlay and below alphaTab's own cursor layer (which is
+// 1000 and escapes into this stacking context), because it is a wash rather
+// than a mark: during playback the playing bar should read over it, not under.
+//
+// Translucent for the same reason alphaTab's is - this sits ON TOP of the
+// notation, so an opaque fill would hide the notes it is pointing at. See the
+// token for the measurements behind the 25%.
+.cursor-bar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 999;
+  pointer-events: none;
+  background: var(--score-edit-bar);
+  transform-origin: top left;
+  will-change: transform;
+}
+
 // A bar holding more than its time signature allows.
 //
 // Underneath the two markers (z-index 1001) but above alphaTab's own layers, and
@@ -136,9 +156,13 @@
   // element while paused, which costs nothing and means the cursor is already
   // in the right place the moment playback resumes.
   //
-  // The soft bar wash (`.at-cursor-bar`) stays: it is quiet enough not to
-  // compete, and it keeps a trace of where playback would resume from.
-  &.idle :deep(.at-cursor-beat) { display: none; }
+  // The soft bar wash goes with it now. It used to be the only thing marking a
+  // measure, so it was worth keeping as a trace of where playback would resume
+  // from; now the papyrus wash marks the measure the CURSOR is in, and a second
+  // band sitting on a different bar while nothing is playing is just a question
+  // about which one is real.
+  &.idle :deep(.at-cursor-beat),
+  &.idle :deep(.at-cursor-bar) { display: none; }
   :deep(.at-selection div) { background: var(--accent-bg); }
   :deep(.at-highlight) *   { fill: var(--score-highlight); stroke: var(--score-highlight); }
 }

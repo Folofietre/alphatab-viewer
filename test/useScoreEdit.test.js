@@ -35,6 +35,9 @@ const host = {
   tracksById: new Map(),
 
   hostElement: null,
+  // Mirrors usePlayer's getter. The playhead follows the cursor while paused
+  // and must not while playing.
+  isPlaying: false,
   trackAt(index) {
     return host.tracksById.get(index) ?? null
   },
@@ -209,6 +212,9 @@ function fakeApi() {
     playbackRange: null,
     _selectionStart: null,
     _selectionEnd: null,
+    // Every beat the playhead was moved to, so a test can assert the playhead
+    // followed the cursor rather than only that nothing threw.
+    seeks: [],
     highlightPlaybackRange(startBeat, endBeat) {
       this.highlights.push([startBeat, endBeat])
       this._selectionStart = startBeat
@@ -227,8 +233,20 @@ function fakeApi() {
       }
       this.postRenderFinished.emit()
     },
+    // Models the branch that matters: with the start and end on the SAME beat,
+    // alphaTab seeks, then clears its own selection and the playback range
+    // outright. With different beats it keeps the selection and sets a range.
     applyPlaybackRangeFromHighlight() {
       this.appliedHighlights += 1
+      if (!this._selectionStart) return
+      this.seeks.push(this._selectionStart)
+      if (this._selectionEnd && this._selectionStart !== this._selectionEnd) {
+        this.playbackRange = { startTick: 0, endTick: 1 }
+      } else {
+        this._selectionStart = null
+        this.playbackRange = null
+        this.playbackRangeHighlightChanged.emit({})
+      }
     },
     settings: apiSettings,
     boundsLookup: fakeBoundsLookup(),
@@ -288,6 +306,7 @@ beforeEach(async () => {
   score = loadFixture()
   host.api = fakeApi()
   host.hostElement = fakeHostElement()
+  host.isPlaying = false
   host.score = score
   host.renders = []
   host.midiReloads = 0
@@ -1956,5 +1975,103 @@ describe('a range and a cursor never both survive', () => {
     dragOver(beatAt(0, 0), beatAt(0, 3))
     expect(() => edit.clearRange()).not.toThrow()
     expect(edit.selectedRange.value).toBeNull()
+  })
+})
+
+describe('the papyrus wash follows the cursor', () => {
+  function barOfLead(index = 0) {
+    return score.tracks[LEAD].staves[0].bars[index]
+  }
+
+  it('marks the bar the cursor is in, merged across its notation rows', () => {
+    const bar = barOfLead(0)
+    host.api.boundsLookup.staffSystems = fakeStaffSystems(bar)
+    clickAt(bar.voices[0].beats[0].notes[0])
+
+    // One rectangle for the bar, not one per row: what is being marked is the
+    // measure, and the measure is one thing.
+    expect(edit.cursorBarRects.value).toHaveLength(1)
+    const rect = edit.cursorBarRects.value[0]
+    // The stub's two rows run 40..76 and 120..185, so the merge spans both.
+    expect(rect.y).toBe(40)
+    expect(rect.y + rect.h).toBe(185)
+  })
+
+  it('goes when the cursor goes', () => {
+    const bar = barOfLead(0)
+    host.api.boundsLookup.staffSystems = fakeStaffSystems(bar)
+    clickAt(bar.voices[0].beats[0].notes[0])
+    expect(edit.cursorBarRects.value).toHaveLength(1)
+
+    edit.clearSelection()
+    expect(edit.cursorBarRects.value).toEqual([])
+  })
+
+  it('is re-read after a render, like every other rectangle', () => {
+    // A render rebuilds the whole bounds lookup, so coordinates taken before it
+    // point nowhere afterwards.
+    const bar = barOfLead(0)
+    host.api.boundsLookup.staffSystems = fakeStaffSystems(bar)
+    clickAt(bar.voices[0].beats[0].notes[0])
+
+    host.api.boundsLookup = fakeBoundsLookup()
+    host.api.boundsLookup.staffSystems = fakeStaffSystems(bar)
+    host.api.postRenderFinished.emit()
+
+    expect(edit.cursorBarRects.value).toHaveLength(1)
+  })
+})
+
+describe('the playhead follows the cursor', () => {
+  function beatAt(bar, index, track = LEAD) {
+    return score.tracks[track].staves[0].bars[bar].voices[0].beats[index]
+  }
+
+  it('seeks to the beat an arrow lands on, so play starts from there', () => {
+    clickAt(beatAt(0, 0).notes[0])
+    host.api.seeks = []
+
+    edit.moveCursorBeat(1)
+
+    expect(host.api.seeks).toHaveLength(1)
+    expect(host.api.seeks[0]).toBe(beatAt(0, 1))
+  })
+
+  it('seeks on a click too, not only on the keyboard', () => {
+    host.api.seeks = []
+    clickAt(beatAt(0, 2).notes[0])
+    expect(host.api.seeks).toContain(beatAt(0, 2))
+  })
+
+  it('does NOT seek while playing, or every arrow would jump the music', () => {
+    clickAt(beatAt(0, 0).notes[0])
+    host.isPlaying = true
+    host.api.seeks = []
+
+    expect(edit.moveCursorBeat(1).ok).toBe(true)
+
+    // The cursor still moved; only the transport was left alone.
+    expect(edit.cursor.value).toMatchObject({ beatIndex: 1 })
+    expect(host.api.seeks).toEqual([])
+  })
+
+  it('still drops alphaTab´s selection while playing', () => {
+    // The seek is what is skipped, not the clean-up: a range surviving into
+    // playback would come back on the next render exactly as it did before.
+    dragOver(beatAt(0, 0), beatAt(0, 3))
+    host.isPlaying = true
+
+    edit.moveCursorBeat(1)
+    host.api.replayPostRenderHighlight()
+
+    expect(edit.selectedRange.value).toBeNull()
+    expect(edit.cursor.value).not.toBeNull()
+  })
+
+  it('moving the cursor with no beat to land on seeks nowhere', () => {
+    clickAt(beatAt(0, 0).notes[0])
+    host.api.seeks = []
+    edit.clearSelection()
+    expect(host.api.seeks).toEqual([])
   })
 })

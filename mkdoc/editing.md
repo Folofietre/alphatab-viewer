@@ -302,15 +302,43 @@ from the string spacing rather than read from the lookup. With no string at all 
 a staff with no tablature - it becomes a full-height caret on every row of the
 beat.
 
-**alphaTab's own beat cursor is hidden while nothing is playing.** It is a solid
+**The playhead follows the cursor**, so pressing play starts from where you were
+working rather than from wherever the transport was last left. Clicking a note
+does it too, which alphaTab already did on its own for a click on a bar.
+
+Only while PAUSED, though. Seeking under a running transport would make
+navigating during playback impossible - every arrow would jump the music - so
+while playing the cursor still moves and alphaTab's selection is still dropped,
+and only the seek is skipped.
+
+It comes free with the selection clean-up rather than as a second mechanism.
+`highlightPlaybackRange(beat, beat)` followed by
+`applyPlaybackRangeFromHighlight()` takes alphaTab's same-beat branch, which
+seeks, and then clears `_selectionStart` and the playback range outright - so the
+post-render echo of gotcha 10 has nothing left to replay. alphaTab passes
+`shouldScroll: false` on that path, so it does not fight the view following the
+cursor.
+
+**The measure the cursor is in gets a papyrus wash**, drawn by our own overlay
+from `barRects`, following the arrow keys. alphaTab has a bar highlight of its
+own but it follows the PLAYHEAD, which is a different question - where playback
+is, not where you are working - and the two part company the moment an arrow is
+pressed while paused. One track's bar, not the whole column across every
+displayed staff: same rule the ring follows, since a band spanning every staff
+would say "all tracks" about a position that is in exactly one.
+
+**alphaTab's own playback cursor is hidden while nothing is playing.** It is a solid
 2px bar parked wherever the playhead was left, which on a freshly opened score is
 the very start of the piece: next to the dashed edit cursor that is two vertical
 markers speaking the same visual language about different things, and the loud
 one is the one that is not about editing. Done from CSS, which is safe because
 alphaTab sets `position`, `left`, `top`, `willChange` and a `transform` inline on
-that element but never `display`. It keeps updating the transform of a hidden
-element while paused, so the cursor is already in the right place the moment
-playback resumes. The soft bar wash stays - it is quiet enough not to compete.
+those elements but never `display`. It keeps updating them while paused, so the
+cursor is already in the right place the moment playback resumes. Both halves go,
+the beat line and the bar wash: the wash used to be the only thing marking a
+measure and was worth keeping as a trace of where playback would resume from,
+but now the papyrus marks the measure the cursor is in, and a second band on a
+different bar while nothing plays is only a question about which one is real.
 
 ## Navigating with the arrows, and giving them back
 

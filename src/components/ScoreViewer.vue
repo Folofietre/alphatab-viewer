@@ -18,6 +18,22 @@
              start of the piece competes with it for the same reading. -->
         <div ref="host" class="alphatab-host" :class="{ idle: !isPlaying }" />
 
+        <!-- The bar the edit cursor is in. First of the overlays, so everything
+             else draws over it: this is a wash behind the notation, not a mark
+             on it. It follows the arrow keys, where alphaTab's own bar
+             highlight follows the playhead. -->
+        <div
+          v-for="(rect, i) in cursorBarRects"
+          :key="`cbar-${i}`"
+          class="cursor-bar"
+          aria-hidden="true"
+          :style="{
+            transform: `translate(${rect.x}px, ${rect.y}px)`,
+            width: `${rect.w}px`,
+            height: `${rect.h}px`,
+          }"
+        />
+
         <!-- Bars holding more ticks than their time signature allows.
              Underneath the selection markers, because this is a property of the
              paper rather than of what is being edited - and because nothing
@@ -91,7 +107,8 @@ const FOLLOW_MARGIN = 48
 const host = ref(null)
 const scroller = ref(null)
 const { init, destroy, isRendering, isScoreLoaded, isPlaying } = usePlayer()
-const { selectedNoteRects, cursorRects, overfullRects, cursorMoves } = useScoreEdit()
+const { selectedNoteRects, cursorRects, cursorBarRects, overfullRects, cursorMoves } =
+  useScoreEdit()
 
 // Keep the cursor in view when the arrows walk it off the edge.
 //

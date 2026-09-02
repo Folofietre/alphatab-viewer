@@ -19,7 +19,6 @@
   --chrome-text:       #f2f6fc; // primary text on chrome: white
   --chrome-text-muted: #9aa8bd; // labels and secondary text on chrome
   --chrome-divider:    rgba(255, 255, 255, 0.1);
-  --chrome-selected:   rgba(47, 111, 208, 0.32); // selected row on chrome
 
   // -- Document strip: the mid-tone bar naming the open score --------------
   --docstrip:          #67778c;
@@ -62,6 +61,29 @@
   // -- Score rendering -----------------------------------------------------
   // alphaTab draws the notation in the host element's `color`.
   --score-ink:         #1b2432;
+  // Two bar washes, marking two different things, so they are two tokens.
+  //
+  // `edit-bar` is the measure the CURSOR is in - ours, following the arrow keys,
+  // painted by our own overlay. `cursor-bar` is the measure alphaTab is
+  // PLAYING, painted by alphaTab, and hidden entirely while nothing plays.
+  //
+  // Both stay TRANSLUCENT: alphaTab draws its cursor wrapper at z-index 1000
+  // and our overlay sits in the same escaped stacking context, so both are ON
+  // TOP of the notation and an opaque fill would hide the notes they point at.
+  //
+  // The papyrus is 18% of #d4a72c, which blends to #f7efd9 over the white paper.
+  //
+  // The alpha is the whole design here, because yellow carries almost no
+  // contrast against white paper and this wash sits on top of the notation.
+  // 1.15 against the unhighlighted paper is enough to read as a band - the blue
+  // playing wash below manages 1.17 and has never been hard to see - while the
+  // ink reads through it at 9.7, the blue beat line crossing it while playing
+  // at 4.25, and the played-note highlight at 6.06.
+  //
+  // Going darker is what to resist. 25% was tried and was too heavy: it reaches
+  // 1.21 against the paper but drops the ink to 8.0 and starts competing with
+  // the notation it is meant to sit behind.
+  --score-edit-bar:    rgba(212, 167, 44, 0.18);
   --score-cursor-bar:  rgba(47, 111, 208, 0.12);
   --score-cursor-beat: var(--accent);
   --score-highlight:   var(--accent-strong);

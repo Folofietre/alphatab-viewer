@@ -286,9 +286,16 @@ Neither obvious escape works on its own:
   seeks. An arrow key has no business moving the playhead.
 
 What works is collapsing the selection onto ONE beat with
-`highlightPlaybackRange(beat, beat)`. `_cursorSelectRange` draws nothing when
-the two beats are equal, so the band goes immediately and the post-render echo
-degrades to a harmless empty event for ever after. Public API, no seek.
+`highlightPlaybackRange(beat, beat)`, then calling
+`applyPlaybackRangeFromHighlight()`. `_cursorSelectRange` draws nothing when the
+two beats are equal, so the band goes immediately, and the same-beat branch of
+`apply` then clears `_selectionStart` and the playback range outright, so there
+is nothing left for the echo to replay. Public API throughout.
+
+The seek that branch performs turned out to be wanted rather than a cost - the
+playhead following the edit cursor is the behaviour, not a side effect - but it
+is gated on being paused, since seeking under a running transport would make
+navigating during playback impossible.
 
 One trap in doing it: that call fires the very event that handles it, so the
 clear-down needs a re-entrancy guard or it recurses until the stack goes.
