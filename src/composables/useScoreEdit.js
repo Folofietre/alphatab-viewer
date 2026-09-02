@@ -300,8 +300,13 @@ function setCursor(beat, string, note = undefined) {
   // both would make every key ambiguous about what it acts on. Cleared here
   // rather than through `clearRange()`, which would refresh the rectangles a
   // second time for nothing.
+  //
+  // alphaTab's own selection has to go as well, or it survives this and comes
+  // back on the next render. See dropAlphaTabRange.
+  const hadRange = rangeNotes.length > 0
   rangeNotes = []
   selectedRange.value = null
+  if (hadRange) dropAlphaTabRange(beat)
 
   cursorBeat = beat
   cursorString = string ?? null
@@ -661,9 +666,52 @@ function selectBar(beat) {
   return setRangeFromBeats(first, last)
 }
 
+// Guards `dropAlphaTabRange` against itself. Collapsing alphaTab's selection
+// makes it fire `playbackRangeHighlightChanged`, which lands back in
+// `setRangeFromBeats` and calls `clearRange` again - so without this the two
+// call each other until the stack runs out.
+let droppingRange = false
+
+// Drop the selection alphaTab keeps of its OWN, which is not the same object as
+// ours and does not go away when ours does.
+//
+// This is what made a range come back from the dead. `_onPostRenderFinished`
+// re-applies alphaTab's highlight after EVERY render:
+//
+//   if (this._selectionStart) this.highlightPlaybackRange(...)   // 1.8.4
+//
+// so a cursor move cleared our range, and then the next edit's `api.render()`
+// re-fired the highlight event, `setRangeFromBeats` rebuilt the range from it,
+// and the cursor was wiped - which looked like the selection re-selecting
+// itself a moment after the note moved.
+//
+// Collapsing the selection onto ONE beat is the public way out.
+// `_cursorSelectRange` draws nothing when the start and end beats are the same,
+// so the band goes now, and the post-render echo degrades to a harmless empty
+// event instead of a range. The alternative that fully clears alphaTab's
+// internal state, `applyPlaybackRangeFromHighlight`, also seeks the playhead,
+// which an arrow key has no business doing.
+//
+// The playback range goes with it. A loop range that outlives the selection it
+// was made from is its own small bug: drag a passage, click away, and playback
+// would still loop the passage.
+function dropAlphaTabRange(beat) {
+  const api = scoreEditHost.api
+  if (!api || droppingRange) return
+  droppingRange = true
+  try {
+    if (api.playbackRange) api.playbackRange = null
+    if (beat) api.highlightPlaybackRange(beat, beat)
+  } finally {
+    droppingRange = false
+  }
+}
+
 function clearRange() {
+  const hadRange = rangeNotes.length > 0
   rangeNotes = []
   selectedRange.value = null
+  if (hadRange) dropAlphaTabRange(cursorBeat)
   // The rings went with it, unless a single note is selected.
   refreshSelectionRects()
 }

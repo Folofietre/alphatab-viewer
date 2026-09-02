@@ -1,7 +1,7 @@
 # alphaTab gotchas
 
 
-All nine were found by running code against alphaTab **1.8.4**, not by reading
+All ten were found by running code against alphaTab **1.8.4**, not by reading
 the docs, and each one silently corrupts an edit - or lets a corrupt one
 through, or quietly disables a feature - if you do the obvious thing. They are the reason
 [src/utils/scoreEdits.js](../src/utils/scoreEdits.js) exists as its own module.
@@ -255,6 +255,43 @@ not testing the lookup the app gets.** `scoreGeometry.test.js` now runs every
 assertion twice, once against the direct lookup and once against
 `BoundsLookup.fromJson(direct.toJson(), score)`, which is exactly the shape the
 worker delivers.
+
+## 10. alphaTab re-applies its own selection after every render
+
+`_onPostRenderFinished` ends with this, in 1.8.4:
+
+```js
+if (this._selectionStart) this.highlightPlaybackRange(this._selectionStart.beat, this._selectionEnd.beat);
+```
+
+So alphaTab keeps a selection of its own, and re-asserts it - band and
+`playbackRangeHighlightChanged` event - on **every** render, not just when the
+user drags. Clearing your own copy does nothing to it.
+
+That surfaced as a selection coming back from the dead. Pressing an arrow moved
+the cursor and dropped the range; the next edit called `api.render()`; the echo
+fired with the old beats; the handler rebuilt the range from it and wiped the
+cursor. From the outside, a note moved and then the passage re-selected itself a
+moment later.
+
+Neither obvious escape works on its own:
+
+- `clearPlaybackRangeHighlight()` only calls `_cursorSelectRange(undefined,
+  undefined)`. It erases what is drawn and leaves `_selectionStart` set, so the
+  next render puts it straight back.
+- `playbackRange = null` goes through `_updateSelectionCursor`, which does the
+  same thing, and likewise never touches `_selectionStart`.
+- `applyPlaybackRangeFromHighlight()` *does* clear it, in the branch where the
+  start and end beats are the same - but it also sets `tickPosition`, so it
+  seeks. An arrow key has no business moving the playhead.
+
+What works is collapsing the selection onto ONE beat with
+`highlightPlaybackRange(beat, beat)`. `_cursorSelectRange` draws nothing when
+the two beats are equal, so the band goes immediately and the post-render echo
+degrades to a harmless empty event for ever after. Public API, no seek.
+
+One trap in doing it: that call fires the very event that handles it, so the
+clear-down needs a re-entrancy guard or it recurses until the stack goes.
 
 ## And one non-gotcha: `finish()` is not needed after the OTHER edits
 

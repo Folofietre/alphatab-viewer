@@ -204,13 +204,28 @@ function fakeApi() {
     postRenderFinished: emitter(),
     highlights: [],
     appliedHighlights: 0,
+    // alphaTab's own selection, which is NOT the same object as ours and does
+    // not go away when ours does.
+    playbackRange: null,
+    _selectionStart: null,
+    _selectionEnd: null,
     highlightPlaybackRange(startBeat, endBeat) {
       this.highlights.push([startBeat, endBeat])
+      this._selectionStart = startBeat
+      this._selectionEnd = endBeat
       // alphaTab fires the change event synchronously, and reports EMPTY args
       // when the two beats are the same - the edge the bar selection works
-      // around.
+      // around, and the edge `dropAlphaTabRange` deliberately steers into.
       if (startBeat === endBeat) this.playbackRangeHighlightChanged.emit({})
       else this.playbackRangeHighlightChanged.emit({ startBeat, endBeat })
+    },
+    // What `_onPostRenderFinished` does in alphaTab 1.8.4: re-apply the
+    // highlight from its own retained state, after every single render.
+    replayPostRenderHighlight() {
+      if (this._selectionStart) {
+        this.highlightPlaybackRange(this._selectionStart, this._selectionEnd)
+      }
+      this.postRenderFinished.emit()
     },
     applyPlaybackRangeFromHighlight() {
       this.appliedHighlights += 1
@@ -249,6 +264,12 @@ function dragOver(startBeat, endBeat) {
     host.api.playbackRangeHighlightChanged.emit({})
     return
   }
+  // alphaTab RECORDS the selection on itself before firing, which is the state
+  // its post-render echo replays from. A helper that only fired the event was
+  // modelling half the drag, and the half it left out is where the bug lived.
+  host.api._selectionStart = startBeat
+  host.api._selectionEnd = endBeat
+  host.api.playbackRange = { startTick: 0, endTick: 1 }
   host.api.playbackRangeHighlightChanged.emit({ startBeat, endBeat })
 }
 
@@ -1864,3 +1885,76 @@ describe('the cursor stays in step with the edits', () => {
   })
 })
 
+
+describe('a range and a cursor never both survive', () => {
+  function beatAt(bar, index, track = LEAD) {
+    return score.tracks[track].staves[0].bars[bar].voices[0].beats[index]
+  }
+
+  it('an arrow drops the range in alphaTab too, not just in ours', () => {
+    // Ours going quiet is not enough: alphaTab keeps its own selection and
+    // draws the band from it, so the passage stayed highlighted on screen after
+    // the cursor had already moved off it.
+    dragOver(beatAt(0, 0), beatAt(0, 3))
+    expect(edit.selectedRange.value).not.toBeNull()
+    expect(host.api.playbackRange).not.toBeNull()
+
+    edit.moveCursorBeat(1)
+
+    expect(edit.selectedRange.value).toBeNull()
+    expect(edit.cursor.value).not.toBeNull()
+    // Collapsed onto one beat, which is what makes alphaTab draw nothing.
+    expect(host.api.highlights.length).toBeGreaterThan(0)
+    const last = host.api.highlights[host.api.highlights.length - 1]
+    expect(last[0]).toBe(last[1])
+    // And the loop range went with the selection it was made from.
+    expect(host.api.playbackRange).toBeNull()
+  })
+
+  it('and a later render cannot bring it back', () => {
+    // The reported bug. A tone shift renders; alphaTab re-applies its highlight
+    // after every render; our handler rebuilt the range from that echo and wiped
+    // the cursor - so the note moved and then the old passage re-selected itself.
+    dragOver(beatAt(0, 0), beatAt(0, 3))
+    edit.moveCursorBeat(1)
+    const cursorAfterArrow = { ...edit.cursor.value }
+
+    host.api.replayPostRenderHighlight()
+
+    expect(edit.selectedRange.value).toBeNull()
+    expect(edit.cursor.value).toMatchObject(cursorAfterArrow)
+  })
+
+  it('survives the echo that follows a real edit', () => {
+    dragOver(beatAt(0, 0), beatAt(0, 3))
+    edit.moveCursorString(1)
+    const at = { ...edit.cursor.value }
+
+    // Every render in the app is followed by that echo.
+    host.api.replayPostRenderHighlight()
+    host.api.replayPostRenderHighlight()
+
+    expect(edit.selectedRange.value).toBeNull()
+    expect(edit.cursor.value).toMatchObject(at)
+  })
+
+  it('a genuine new drag still makes a range, echo or not', () => {
+    // The guard must not be so eager that it swallows the gesture it exists to
+    // protect: dropping a range and starting a new one are different things.
+    dragOver(beatAt(0, 0), beatAt(0, 3))
+    edit.moveCursorBeat(1)
+    expect(edit.selectedRange.value).toBeNull()
+
+    dragOver(beatAt(1, 0), beatAt(1, 3))
+    expect(edit.selectedRange.value).not.toBeNull()
+    expect(edit.cursor.value).toBeNull()
+  })
+
+  it('collapsing does not recurse', () => {
+    // `dropAlphaTabRange` makes alphaTab fire the very event that calls it, so
+    // without a guard the two bounce until the stack goes.
+    dragOver(beatAt(0, 0), beatAt(0, 3))
+    expect(() => edit.clearRange()).not.toThrow()
+    expect(edit.selectedRange.value).toBeNull()
+  })
+})
