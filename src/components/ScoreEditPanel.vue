@@ -1,7 +1,10 @@
 <template>
   <section class="score-edit-panel">
-    <header>
-      <h2>Score <span v-if="isDirty" class="dirty" title="This score has unsaved changes">modified</span></h2>
+    <header v-help="PANEL_HELP">
+      <h2>
+        Score <span v-if="isDirty" class="dirty" title="This score has unsaved changes">modified</span>
+        <HelpTip />
+      </h2>
       <div class="bulk">
         <button
           type="button"
@@ -41,8 +44,8 @@
 
     <!-- Tempo. The count matters: above one, this field scales a whole tempo
          MAP written by the author rather than a single number. -->
-    <div class="field">
-      <label :for="ids.tempo">Tempo (BPM)</label>
+    <div class="field" v-help="tempoHelp">
+      <label :for="ids.tempo">Tempo (BPM)<HelpTip /></label>
       <div class="row">
         <input
           :id="ids.tempo"
@@ -56,37 +59,23 @@
           @keydown.enter.prevent="commitTempo"
         />
       </div>
-      <p class="hint">
-        <template v-if="tempo.automationCount > 1">
-          This score has {{ tempo.automationCount }} tempo changes. Setting this
-          scales all of them, keeping the author's tempo map.
-        </template>
-        <template v-else>Written into the score and saved with it.</template>
-        Use the transport's speed control to just listen slower: that one is not
-        saved.
-      </p>
     </div>
 
-    <hr />
-
-    <p class="legend">
-      <kbd>Ctrl</kbd> + <kbd>S</kbd> saves the <code>.gp</code> file rather than
-      the web page.
-    </p>
-
-    <p class="legend">
-      Names, instruments, tunings and transposition belong to a single track, and
-      live in the <strong>Track</strong> tab. Anything acting on the note or the
-      passage you have selected is in <strong>Edit</strong>.
-    </p>
   </section>
 </template>
 
 <script setup>
-import { ref, watch, useId } from 'vue'
+import { computed, ref, watch, useId } from 'vue'
 import { usePlayer } from '@/composables/usePlayer'
 import { useScoreEdit } from '@/composables/useScoreEdit'
 import { MAX_TEMPO, MIN_TEMPO } from '@/utils/scoreEdits'
+import HelpTip from '@/components/HelpTip.vue'
+
+const PANEL_HELP =
+  'Everything here acts on the whole document. Ctrl+S saves the .gp file rather ' +
+  'than the web page. Names, instruments, tunings and transposition belong to a ' +
+  'single track and live in the Track panel; anything acting on the note or ' +
+  'passage you have selected is in the Edit panel on the right.'
 
 const { scoreInfo: info, fileName } = usePlayer()
 const {
@@ -103,6 +92,18 @@ const {
 
 const base = useId()
 const ids = { tempo: `${base}-tempo` }
+
+// Whether this field is setting one number or rescaling a whole tempo MAP is
+// the thing worth knowing before typing in it, and it depends on the score, so
+// the tooltip is built rather than written.
+const tempoHelp = computed(() => {
+  const count = tempo.value.automationCount
+  const head =
+    count > 1
+      ? `This score has ${count} tempo changes. Setting this scales all of them, keeping the author's tempo map.`
+      : 'Written into the score and saved with it.'
+  return `${head} Use the transport's speed control to just listen slower: that one is not saved.`
+})
 
 // A local draft, re-seeded whenever the model changes underneath: after a
 // revert, a new file, or an edit made from somewhere else.

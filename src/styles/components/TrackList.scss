@@ -9,7 +9,13 @@
 }
 
 // Sticky section header, so the label survives scrolling a long track list.
+// It also carries the panel's explanation in its tooltip - see edit-help.
+header[data-help] {
+  @include edit-help;
+}
+
 header {
+
   position: sticky;
   top: 0;
   z-index: 1;
@@ -45,18 +51,6 @@ header {
   }
 }
 
-.legend {
-  @include hint-text;
-  padding: $gap-sm;
-  font-size: 0.72rem;
-  color: var(--chrome-text-muted);
-  border-bottom: 1px solid var(--chrome-divider);
-
-  strong {
-    color: var(--chrome-text);
-    font-weight: 700;
-  }
-}
 
 // Track rows: square, stacked, sharing a single divider so the list reads as
 // one delimited block rather than a stack of cards.

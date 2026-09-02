@@ -106,3 +106,32 @@ button {
 input[type='range'] {
   accent-color: var(--accent);
 }
+
+// ---------------------------------------------------------------------------
+// The help tooltip
+// ---------------------------------------------------------------------------
+//
+// Global rather than scoped to a component, and it has to be: `v-help` puts
+// this element on `document.body`, outside every component's scope attribute,
+// because the sidebars are `overflow-y: auto` and would clip anything drawn
+// inside them.
+//
+// It is chrome-coloured even though it can appear over the light score, because
+// it belongs to the panels that raise it - the same reasoning as the action bar
+// floating above a white page.
+.help-bubble {
+  position: fixed;
+  z-index: 2000;
+  max-width: 20rem;
+  padding: 0.45rem 0.6rem;
+  background: var(--chrome-raised);
+  border: 1px solid var(--chrome-border);
+  border-radius: $radius-control;
+  box-shadow: 0 4px 14px rgb(0 0 0 / 35%);
+  color: var(--chrome-text);
+  font-size: 0.72rem;
+  line-height: 1.45;
+  // Never eat the hover it is explaining: the pointer is still over the field,
+  // and a bubble that steals the event would flicker itself in and out.
+  pointer-events: none;
+}

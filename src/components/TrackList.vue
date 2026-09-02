@@ -1,20 +1,18 @@
 <template>
   <section class="track-panel">
-    <header>
-      <h2>Mixer <span class="count">{{ tracks.length }}</span></h2>
+    <!-- The panel's own explanation rides on its header rather than sitting
+         under it as a paragraph: it is orientation, read once, and it was
+         costing six permanent lines above the track list. -->
+    <header v-help="PANEL_HELP">
+      <h2>
+        Mixer <span class="count">{{ tracks.length }}</span>
+        <HelpTip />
+      </h2>
       <div class="bulk">
         <button type="button" title="Render every track" @click="showAllTracks">All</button>
         <button type="button" title="Reset volume, mute and solo" @click="resetMixer">Reset mix</button>
       </div>
     </header>
-
-    <p class="legend">
-      Click a track to show it <strong>alone</strong>, or tick its box to
-      <strong>add</strong> it to the view. Mute, solo and volume control what is
-      <strong>heard</strong>: every track is audible whether it is displayed or
-      not, and none of it is saved with the score. Names, instruments and tunings
-      are, and they live in the <strong>Track</strong> tab.
-    </p>
 
     <ul class="tracks">
       <li v-for="track in tracks" :key="track.index" :class="{ rendered: track.rendered }">
@@ -110,6 +108,16 @@
 </template>
 
 <script setup>
+import HelpTip from '@/components/HelpTip.vue'
+
+// Written once, read twice: the header carries it as a tooltip over the whole
+// strip, and the marker beside the title is the thing that says it is there.
+const PANEL_HELP =
+  'Click a track to show it alone, or tick its box to add it to the view. ' +
+  'Mute, solo and volume control what is heard: every track is audible whether ' +
+  'it is displayed or not, and none of it is saved with the score. Names, ' +
+  'instruments and tunings are, and they live in the Track panel.'
+
 import { computed } from 'vue'
 import { usePlayer } from '@/composables/usePlayer'
 import { formatBalance } from '@/utils/format'

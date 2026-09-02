@@ -1,7 +1,7 @@
 <template>
   <section class="track-edit-panel">
-    <header>
-      <h2>Track</h2>
+    <header v-help="PANEL_HELP">
+      <h2>Track<HelpTip /></h2>
     </header>
 
     <p v-if="!canEdit" class="message info" role="status">
@@ -59,8 +59,8 @@
       <!-- Instrument. The 128 General MIDI programs, grouped by family.
            Percussion plays on the drum channel and is not addressed by a
            program number, so it gets a label instead. -->
-      <div class="field">
-        <label :for="ids.program">Instrument</label>
+      <div class="field" v-help="INSTRUMENT_HELP">
+        <label :for="ids.program">Instrument<HelpTip /></label>
         <select
           v-if="!editedTrack.isPercussion"
           :id="ids.program"
@@ -76,18 +76,16 @@
           </optgroup>
         </select>
         <p v-else class="inspector">Percussion kit</p>
-        <p class="hint">
-          Saved with the score. Volume, pan, mute and solo are listening
-          settings and live in the <strong>Mixer</strong> tab.
-        </p>
       </div>
 
       <hr />
 
       <!-- Transposition. Two genuinely different operations, so two buttons
            rather than one with a hidden mode. -->
-      <div class="field">
-        <label :for="ids.semitones">Transpose (semitones)</label>
+      <div class="field" v-help="transposeHelp">
+        <label :for="ids.semitones">
+          Transpose (semitones)<HelpTip />
+        </label>
         <div class="row">
           <input
             :id="ids.semitones"
@@ -111,24 +109,14 @@
             @click="transposeByFrets(semitones)"
           >Move frets</button>
         </div>
-        <p class="hint">
-          <strong>Detune</strong> keeps the fingering. <strong>Move frets</strong>
-          keeps the tuning, and is refused when a note would land outside frets
-          {{ MIN_FRET }}-{{ MAX_FRET }}.
-          <template v-if="editedTrack.naturalHarmonics > 0">
-            This track has {{ editedTrack.naturalHarmonics }} natural harmonics,
-            which sound at their node rather than at their fret, so only
-            <strong>Detune</strong> can move them.
-          </template>
-        </p>
       </div>
 
       <hr />
 
       <!-- Tuning. Same shape as transposition: pick the target, then say which
            of the two things to preserve. -->
-      <div class="field">
-        <label :for="ids.tuning">Tuning</label>
+      <div class="field" v-help="tuningHelp">
+        <label :for="ids.tuning">Tuning<HelpTip /></label>
         <select
           :id="ids.tuning"
           v-model="tuningId"
@@ -152,21 +140,8 @@
             @click="applyTuning(RETUNE_REASSIGN)"
           >Keep frets</button>
         </div>
-        <p class="hint">
-          Currently {{ editedTrack.tuningLabel || 'no tablature' }}<template
-            v-if="editedTrack.tuningName"
-          > ({{ editedTrack.tuningName }})</template>. Changing the number of
-          strings is not supported.
-        </p>
       </div>
 
-      <hr />
-
-      <p class="legend">
-        Editing a note or a passage is a different scope, and lives in the
-        <strong>Edit</strong> tab. Clicking a note in the score points this panel
-        at its track, so the two follow each other.
-      </p>
     </template>
   </section>
 </template>
@@ -176,6 +151,20 @@ import { computed, ref, watch, useId } from 'vue'
 import { usePlayer } from '@/composables/usePlayer'
 import { useScoreEdit } from '@/composables/useScoreEdit'
 import { GM_GROUPS } from '@/utils/gmPrograms'
+import HelpTip from '@/components/HelpTip.vue'
+
+// The two static explanations, written once and read twice: the field carries
+// each as a tooltip over the whole group, and the marker beside the label is
+// what says it is there. The other two are computed further down, because they
+// name values that depend on the track.
+const PANEL_HELP =
+  'Everything here acts on one whole track. Editing a note or a passage is a ' +
+  'different scope and lives in the Edit panel on the right; clicking a note in ' +
+  'the score points this panel at its track, so the two follow each other.'
+
+const INSTRUMENT_HELP =
+  'Saved with the score. Volume, pan, mute and solo are listening settings and ' +
+  'live in the Mixer panel.'
 
 const { tracks } = usePlayer()
 const {
@@ -232,6 +221,36 @@ watch(
 const pendingTuning = computed(
   () => tuningOptions.value.find((option) => option.id === tuningId.value) ?? null,
 )
+
+// The two field explanations, as tooltips rather than as paragraphs under the
+// controls. Built here rather than inlined in the template because both depend
+// on the track: one names the fret bounds and warns about harmonics the track
+// actually has, the other names the tuning it is actually on.
+const transposeHelp = computed(() => {
+  const parts = [
+    'Detune keeps the fingering and shifts the tuning, so it is always playable.',
+    `Move frets keeps the tuning and moves every fret, and is refused when a note would land outside frets ${MIN_FRET}-${MAX_FRET}.`,
+  ]
+  const harmonics = editedTrack.value?.naturalHarmonics ?? 0
+  if (harmonics > 0) {
+    parts.push(
+      `This track has ${harmonics} natural harmonics, which sound at their node rather than at their fret, so only Detune can move them.`,
+    )
+  }
+  return parts.join(' ')
+})
+
+const tuningHelp = computed(() => {
+  const track = editedTrack.value
+  if (!track) return ''
+  const name = track.tuningName ? ` (${track.tuningName})` : ''
+  return (
+    `Currently ${track.tuningLabel || 'no tablature'}${name}. ` +
+    'Keep pitches moves the frets so the score sounds exactly as it does now; ' +
+    'Keep frets leaves them where they are and lets the pitches move. ' +
+    'Changing the number of strings is not supported.'
+  )
+})
 
 function commitName() {
   const result = rename(nameDraft.value)

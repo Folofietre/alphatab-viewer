@@ -250,6 +250,26 @@
   }
 }
 
+// A field or a panel header whose explanation lives in its `title` instead of
+// in a paragraph under it.
+//
+// The tooltip sits on the FIELD rather than on the label, so it answers from
+// anywhere in the group: the input, the select, the row of buttons that have no
+// title of their own. A control with its own `title` still wins, which is what
+// keeps the per-button explanations working underneath this.
+//
+// The visible marker is NOT here. It was generated content on the label, which
+// painted but never showed a tooltip - see HelpTip.vue for why - so it is a
+// real component now, and each field renders one beside its label.
+//
+// Accepted trade: `title` is a weaker channel than visible text - no touch, no
+// keyboard, and screen reader support for it varies. It is the channel this
+// codebase already uses for every button, and the panels stay readable without
+// it because what is left visible is the state, not the instructions.
+@mixin edit-help {
+  cursor: help;
+}
+
 // The one irreversible action in a panel, so it does not look like the others.
 // A warning tint rather than a red fill: it is a normal edit that happens to be
 // unrecoverable, not a hazard to be feared into avoiding.

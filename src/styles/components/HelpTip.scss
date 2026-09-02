@@ -1,0 +1,35 @@
+@use '@/styles/mixins' as *;
+
+// The marker that says an explanation exists, sitting on a label's own line so
+// it costs no layout - which was the point of moving the prose into tooltips.
+//
+// Sized in REM rather than em on purpose. Inheriting from a 0.6rem panel label
+// made it a 7px target, small enough that landing on it was a matter of luck
+// and holding still on it long enough for a tooltip to fire was worse. At
+// 1.15rem it is a ~17px hit area, which is still small but is actually aimable.
+.help-tip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 1.15rem;
+  height: 1.15rem;
+  margin-left: 0.35em;
+  border: 1px solid var(--chrome-divider);
+  border-radius: $radius-pill;
+  font-size: 0.62rem;
+  font-weight: 700;
+  line-height: 1;
+  // Reset the uppercase and letter-spacing inherited from section-label, which
+  // would otherwise push the glyph off centre.
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--chrome-text-muted);
+  cursor: help;
+  transition: color $transition-fast, border-color $transition-fast;
+
+  &:hover {
+    border-color: var(--accent-soft);
+    color: var(--chrome-text);
+  }
+}

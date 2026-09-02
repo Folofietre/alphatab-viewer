@@ -1,7 +1,7 @@
 <template>
   <section class="selection-edit-panel">
-    <header>
-      <h2>Edit</h2>
+    <header v-help="PANEL_HELP">
+      <h2>Edit<HelpTip /></h2>
     </header>
 
     <p v-if="!canEdit" class="message info" role="status">
@@ -15,8 +15,11 @@
          same operations either way, and the same ring on the score marking every
          note that will change. alphaTab's own band stays underneath as what it
          actually is - the time span, and the loop range. -->
-    <div class="field">
-      <label>{{ selectedRange ? 'Selection' : 'Selected note' }}</label>
+    <div class="field" v-help="selectionHelp">
+      <label>
+        {{ selectedRange ? 'Selection' : 'Selected note' }}
+        <HelpTip />
+      </label>
 
       <template v-if="selectedRange">
         <p class="inspector">
@@ -85,23 +88,10 @@
           >Silence</button>
           <kbd>Delete</kbd>
         </div>
-
-        <p class="hint">
-          <strong>String</strong> and <strong>Pitch</strong> apply to
-          <strong>every</strong> note at once, or to none: if one would run off
-          the neck, the whole selection is refused.
-          <strong>Octave</strong> is the exception, and does what it can: a note
-          the tuning cannot reach stays at the pitch it had rather than being
-          moved to a wrong one. Drag on the score to change the range, or click a
-          note to leave it.
-          <strong>Silence</strong> cannot be undone: use <strong>Revert</strong>
-          in the Score tab to get the file back.
-        </p>
       </template>
 
       <p v-else-if="!selectedNote" class="hint">
-        Click a note head to select one, or drag across the score to select a
-        passage.
+        Click a note head, or drag across the score for a passage.
       </p>
       <template v-else>
         <p class="inspector">
@@ -174,17 +164,6 @@
           >Silence</button>
           <kbd>Delete</kbd>
         </div>
-
-        <p class="hint">
-          <strong>String</strong> keeps the pitch and only moves the fingering,
-          so it stays silent. <strong>Pitch</strong> moves the note by a semitone
-          on the same string, and plays it.
-          <strong>Octave</strong> moves it twelve semitones and re-fingers it,
-          changing string when the fret alone cannot reach - and refuses when no
-          string can.
-          <strong>Silence</strong> removes it, leaving a rest of the same length,
-          and cannot be undone.
-        </p>
       </template>
     </div>
 
@@ -192,12 +171,9 @@
 
     <!-- Where the cursor is. A position, which may hold a note or be an empty
          string: the same thing the ring or the dashed outline is drawn on. -->
-    <div class="field">
-      <label>Cursor</label>
-      <p v-if="!cursor" class="hint">
-        Click anywhere in a bar to put the cursor there. The arrow keys move it
-        from there; with nothing selected they scroll the score instead.
-      </p>
+    <div class="field" v-help="CURSOR_HELP">
+      <label>Cursor<HelpTip /></label>
+      <p v-if="!cursor" class="hint">Click anywhere in a bar to place it.</p>
       <template v-else>
         <p class="inspector">
           <span class="badge">Bar {{ cursor.barIndex + 1 }}</span>
@@ -211,30 +187,34 @@
           </span>
           beats of {{ cursorBarFill.numerator }}/{{ cursorBarFill.denominator }}
         </p>
-        <p class="hint">
-          <kbd>&larr;</kbd><kbd>&rarr;</kbd> walk the beats, crossing bars.
-          <kbd>&uarr;</kbd><kbd>&darr;</kbd> walk the strings of this beat.
-          <template v-if="cursorBarFill?.state === 'over'">
-            <strong>This bar holds more than its time signature allows</strong>,
-            and every tool in the chain will save it that way without
-            complaining.
-          </template>
+        <!-- Stays VISIBLE, unlike the rest of this panel's prose: it is not an
+             explanation of a control, it is a fact about the bar the cursor is
+             in, and it is the one thing nothing else in the chain reports. A
+             warning nobody can see until they hover is not a warning. -->
+        <p v-if="cursorBarFill?.state === 'over'" class="hint over">
+          This bar holds <strong>more than its time signature allows</strong>,
+          and every tool in the chain will save it that way without complaining.
         </p>
       </template>
     </div>
 
-    <hr />
-
-    <p class="legend">
-      Names, instruments, tunings and transposition act on a whole track and live
-      in the <strong>Track</strong> tab. Tempo and saving are in
-      <strong>Score</strong>.
-    </p>
   </section>
 </template>
 
 <script setup>
+import { computed } from 'vue'
 import { useScoreEdit } from '@/composables/useScoreEdit'
+import HelpTip from '@/components/HelpTip.vue'
+
+const PANEL_HELP =
+  'Everything here acts on what is selected in the score: one note, a dragged ' +
+  'passage, or the cursor. Names, instruments, tunings and transposition act on ' +
+  'a whole track and live in the Track panel; tempo and saving are in Score.'
+
+const CURSOR_HELP =
+  'Click anywhere in a bar to put the cursor there. Left and right walk the ' +
+  'beats, crossing bars; up and down walk the strings of this beat. With ' +
+  'nothing selected the arrows scroll the score instead.'
 
 // Everything that acts on what is SELECTED, split out of the Track panel.
 //
@@ -246,6 +226,21 @@ import { useScoreEdit } from '@/composables/useScoreEdit'
 // The tab is labelled for the ACT rather than the scope, because the scope here
 // has no short noun: it is a note, or a passage, or a position on an empty
 // string, depending on what was last clicked.
+// The two branches of this panel explain different things - a batch is all or
+// nothing, a single note is not - so the field's tooltip switches with it
+// rather than trying to cover both at once.
+const selectionHelp = computed(() =>
+  selectedRange.value
+    ? 'String and Pitch apply to every note at once, or to none: if one would run off the neck, the whole selection is refused. ' +
+      'Octave is the exception, and does what it can: a note the tuning cannot reach stays at the pitch it had rather than being moved to a wrong one. ' +
+      'Drag on the score to change the range, or click a note to leave it. ' +
+      'Silence cannot be undone: use Revert in the Score panel to get the file back.'
+    : 'String keeps the pitch and only moves the fingering, so it stays silent. ' +
+      'Pitch moves the note by a semitone on the same string, and plays it. ' +
+      'Octave moves it twelve semitones and re-fingers it, changing string when the fret alone cannot reach, and refuses when no string can. ' +
+      'Silence removes it, leaving a rest of the same length, and cannot be undone.',
+)
+
 const {
   selectedNote,
   selectedRange,

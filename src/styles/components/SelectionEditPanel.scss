@@ -19,14 +19,17 @@ header {
   @include edit-message;
 }
 
-.legend {
-  @include edit-hint;
-  padding: $gap-sm;
-  font-size: 0.72rem;
-}
 
 .field {
   @include edit-field;
+}
+
+// A field or header carrying help. `data-help` is stamped on by the `v-help`
+// directive itself, so the cursor appears exactly where a tooltip exists and
+// can never be left behind on a zone that lost one.
+.field[data-help],
+header[data-help] {
+  @include edit-help;
 }
 
 hr {
@@ -39,6 +42,13 @@ hr {
 
 .hint {
   @include edit-hint;
+
+  // The one hint that is a WARNING about the model rather than an explanation
+  // of a control, so it is the one that did not move into a tooltip. Coloured
+  // like a refused edit, since that is what it is a step away from.
+  &.over {
+    color: var(--warn-text-chrome);
+  }
 }
 
 .danger {
