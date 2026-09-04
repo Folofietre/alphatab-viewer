@@ -795,6 +795,49 @@ it asks because it throws away edits the 30-step stack has already dropped. A
 track delete is one step on that stack, so `Ctrl+Z` covers it - the same call the
 note delete and the bar delete already made.
 
+### A range is notes, and the bar keys needed something else
+
+`Ctrl+Delete` on a visibly selected passage deleted **one** bar. The cause is a
+distinction that had not been drawn before:
+
+> A range is a set of **notes**. A drag is a span of **bars**.
+
+`notesInTickRange` keeps only notes with a string and a fret, so a drag builds no
+range at all over bars that hold none - empty bars, or a percussion staff, which
+it skips entirely. alphaTab's band still painted what was dragged, so it looked
+like a selection while the editor had none, and the bar keys fell through to the
+cursor and took the one bar it was on.
+
+Selecting empty bars and deleting them is not an edge case, it is the obvious way
+to use the key: **the bars you want gone are usually the ones with nothing in
+them.**
+
+So the bar span is now recorded from the beats the drag resolved to, before any
+note is looked at, and the note range is layered on top:
+
+| | built from | used by |
+| --- | --- | --- |
+| `rangeNotes` / `selectedRange` | the notes in the tick window | strings, frets, octave, silence, lengths |
+| `rangeBars` / `selectedBars` | the beats' master bars | `Ctrl+Insert`, `Ctrl+Delete` |
+
+Three consequences worth keeping:
+
+- **The predicates part company.** `canEditBars` accepts a bars-only drag;
+  `canNavigate` and `canChangeDuration` must not, because with no cursor and no
+  note range the arrows and the length keys would swallow their key for nothing.
+  That is the divergence the shared `hasTarget` was named separately for.
+- **The panel says so.** Bars with no notes now read as
+  "bars 4-5, no notes in them" rather than as nothing at all, which is what made
+  the state look like a bug in the key rather than a state of the selection.
+- **The delete reports its scope.** It is the one operation whose extent is
+  invisible afterwards - the bars are gone, so nothing on screen says whether one
+  went or five - so it posts "2 bars deleted (4 to 5)" after `propagate`, on the
+  same channel the octave uses for its blocked count.
+
+This is the same family as the finding in the copy-and-paste plan: building a
+clipboard from `rangeNotes` would silently drop the rests inside a copied
+passage. Same root, different key.
+
 ### Bars in the middle: what the append does not have to do
 
 `appendBar` is cheap because alphaTab's own `addMasterBar` and `addBar` do

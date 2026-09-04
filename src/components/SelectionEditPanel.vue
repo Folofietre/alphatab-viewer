@@ -137,6 +137,21 @@
         </div>
       </template>
 
+      <!-- Bars designated with no notes in them: a drag over empty bars, or over
+           a percussion staff. alphaTab paints its band over them either way, so
+           saying nothing here is what made it look like a note selection that
+           the bar keys were ignoring. -->
+      <template v-else-if="selectedBars">
+        <p class="inspector">
+          <span class="badge">bars {{ selectedBars.startBar + 1 }}-{{ selectedBars.endBar + 1 }}</span>
+          no notes in them
+        </p>
+        <p class="hint">
+          Nothing here to change the pitch or the length of, but the whole bars
+          can still go.
+        </p>
+      </template>
+
       <p v-else-if="!selectedNote" class="hint">
         Click a note head, or drag across the score for a passage.
       </p>
@@ -390,6 +405,7 @@ const {
   selectAll,
   selectedNote,
   selectedRange,
+  selectedBars,
   cursor,
   cursorBarFill,
   canEdit,

@@ -382,8 +382,14 @@ track at once - a bar added to one track alone would desynchronise the score.
 
 **`Ctrl+Delete` removes the bar the cursor is in**, notes and all, on every
 track. With a passage dragged it removes every bar the passage covers, which is
-the only way to name more than one. A score cannot be left with no bars at all,
+the only way to name more than one. It says how many went, since the bars are
+gone and nothing else can tell you. A score cannot be left with no bars at all,
 so the last one is refused with a message rather than taken.
+
+Dragging over **empty** bars works, which is the point: the bars you want gone
+are usually the ones with nothing in them. The Edit panel says "no notes in them"
+for such a selection, because there is nothing there to change the pitch or the
+length of - only whole bars to remove.
 
 Both are also buttons in the Edit panel, and both are one `Ctrl+Z` away - the
 delete puts the bars back note for note, with the ties and slides that pointed

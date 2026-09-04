@@ -281,6 +281,27 @@ let rangeNotes = []
 // which bars. Null when there is no range.
 const selectedRange = shallowRef(null)
 
+// The BAR SPAN of the last drag, which is not the same thing as the range and
+// has to outlive it.
+//
+// A range is a set of NOTES, so a drag over bars that hold none builds nothing:
+// over empty bars, or over a percussion staff, which `notesInTickRange` skips
+// entirely. alphaTab's band still paints what was dragged, so it looked like a
+// selection while the editor had none - and `Ctrl+Delete` fell back to the
+// cursor and took ONE bar. That is the bug this exists to fix.
+//
+// Selecting empty bars and deleting them is not an edge case either, it is the
+// obvious way to use the key: the bars you want gone are usually the ones with
+// nothing in them.
+//
+// So the span is recorded from the BEATS the drag resolved to, before any note
+// is looked at, and the note range is layered on top. Every note-based operation
+// keeps reading `rangeNotes`; only the two bar keys read this.
+let rangeBars = null
+
+// The same, flat, for the panel. Same rule as `selectedNote`.
+const selectedBars = shallowRef(null)
+
 // Where to draw the selection marker, as plain rectangles in the coordinate
 // space of alphaTab's host element: [{ x, y, w, h }].
 //
@@ -389,6 +410,8 @@ function setCursor(beat, string, note = undefined) {
   // syncPlayheadToCursor.
   rangeNotes = []
   selectedRange.value = null
+  rangeBars = null
+  selectedBars.value = null
   syncPlayheadToCursor(beat)
 
   // Any move ends the number being typed, which is what makes a second digit
@@ -735,11 +758,28 @@ function setRangeFromBeats(startBeat, endBeat) {
     return false
   }
 
+  // The bar span first, and independently of the notes: see `rangeBars`.
+  const startBar = startBeat.voice.bar.masterBar.index
+  const endBar = endBeat.voice.bar.masterBar.index
+  rangeBars = { from: Math.min(startBar, endBar), to: Math.max(startBar, endBar) }
+  selectedBars.value = {
+    trackIndex: track.index,
+    startBar: rangeBars.from,
+    endBar: rangeBars.to,
+  }
+
   const startTick = startBeat.absolutePlaybackStart
   const endTick = endBeat.absolutePlaybackStart + endBeat.playbackDuration
   rangeNotes = notesInTickRange(track, startTick, endTick)
   if (rangeNotes.length === 0) {
-    clearRange()
+    // No note to edit, but the bars were still designated - so only the note
+    // half is dropped, and the bar keys keep something to act on.
+    rangeNotes = []
+    selectedRange.value = null
+    clearSelection()
+    selectedTrackIndex.value = track.index
+    refreshSelectionRects()
+    message(null, null)
     return false
   }
 
@@ -935,6 +975,8 @@ function clearRange() {
   const hadRange = rangeNotes.length > 0
   rangeNotes = []
   selectedRange.value = null
+  rangeBars = null
+  selectedBars.value = null
   if (hadRange) syncPlayheadToCursor(cursorBeat)
   // The rings went with it, unless a single note is selected.
   refreshSelectionRects()
@@ -1872,8 +1914,11 @@ export function useScoreEdit() {
   // only way to name more than one bar; otherwise the cursor's own bar. Both
   // report MASTER bar indexes, which is what the bar operations take.
   function targetBars() {
-    const range = selectedRange.value
-    if (range) return { from: range.startBar, to: range.endBar }
+    // `rangeBars` rather than `selectedRange`, and that is the whole of the fix:
+    // a drag over bars with no notes builds no note range, so reading the note
+    // range fell through to the cursor and deleted one bar out of the several
+    // that were visibly selected. See `rangeBars`.
+    if (rangeBars) return { ...rangeBars }
     const at = cursorInfo.value?.barIndex
     return typeof at === 'number' ? { from: at, to: at } : null
   }
@@ -1977,11 +2022,30 @@ export function useScoreEdit() {
       scoreEditHost.syncAllTracks()
       landOnBar(lane.staff, target.from, lane.voiceIndex, lane.string)
     }
-    return propagate(result, {
+    const outcome = propagate(result, {
       render: true,
       midi: 'now',
       label: result.barCount === 1 ? 'Delete a bar' : `Delete ${result.barCount} bars`,
     })
+
+    // Said out loud, which no other successful edit does. The reason is specific:
+    // this is the one operation whose SCOPE is invisible afterwards. The bars are
+    // gone, so nothing on screen says whether one went or five, and "it only
+    // deleted the first bar" is indistinguishable from "the selection was one
+    // bar" without being told. Posted after `propagate`, which clears the
+    // message on a success - the same channel the octave uses for its blocked
+    // count.
+    if (outcome.ok && outcome.changed) {
+      const first = target.from + 1
+      const last = target.from + outcome.barCount
+      message(
+        'ok',
+        outcome.barCount === 1
+          ? `Bar ${first} deleted.`
+          : `${outcome.barCount} bars deleted (${first} to ${last}).`,
+      )
+    }
+    return outcome
   }
 
   // The left and right arrows, whole job included.
@@ -2162,6 +2226,8 @@ export function useScoreEdit() {
     selectedNote,
     selectedNoteRects,
     selectedRange,
+    // The bars a drag covered, which outlives a range that holds no notes.
+    selectedBars,
     clearRange,
     editedTrack,
     selectTrack,
@@ -2199,7 +2265,17 @@ export function useScoreEdit() {
     // BEFORE `preventDefault()`, not after.
     canWriteNote: computed(() => cursorInfo.value !== null),
     canChangeDuration: hasTarget,
-    canEditBars: hasTarget,
+    // The bar keys part company with the other two here, which is the divergence
+    // `hasTarget` was named separately for. A drag over bars that hold no notes
+    // designates BARS and nothing else: there is no cursor and no note range, so
+    // the arrows and the length keys have nothing to act on and must stay out of
+    // the way - but `Ctrl+Insert` and `Ctrl+Delete` have exactly what they need.
+    canEditBars: computed(
+      () =>
+        cursorInfo.value !== null ||
+        selectedRange.value !== null ||
+        selectedBars.value !== null,
+    ),
     DURATION_SHORTER,
     DURATION_LONGER,
 

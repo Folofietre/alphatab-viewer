@@ -2983,6 +2983,92 @@ describe('inserting and deleting bars', () => {
     expect(edit.cursor.value).toMatchObject({ barIndex: 2 })
   })
 
+  // The report that found this: "ctrl+del on a selection only deletes the first
+  // bar". A range is built from NOTES, so a drag over bars that hold none - or
+  // over a percussion staff, which `notesInTickRange` skips entirely - builds no
+  // range at all, while alphaTab's band still paints the bars that were dragged.
+  // The delete then fell back to the cursor and took one bar.
+  it('deletes the bars a drag covered even when they hold no notes', () => {
+    // Two empty bars at the end of the score, which is exactly what someone
+    // deleting bars has just made.
+    clickAt(beatAt(3, 3).notes[0])
+    expect(edit.moveCursorBeat(1, { canWrite: true }).ok).toBe(true)
+    expect(edit.moveCursorBeat(1, { canWrite: true }).ok).toBe(true)
+    expect(score.masterBars).toHaveLength(6)
+
+    const staff = score.tracks[LEAD].staves[0]
+    dragOver(staff.bars[4].voices[0].beats[0], staff.bars[5].voices[0].beats[0])
+    // No notes in them, so there is no note selection - and that must not mean
+    // there is nothing selected.
+    expect(edit.selectedRange.value).toBeNull()
+    expect(edit.selectedBars.value).toMatchObject({ startBar: 4, endBar: 5 })
+
+    const result = edit.removeBars()
+    expect(result).toMatchObject({ ok: true, barIndex: 4, barCount: 2 })
+    expect(score.masterBars).toHaveLength(4)
+  })
+
+  it('and on a percussion staff, which holds no note a range can take', () => {
+    // `notesInTickRange` keeps only notes with a string and a fret, so a drag
+    // anywhere on the drums yields none.
+    const drums = score.tracks[DRUMS].staves[0]
+    dragOver(drums.bars[1].voices[0].beats[0], drums.bars[2].voices[0].beats[0])
+    expect(edit.selectedRange.value).toBeNull()
+    expect(edit.selectedBars.value).toMatchObject({ startBar: 1, endBar: 2 })
+
+    expect(edit.removeBars()).toMatchObject({ ok: true, barIndex: 1, barCount: 2 })
+    expect(score.masterBars).toHaveLength(2)
+  })
+
+  it('and the KEY is armed by such a drag, or the fix never reaches it', () => {
+    // `canEditBars` is what `appliesTo` asks. The arrows and the length keys
+    // deliberately stay unarmed here: with no cursor and no note range they
+    // would swallow the key for nothing.
+    const drums = score.tracks[DRUMS].staves[0]
+    dragOver(drums.bars[1].voices[0].beats[0], drums.bars[2].voices[0].beats[0])
+
+    expect(edit.canEditBars.value).toBe(true)
+    expect(edit.canNavigate.value).toBe(false)
+    expect(edit.canChangeDuration.value).toBe(false)
+  })
+
+  it('and Ctrl+Insert goes before the first bar of such a drag too', () => {
+    const drums = score.tracks[DRUMS].staves[0]
+    dragOver(drums.bars[2].voices[0].beats[0], drums.bars[3].voices[0].beats[0])
+    expect(edit.insertBar()).toMatchObject({ ok: true, barIndex: 2 })
+    expect(score.masterBars).toHaveLength(5)
+  })
+
+  it('says how many bars went, since nothing on screen can', () => {
+    clickAt(beatAt(1, 0).notes[0])
+    expect(edit.removeBars().ok).toBe(true)
+    expect(edit.editMessage.value).toMatchObject({ kind: 'ok', text: 'Bar 2 deleted.' })
+
+    dragOver(beatAt(1, 0), beatAt(2, 3))
+    expect(edit.removeBars().ok).toBe(true)
+    expect(edit.editMessage.value.text).toBe('2 bars deleted (2 to 3).')
+  })
+
+  it('deletes every bar of a passage dragged as a real gesture', async () => {
+    // Driven as a whole gesture, coordinates included, because that is what the
+    // browser does and the event-only helper skips the mousedown entirely.
+    host.api.boundsLookup.staffSystems = fakeStaffSystems(
+      score.tracks[LEAD].staves[0].bars[0],
+    )
+    await host.api.dragOverBeats(
+      [beatAt(0, 0), beatAt(1, 0), beatAt(2, 3)],
+      { clientX: 160, clientY: 133 },
+    )
+    expect(edit.selectedRange.value, 'the range the drag built').toMatchObject({
+      startBar: 0,
+      endBar: 2,
+    })
+
+    const result = edit.removeBars()
+    expect(result).toMatchObject({ ok: true, barIndex: 0, barCount: 3 })
+    expect(score.masterBars).toHaveLength(1)
+  })
+
   it('deletes every bar of a dragged passage', () => {
     dragOver(beatAt(1, 0), beatAt(2, 3))
     const result = edit.removeBars()

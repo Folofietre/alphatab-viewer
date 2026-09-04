@@ -663,6 +663,19 @@ describe('the writing keys', () => {
     expect(remove.removeBars).toHaveBeenCalled()
   })
 
+  it('are armed by a drag that designated BARS but no notes', () => {
+    // The predicate the bar keys use is not the one the arrows use: a drag over
+    // empty bars, or over percussion, gives bars and nothing else.
+    const barsOnly = { ...idle, canEditBars: { value: true } }
+    for (const event of [key('Insert', { ctrl: true }), key('Delete', { ctrl: true })]) {
+      expect(resolve(event).appliesTo({ tagName: 'BUTTON' }, null, barsOnly)).toBe(true)
+    }
+    // And the arrows and the length keys stay out of the way in that state.
+    expect(resolve(key('ArrowRight')).appliesTo({ tagName: 'BUTTON' }, null, barsOnly)).toBe(false)
+    expect(resolve(key('Equal', { types: '+' })).appliesTo({ tagName: 'BUTTON' }, null, barsOnly))
+      .toBe(false)
+  })
+
   it('and both stand down with nothing designated, or in a text field', () => {
     for (const event of [key('Insert', { ctrl: true }), key('Delete', { ctrl: true })]) {
       const binding = resolve(event)
