@@ -2653,6 +2653,194 @@ describe('palm mute', () => {
   })
 })
 
+describe('harmonics', () => {
+  function beatAt(bar, index, track = LEAD) {
+    return score.tracks[track].staves[0].bars[bar].voices[0].beats[index]
+  }
+
+  it('writes the natural harmonic of the fret, and sounds it', () => {
+    const note = beatAt(0, 0).notes[0]
+    const before = note.realValue
+    clickAt(note)
+    host.previews = []
+
+    const result = edit.toggleHarmonic()
+    expect(result).toMatchObject({ ok: true, changed: true, noteCount: 1, harmonic: true })
+    // The node is the fret itself. Left at 0 it would sound the open string,
+    // which is the whole reason this is written rather than defaulted.
+    expect(note.harmonicValue).toBe(note.fret)
+    expect(note.realValue).toBeGreaterThan(before)
+    expect(edit.selectedNote.value.isNaturalHarmonic).toBe(true)
+    // A different pitch, so hearing it is the point.
+    expect(host.previews).toEqual([note])
+  })
+
+  it('and takes it off on the second press', () => {
+    const note = beatAt(0, 0).notes[0]
+    const before = note.realValue
+    clickAt(note)
+    edit.toggleHarmonic()
+
+    expect(edit.toggleHarmonic()).toMatchObject({ ok: true, harmonic: false })
+    expect(note.harmonicValue).toBe(0)
+    expect(note.realValue).toBe(before)
+    expect(edit.selectedNote.value.isNaturalHarmonic).toBe(false)
+  })
+
+  it('renders from the bar that changed and defers the midi', () => {
+    // The pitch moves but no tick does, so the scrub mapping is still right and
+    // the rebuild can wait for the next play - same as every other pitch change.
+    clickAt(beatAt(1, 0).notes[0])
+    host.renders = []
+    host.midiReloads = 0
+    host.midiStale = false
+
+    edit.toggleHarmonic()
+    expect(host.renders).toEqual([{ reuseViewport: true, firstChangedMasterBar: 1 }])
+    expect(host.midiReloads).toBe(0)
+    expect(host.midiStale).toBe(true)
+    expect(host.dirty).toBe(true)
+  })
+
+  it('writes the artificial harmonic the dialog chose', () => {
+    const note = beatAt(0, 0).notes[0]
+    const plain = note.realValue
+    clickAt(note)
+
+    // Two octaves: the fifth-fret node.
+    expect(edit.setHarmonic(5)).toMatchObject({ ok: true, changed: true, harmonic: true })
+    expect(note.harmonicValue).toBe(5)
+    expect(note.realValue).toBe(plain + 24)
+    expect(edit.selectedNote.value.isArtificialHarmonic).toBe(true)
+    // Never natural, whatever the node: every artificial harmonic here is a
+    // pinch, which is what was asked for.
+    expect(edit.selectedNote.value.isNaturalHarmonic).toBe(false)
+  })
+
+  it('and null takes it off again', () => {
+    const note = beatAt(0, 0).notes[0]
+    const plain = note.realValue
+    clickAt(note)
+    edit.setHarmonic(12)
+    expect(note.realValue).toBe(plain + 12)
+
+    expect(edit.setHarmonic(null)).toMatchObject({ ok: true, harmonic: false })
+    expect(note.realValue).toBe(plain)
+  })
+
+  it('the dialog offers seven intervals, all of them writable', () => {
+    const note = beatAt(0, 0).notes[0]
+    const plain = note.realValue
+    for (const choice of edit.harmonicSoundingChoices()) {
+      clickAt(note)
+      expect(edit.setHarmonic(choice.harmonicValue).ok, choice.label).toBe(true)
+      expect(note.realValue, choice.label).toBe(plain + choice.semitones)
+    }
+  })
+
+  it('and names the pitch it would sound, for the dialog label', () => {
+    // The one thing the dialog needs alphaTab for, so it comes from here.
+    expect(edit.noteNameForMidi(64)).toBe('E4')
+    expect(edit.noteNameForMidi(null)).toBe('')
+  })
+
+  it('acts on a whole dragged passage, sounding only its first beat', () => {
+    dragOver(beatAt(0, 0), beatAt(0, 3))
+    const count = edit.selectedRange.value.noteCount
+    host.previews = []
+    host.beatPreviews = []
+
+    expect(edit.toggleHarmonic()).toMatchObject({ ok: true, noteCount: count, harmonic: true })
+    for (const beat of score.tracks[LEAD].staves[0].bars[0].voices[0].beats) {
+      for (const note of beat.notes) expect(note.harmonicValue).toBe(note.fret)
+    }
+    // Forty notes at once is noise, so it plays the chord it starts on and
+    // nothing else - like the octave.
+    expect(host.previews).toEqual([])
+    expect(host.beatPreviews).toEqual([beatAt(0, 0)])
+  })
+
+  it('refuses a fret with no node, and says which frets have one', () => {
+    const note = beatAt(0, 0).notes[0]
+    note.fret = 1
+    clickAt(note)
+
+    const result = edit.toggleHarmonic()
+    expect(result.ok).toBe(false)
+    expect(note.harmonicValue).toBe(0)
+    expect(edit.editMessage.value.text).toMatch(/Fret 1 has no harmonic node/)
+    expect(edit.editMessage.value.text).toMatch(/12/)
+  })
+
+  it('and refuses the whole passage when one note is on such a fret', () => {
+    const notes = [beatAt(0, 0).notes[0], beatAt(0, 1).notes[0]]
+    notes[1].fret = 2
+    dragOver(beatAt(0, 0), beatAt(0, 3))
+
+    expect(edit.toggleHarmonic().ok).toBe(false)
+    // All or nothing: the one good note is left alone too, so the passage never
+    // ends up half done.
+    expect(notes[0].harmonicValue).toBe(0)
+  })
+
+  it('refuses percussion, which has no string to sound one on', () => {
+    const drums = beatAt(0, 0, DRUMS)
+    host.api.beatMouseDown.emit(drums)
+    host.api.noteMouseDown.emit(drums.notes[0])
+
+    expect(edit.toggleHarmonic().ok).toBe(false)
+    expect(edit.setHarmonic(12).ok).toBe(false)
+  })
+
+  it('refuses with nothing selected, and while playing', () => {
+    edit.clearSelection()
+    expect(edit.toggleHarmonic().ok).toBe(false)
+
+    clickAt(beatAt(0, 0).notes[0])
+    player.isPlaying.value = true
+    expect(edit.toggleHarmonic().ok).toBe(false)
+    expect(edit.setHarmonic(12).ok).toBe(false)
+    expect(edit.editMessage.value.text).toMatch(/Pause playback/)
+    expect(beatAt(0, 0).notes[0].harmonicValue).toBe(0)
+  })
+
+  it('undoes back to the pitch it had', () => {
+    const note = beatAt(0, 0).notes[0]
+    const plain = note.realValue
+    clickAt(note)
+    edit.setHarmonic(7)
+    expect(note.realValue).toBe(plain + 19)
+
+    expect(edit.undo().ok).toBe(true)
+    expect(note.realValue).toBe(plain)
+    expect(note.harmonicValue).toBe(0)
+    expect(host.dirty).toBe(false)
+  })
+
+  it('and the undo labels say which of the four it was', () => {
+    const note = beatAt(0, 0).notes[0]
+    clickAt(note)
+    edit.toggleHarmonic()
+    expect(edit.undoLabel.value).toBe('Natural harmonic')
+    edit.toggleHarmonic()
+    expect(edit.undoLabel.value).toBe('Remove harmonic')
+
+    edit.setHarmonic(12)
+    expect(edit.undoLabel.value).toBe('Artificial harmonic')
+    edit.setHarmonic(null)
+    expect(edit.undoLabel.value).toBe('Remove harmonic')
+  })
+
+  it('the dialog flag is off until something opens it', () => {
+    expect(edit.harmonicDialog.value).toBe(false)
+    edit.openHarmonicDialog()
+    expect(edit.harmonicDialog.value).toBe(true)
+    // The dialog itself closes it through the model, so nothing here resets it -
+    // this suite has to, or the next test starts with it open.
+    edit.harmonicDialog.value = false
+  })
+})
+
 describe('the dot', () => {
   function beatAt(bar, index, track = LEAD) {
     return score.tracks[track].staves[0].bars[bar].voices[0].beats[index]

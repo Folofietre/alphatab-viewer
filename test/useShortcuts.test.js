@@ -308,8 +308,9 @@ describe('redo', () => {
     expect(resolve(key('KeyZ', { ctrl: true, shift: true }))?.label).toMatch(/Redo/)
   })
 
-  it('leaves a bare Y alone', () => {
-    expect(redoKey({})).toBeNull()
+  it('does not answer a bare Y, which is the harmonic', () => {
+    expect(redoKey({})?.label).toMatch(/harmonic/)
+    expect(redoKey({ shift: true })?.label).toMatch(/harmonic/)
   })
 
   it('matches the CHARACTER, which matters most for Y', () => {
@@ -542,6 +543,16 @@ describe('the generated help', () => {
     expect(where.get('Write a fret at the cursor')).toBe('Writing')
     expect(where.get('Dotted note')).toBe('Writing')
     expect(where.get('Delete this bar')).toBe('Writing')
+  })
+
+  it('shows the two harmonics as separate rows, told apart by Shift', () => {
+    // Not folded together, unlike P and M: they are two different actions on one
+    // letter, and the keycap is the only thing that says which.
+    const rows = shortcutHelp().flatMap((s) => s.rows)
+    const natural = rows.find((r) => r.label === 'Natural harmonic on the selection')
+    const artificial = rows.find((r) => r.label === 'Artificial harmonic settings')
+    expect(natural.keys).toEqual(['Y'])
+    expect(artificial.keys).toEqual(['Shift + Y'])
   })
 
   it('and every row is in exactly one group', () => {
@@ -821,13 +832,17 @@ describe('binding options', () => {
     // there is no cursor, and so do the writing keys, so they need the edit
     // state. Everything else looks at the focused element only and must not
     // break when the rest is absent.
+    //
+    // Y is in this set for both of the actions it carries: with Ctrl it redoes
+    // and needs the player, without it writes a harmonic and needs the edit
+    // state. Either way it must consult something, so it belongs here.
     const NEEDS_PLAYER = new Set(['s', 'z', 'y', 'a'])
     const NEEDS_EDIT = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'])
     // The three writing keys, which need a cursor: the digits, the two duration
     // keys, and Enter - whose FIRST binding is the checkbox toggle and needs
     // nothing.
     // The bare-character keys that need something designated: the length keys,
-    // and the two letters that palm mute.
+    // the two letters that palm mute, and Y for the harmonics.
     const WRITES = new Set(['+', '-', '.', 'p', 'm'])
     for (const binding of BINDINGS) {
       const name = String(binding.code ?? binding.key)

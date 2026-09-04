@@ -228,6 +228,9 @@
     </button>
 
     <HelpDialog />
+    <!-- Mounted here rather than in the panel that also opens it, because
+         Shift+Y opens it from the keyboard with no panel involved. -->
+    <HarmonicDialog v-model="harmonicDialog" />
   </div>
 </template>
 
@@ -249,6 +252,7 @@ import FileDropzone from '@/components/FileDropzone.vue'
 import FileMenu from '@/components/FileMenu.vue'
 import BarsPerRow from '@/components/BarsPerRow.vue'
 import HelpDialog from '@/components/HelpDialog.vue'
+import HarmonicDialog from '@/components/HarmonicDialog.vue'
 
 const { loadFile, clearScore, isScoreLoaded, isDirty, scoreInfo, fileName, loadError } =
   usePlayer()
@@ -260,6 +264,7 @@ const {
   undo, canUndo, undoLabel, undoDepth,
   redo, canRedo, redoLabel, redoDepth,
   download,
+  harmonicDialog,
 } = useScoreEdit()
 
 // Saving from the menu blurs first, for the same reason Ctrl+S does: the edit

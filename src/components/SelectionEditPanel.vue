@@ -117,6 +117,22 @@
         <div class="row">
           <button
             type="button"
+            :disabled="!canEdit"
+            title="Natural harmonic on every note in the selection, or take them all off. Refused when a fret has no node."
+            @click="toggleHarmonic"
+          >Harmonic</button>
+          <button
+            type="button"
+            :disabled="!canEdit"
+            title="Choose the note an artificial harmonic should sound, for every note in the selection"
+            @click="openHarmonicDialog"
+          >Artificial...</button>
+          <kbd title="Y for the natural harmonic, Shift and Y for the artificial one">Y / &#8679; + Y</kbd>
+        </div>
+
+        <div class="row">
+          <button
+            type="button"
             class="danger"
             :disabled="!canEdit"
             title="Replace every note in the selection with silence of the same length"
@@ -171,7 +187,9 @@
           <template v-if="selectedNote.barIndex !== null">bar {{ selectedNote.barIndex + 1 }},</template>
           string {{ selectedNote.string }}/{{ selectedNote.stringCount }},
           fret {{ selectedNote.fret }}<template v-if="selectedNote.isPalmMute">,
-          palm muted</template>
+          palm muted</template><template v-if="selectedNote.isNaturalHarmonic">,
+          natural harmonic</template><template v-else-if="selectedNote.isArtificialHarmonic">,
+          artificial harmonic</template>
         </p>
 
         <!-- Move it across the neck: same note, different fingering. -->
@@ -238,6 +256,27 @@
             @click="toggleSelectedPalmMute"
           >Palm mute</button>
           <kbd title="Either letter: a palm mute is written P.M. above the staff">P or M</kbd>
+        </div>
+
+        <!-- The other technique that changes what is heard without changing the
+             fingering. The natural one is a toggle, since the fret decides the
+             node; the artificial one has an interval to choose, so it asks. -->
+        <div class="row">
+          <button
+            type="button"
+            :disabled="!canEdit"
+            :class="{ on: selectedNote.isNaturalHarmonic }"
+            title="The natural harmonic of this fret, or take it off. Refused on a fret with no node."
+            @click="toggleHarmonic"
+          >Harmonic</button>
+          <button
+            type="button"
+            :disabled="!canEdit"
+            :class="{ on: selectedNote.isArtificialHarmonic }"
+            title="Choose the note this artificial harmonic should sound"
+            @click="openHarmonicDialog"
+          >Artificial...</button>
+          <kbd title="Y for the natural harmonic, Shift and Y for the artificial one">Y / &#8679; + Y</kbd>
         </div>
 
         <div class="row">
@@ -415,12 +454,15 @@ const selectionHelp = computed(() =>
     ? 'String and Pitch apply to every note at once, or to none: if one would run off the neck, the whole selection is refused. ' +
       'Shorter, Longer and Dot act on every BEAT the passage covers, so on every note of a chord - and not on a rest inside it, which belongs to no note. ' +
       'Octave is the exception, and does what it can: a note the tuning cannot reach stays at the pitch it had rather than being moved to a wrong one. ' +
+      'Harmonic and Artificial are all or nothing, like String and Pitch: a fret with no node refuses the whole selection and names the frets that have one. ' +
       'Delete bar removes every bar the passage covers, on every track, and is the only way to name more than one. ' +
       'Drag on the score to change the range, or click a note to leave it.'
     : 'String keeps the pitch and only moves the fingering, so it stays silent. ' +
       'Pitch moves the note by a semitone on the same string, and plays it. ' +
       'Octave moves it twelve semitones and re-fingers it, changing string when the fret alone cannot reach, and refuses when no string can. ' +
       'Palm mute cuts the note short without moving where it starts, and draws P.M. above the staff. ' +
+      'Harmonic sounds the node of the fret the note is already on, so it only works where that fret has one. ' +
+      'Artificial asks which note to sound instead, and is written as a pinch harmonic. ' +
       'Silence removes it, leaving a rest of the same length. ' +
       'Insert bar and Delete bar act on the whole bar this note is in, on every track at once. ' +
       'Everything here is one Ctrl+Z away.',
@@ -439,6 +481,8 @@ const {
   nudgeSelectedString,
   shiftSelectedOctave,
   toggleSelectedPalmMute,
+  toggleHarmonic,
+  openHarmonicDialog,
   deleteSelection,
   changeDuration,
   toggleDot,

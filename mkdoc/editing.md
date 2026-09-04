@@ -1105,6 +1105,66 @@ they carry the digits' strictness: down for anything that owns typing keys, and
 down unless a NOTE is designated. A cursor on an empty string is not enough,
 which is what separates `canEditNotes` from `canWriteNote`.
 
+## Harmonics: the node is a second field beside the fret
+
+`note.harmonicType` says which kind, and `note.harmonicValue` says **where the
+node is**. The second one is the trap, and it is a wrong-value trap rather than
+a missing-value one:
+
+```js
+Note.harmonicPitch : maps harmonicValue -> semitones
+Natural : realValue = harmonicPitch + stringTuning     // the fret is absent
+others  : realValue = fret + harmonicPitch + stringTuning
+```
+
+A natural harmonic written with `harmonicValue` left at 0 gets 0 semitones, and
+because the fret is absent from its formula the note then sounds the **open
+string** - a plausible pitch, silently wrong, with nothing to catch it. So
+`toggleNaturalHarmonic` sets `harmonicValue = note.fret`, which is also what
+every imported harmonic in the fixture carries.
+
+**Not every fret has a node.** alphaTab's table answers 0 outside these:
+
+```
+3 4 5 6 7 8 9 10 12 14 15 16 17 19 22 23 24
+```
+
+Nothing at 0, 1, 2, 11, 13, 18, 20 or 21. On those the natural harmonic is
+**refused** rather than written as a note that would sound the open string, and
+the refusal names the frets that work. All or nothing across a passage, for the
+frets' reason: a half-applied selection is worse than none. `HARMONIC_FRETS` is
+the list, and a test re-derives it from `harmonicPitch` itself so a library change
+shows up as a failure rather than as a wrong pitch.
+
+**The artificial one is always a pinch.** `HarmonicType` has seven values and
+Guitar Pro offers most of them in a dropdown; the choice here is that the dialog
+does not, because a pinch is what gets written in practice and a select with one
+useful entry is not a choice. What the dialog does ask is which note to sound,
+which is the node:
+
+| Node | Interval | Semitones |
+| --- | --- | --- |
+| 12 | octave | +12 |
+| 7 | octave + fifth | +19 |
+| 5 | two octaves | +24 |
+| 4 | two octaves + major third | +28 |
+| 3 | two octaves + fifth | +31 |
+| 2.7 | two octaves + minor seventh | +34 |
+| 2.4 | three octaves | +36 |
+
+One entry per distinct interval, each with the lowest node that produces it:
+alphaTab maps several positions to the same offset (8, 17 and 22 all give three
+octaves), so offering one of each is the useful list rather than the complete one.
+The fractional nodes are between frets, which is why they are not integers.
+
+Guitar Pro's "right hand fret" is not a field here either: it is
+`note.fret + harmonicValue`, so the interval already decides it. The dialog shows
+it read-only beside the left hand fret, which is how a player reads the pair.
+
+**No `finish()`.** `realValue` is a getter over the node table, so the pitch is
+right the instant the two fields are, exactly as with `setNoteFret`. And `onPlay`
+rather than `now`: the pitch moves, no tick does.
+
 ## Sounding a note, and when the midi gets rebuilt
 
 `api.playNote(note)` generates a **one-note** midi file from the current model
@@ -1125,7 +1185,7 @@ to feel responsive would have truncated it. So edits declare one of two flavours
 | Flavour | Used by | Why |
 | --- | --- | --- |
 | `now` | tempo, durations, an inserted rest, an added bar | They change **timing**, and the loaded midi is what maps a scrub position to a tick. A stale one would make the transport disagree with the score. |
-| `onPlay` | frets, strings, transposition, retuning, a written note, palm mute | Marked stale, rebuilt when playback starts. Costs nothing while editing, and never cuts a preview. |
+| `onPlay` | frets, strings, transposition, retuning, a written note, palm mute, harmonics | Marked stale, rebuilt when playback starts. Costs nothing while editing, and never cuts a preview. |
 
 **A rebuild also drops the loop range**, which is alphaTab's doing rather than
 ours: the range is a field of the sequencer state, and loading a midi replaces

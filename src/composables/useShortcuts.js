@@ -453,6 +453,39 @@ export const BINDINGS = [
     appliesTo: (el, _player, edit) => !ownsTypingKeys(el) && edit.canEditNotes.value,
     run: (_player, _event, edit) => edit.toggleSelectedPalmMute(),
   },
+  // "Y": the natural harmonic of the fret the note is on. "Shift+Y": the dialog
+  // for an artificial one.
+  //
+  // Both declare `shift` explicitly, and that is what separates them - shift is
+  // opt-in in `matchesModifiers`, so a bare `key: 'y'` would answer Shift+Y too
+  // and the dialog would never open. Same arrangement as Alt+arrow against
+  // Alt+Shift+arrow.
+  //
+  // Neither collides with redo on Ctrl+Y: the modifier match is exact, so these
+  // require ctrl and meta to be UP, and that binding requires ctrl down.
+  //
+  // `key` rather than `code`, and it matters more here than anywhere: on a German
+  // QWERTZ layout Y sits where QWERTY puts Z, so a code would move the harmonic
+  // onto the undo key.
+  //
+  // No repeat on the toggle, for the reason palm mute has none. No repeat on the
+  // dialog either - it would reopen it on every tick.
+  {
+    key: 'y',
+    label: 'Natural harmonic on the selection',
+    group: 'The selected note',
+    modifiers: { shift: false },
+    appliesTo: (el, _player, edit) => !ownsTypingKeys(el) && edit.canEditNotes.value,
+    run: (_player, _event, edit) => edit.toggleHarmonic(),
+  },
+  {
+    key: 'y',
+    label: 'Artificial harmonic settings',
+    group: 'The selected note',
+    modifiers: { shift: true },
+    appliesTo: (el, _player, edit) => !ownsTypingKeys(el) && edit.canEditNotes.value,
+    run: (_player, _event, edit) => edit.openHarmonicDialog(),
+  },
   // ---- writing -------------------------------------------------------------
   //
   // The keys that put something into the score, and the first ones here that are

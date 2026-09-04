@@ -23,6 +23,10 @@ import {
   barFill,
   shiftNotesOctave,
   togglePalmMute,
+  toggleNaturalHarmonic,
+  setArtificialHarmonic,
+  harmonicSoundingChoices,
+  HARMONIC_FRETS,
   DURATION_LONGER,
   DURATION_SHORTER,
   addTrack,
@@ -451,6 +455,13 @@ describe.skipIf(scores.length === 0)('invariants on real scores', () => {
               const notes = [...stringedNotes(staff)]
               if (notes.length === 0) continue
               const before = notes.map((n) => n.calculateRealValue(false, false))
+              // How many strings each beat was doubling up on already.
+              const beatStrings = new Map(
+                [...new Set(notes.map((n) => n.beat))].map((beat) => {
+                  const strings = beat.notes.map((n) => n.string)
+                  return [beat, strings.length - new Set(strings).size]
+                }),
+              )
 
               const result = shiftNotesOctave(notes, direction)
               if (!result.ok) continue
@@ -463,10 +474,18 @@ describe.skipIf(scores.length === 0)('invariants on real scores', () => {
                 expect(note.fret).toBeLessThanOrEqual(24)
               })
 
-              // And no beat ever ends up with two notes on one string.
-              for (const beat of new Set(notes.map((n) => n.beat))) {
+              // And no beat GAINS two notes on one string.
+              //
+              // Gains, not "has": a real file can arrive with a beat that
+              // already holds two notes on one string - measured, one bass beat
+              // of "Ensnare the behemoth" carries 1/2 and 1/7 together - and
+              // asserting the property outright made the input's problem look
+              // like this edit's. What the octave owes is not to create one.
+              for (const [beat, before] of beatStrings) {
                 const strings = beat.notes.map((n) => n.string)
-                expect(new Set(strings).size).toBe(strings.length)
+                const clashes = strings.length - new Set(strings).size
+                expect(clashes, `bar ${beat.voice.bar.index} beat ${beat.index}`)
+                  .toBeLessThanOrEqual(before)
               }
             }
           }
@@ -515,6 +534,73 @@ describe.skipIf(scores.length === 0)('invariants on real scores', () => {
             )
           }
         }
+      })
+
+      it('a harmonic moves the pitch by the interval it names, and comes back', () => {
+        const score = loadFile(file)
+        const staff = stringedTracks(score)[0]?.staves?.find((s) => s.isStringed)
+        if (!staff) return
+
+        // Only notes whose fret has a node: everything else is refused, which
+        // the next check covers.
+        const notes = [...stringedNotes(staff)]
+          .filter((n) => HARMONIC_FRETS.includes(n.fret) && n.harmonicValue === 0)
+          .slice(0, 12)
+        if (notes.length === 0) return
+
+        const was = notes.map((n) => ({ real: n.realValue, type: n.harmonicType, value: n.harmonicValue }))
+        // The pitch to add an interval TO, which is the fretted one and not
+        // `realValue` - the two differ on a note that already has a harmonic,
+        // and adding to the second would compound them.
+        const plain = notes.map((n) => n.calculateRealValue(false, false))
+
+        // Natural: the node is the fret, and the pitch must actually move. A
+        // `harmonicValue` left at 0 would sound the open string, which is a
+        // wrong value rather than a missing one.
+        const natural = toggleNaturalHarmonic(notes, settings)
+        expect(natural.ok).toBe(true)
+        expect(natural.harmonic).toBe(true)
+        for (const note of notes) {
+          expect(note.harmonicValue, `string ${note.string} fret ${note.fret}`).toBe(note.fret)
+          expect(note.harmonicType).toBe(alphaTab.model.HarmonicType.Natural)
+        }
+        natural.undo()
+        expect(notes.map((n) => ({ real: n.realValue, type: n.harmonicType, value: n.harmonicValue })))
+          .toEqual(was)
+
+        // Artificial: every interval the dialog offers, exactly as advertised,
+        // and always a pinch.
+        for (const choice of harmonicSoundingChoices()) {
+          const applied = setArtificialHarmonic(notes, choice.harmonicValue, settings)
+          expect(applied.ok, choice.label).toBe(true)
+          notes.forEach((note, i) => {
+            expect(note.harmonicType, choice.label).toBe(alphaTab.model.HarmonicType.Pinch)
+            expect(note.realValue, `${choice.label} on ${note.string}/${note.fret}`)
+              .toBe(plain[i] + choice.semitones)
+          })
+          applied.undo()
+          expect(notes.map((n) => ({ real: n.realValue, type: n.harmonicType, value: n.harmonicValue })), choice.label)
+            .toEqual(was)
+        }
+      })
+
+      it('and a fret with no node is refused, on every note of the batch', () => {
+        const score = loadFile(file)
+        const staff = stringedTracks(score)[0]?.staves?.find((s) => s.isStringed)
+        if (!staff) return
+
+        const bad = [...stringedNotes(staff)].find((n) => !HARMONIC_FRETS.includes(n.fret))
+        const good = [...stringedNotes(staff)].find(
+          (n) => HARMONIC_FRETS.includes(n.fret) && n.harmonicValue === 0,
+        )
+        if (!bad || !good) return
+
+        const before = { real: good.realValue, value: good.harmonicValue }
+        const result = toggleNaturalHarmonic([good, bad], settings)
+        expect(result.ok).toBe(false)
+        expect(result.changed).toBe(false)
+        // All or nothing: the note that COULD take one is left alone too.
+        expect({ real: good.realValue, value: good.harmonicValue }).toEqual(before)
       })
 
       // ---- the writing tier -----------------------------------------------

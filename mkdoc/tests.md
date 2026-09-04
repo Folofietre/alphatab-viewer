@@ -69,6 +69,14 @@ with the coordinates that make the press place a cursor) rather than from the
 The lesson generalises: a double that is safer than the real thing hides exactly
 the bugs worth finding.
 
+A real-score invariant can also be **too strong**, and the octave sweep was: it
+asserted that no beat holds two notes on one string after the shift, which one
+bass beat of a real file already broke before any edit ran - it arrives carrying
+1/2 and 1/7 together. A failure there said "the octave created a collision" when
+the truth was "the file has one". It now records the count per beat beforehand and
+asserts the edit does not RAISE it. The general form: a postcondition on real
+input has to be a delta, or the input's own defects come back as yours.
+
 `usePlayer.test.js` tests exactly one function, and the reason is the shape of
 the bug it was written for. Restoring what a midi rebuild dropped is three
 assignments whose ORDER is the whole content - the range has to go back before

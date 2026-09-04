@@ -230,6 +230,23 @@ cuts the note short without moving where it starts, so the timing of everything
 else is untouched. Pressing it again takes the mute off, bracket included.
 Percussion is refused: there is no string to mute.
 
+**`Y` writes the natural harmonic** of the fret the note is already on, and
+`Shift+Y` opens the artificial-harmonic dialog. Both act on one note or on a whole
+dragged passage.
+
+The natural one is a toggle with nothing to ask: the fret decides the node. It
+only works where that fret HAS one - 3, 4, 5, 6, 7, 8, 9, 10, 12, 14 to 17, 19,
+and 22 to 24 - and on any other fret it refuses and names the ones that work,
+rather than writing a harmonic that would sound the open string. Across a
+passage it is all or nothing, like the frets and the strings.
+
+The artificial one has a choice in it, which is why it asks: which note it should
+sound, from the octave up to three octaves. It is written as a pinch harmonic,
+the one Guitar Pro's type dropdown is usually left on. The dialog shows the left
+and right hand frets as read-outs, because the interval already decides where the
+picking hand goes, and it can take an existing harmonic back off. Percussion is
+refused, again for want of a string.
+
 ## Moving around the score
 
 **Clicking an empty string puts a cursor there.** A click on a note selects it,

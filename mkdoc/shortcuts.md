@@ -129,6 +129,24 @@ putting them side by side, with a small "or" between: side by side, the widest o
 them set the width of the whole keycap column and pushed every description in the
 table away from its keys.
 
+## One key, two harmonics
+
+`Y` writes the natural harmonic, `Shift+Y` opens the artificial one's dialog, and
+what keeps them apart is that **both declare `shift`**. Shift is opt-in in
+`matchesModifiers`, so a bare `key: 'y'` would answer `Shift+Y` too and the dialog
+would never open - the same arrangement `Alt+arrow` and `Alt+Shift+arrow` already
+use.
+
+Neither collides with `Ctrl+Y`: the modifier match is exact, so the harmonics
+require ctrl and meta to be up and redo requires ctrl down. That the same letter
+carries a global action and an editing one is also why `Y` is in both key sets of
+the "consults only what it declares" test: with Ctrl it needs the player, without
+it needs the edit state.
+
+`key` rather than `code`, and it matters more here than anywhere else in the
+table: on a German QWERTZ layout the key labelled Y sits where QWERTY puts Z, so a
+code would have put the harmonic on the undo key.
+
 ## One key, two sizes of delete
 
 `Delete` alone replaces the selection with silence; `Ctrl+Delete` removes the

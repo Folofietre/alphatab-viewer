@@ -29,8 +29,12 @@ import {
   shiftNoteString,
   shiftNotesFret,
   shiftNotesOctave,
+  harmonicSoundingChoices,
   newTrackTunings,
+  noteNameForMidi,
+  setArtificialHarmonic,
   shiftNotesString,
+  toggleNaturalHarmonic,
   tempoInfo,
   togglePalmMute,
   transposeTrackByFrets,
@@ -224,6 +228,13 @@ const selectedTrackIndex = ref(0)
 // Flat, plain description of the selected note. shallowRef because the value is
 // replaced wholesale, never mutated in place.
 const selectedNote = shallowRef(null)
+
+// Whether the artificial-harmonic dialog is showing.
+//
+// Module level rather than a ref in the component that renders it, unlike the
+// new-track dialog: this one is opened by a KEY, so the flag has to be reachable
+// from the binding table, which only ever sees this composable.
+const harmonicDialog = ref(false)
 
 // The last thing an edit had to say. Refusals land here with their reason; a
 // successful edit clears it. Nothing else writes it, so a message on screen is
@@ -2175,6 +2186,66 @@ export function useScoreEdit() {
     })
   }
 
+  // "Y": the natural harmonic of the fret the note is on.
+  //
+  // The node is the fret itself, so this can only be written where a node
+  // exists - and where none does, it is refused with the frets that have one.
+  // See `toggleNaturalHarmonic`.
+  function toggleHarmonic() {
+    return applyHarmonic(
+      (notes) => toggleNaturalHarmonic(notes, scoreEditHost.api?.settings),
+      (result) => (result.harmonic ? 'Natural harmonic' : 'Remove harmonic'),
+    )
+  }
+
+  // What the dialog writes: an artificial harmonic at the node chosen, or
+  // `null` to take it off.
+  function setHarmonic(value) {
+    return applyHarmonic(
+      (notes) => setArtificialHarmonic(notes, value, scoreEditHost.api?.settings),
+      (result) => (result.harmonic ? 'Artificial harmonic' : 'Remove harmonic'),
+    )
+  }
+
+  // The half both share: the target, the propagation and the preview.
+  //
+  // `onPlay` rather than `now`, like every other pitch change: a harmonic moves
+  // what is heard without moving a tick, so a scrub position still maps
+  // correctly. And no `finish()` - `realValue` is a getter over the node table,
+  // so the pitch is already right, which is the same reason `setNoteFret` needs
+  // none.
+  function applyHarmonic(write, label) {
+    if (!canEdit.value) return refusePlayback()
+
+    const isRange = rangeNotes.length > 0
+    const notes = isRange ? rangeNotes : selected ? [selected] : []
+    if (notes.length === 0) return refused('Click a note in the score first.')
+
+    const trackIndex = isRange
+      ? (selectedRange.value?.trackIndex ?? null)
+      : (selectedNote.value?.trackIndex ?? null)
+    const bar = isRange
+      ? (selectedRange.value?.startBar ?? null)
+      : (selectedNote.value?.barIndex ?? null)
+
+    const result = write(notes)
+    if (result.changed) {
+      if (typeof trackIndex === 'number') scoreEditHost.syncTrack(trackIndex)
+      refreshSelection()
+      refreshSelectionRects()
+      // The pitch changed, so it sounds. One note, or the chord a range starts
+      // on, like the octave.
+      if (isRange) scoreEditHost.previewBeat(notes[0]?.beat)
+      else scoreEditHost.previewNote(selected)
+    }
+    return propagate(result, {
+      render: true,
+      midi: 'onPlay',
+      firstChangedBar: bar,
+      label: label(result),
+    })
+  }
+
   // Re-read the selected note after an edit that may have moved it, and bring
   // the cursor with it.
   //
@@ -2401,6 +2472,16 @@ export function useScoreEdit() {
     nudgeSelectedString,
     shiftSelectedOctave,
     toggleSelectedPalmMute,
+    toggleHarmonic,
+    setHarmonic,
+    // The dialog's own state and the list it offers. `noteNameForMidi` is here so
+    // the dialog can label a pitch without importing alphaTab.
+    harmonicDialog,
+    openHarmonicDialog: () => {
+      harmonicDialog.value = true
+    },
+    harmonicSoundingChoices,
+    noteNameForMidi,
     deleteSelection,
 
     // undo / redo

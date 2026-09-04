@@ -324,7 +324,30 @@ export function describeNote(note) {
     noteName: alphaTab.model.Tuning.getTextForTuning(note.realValue, true),
     midiKey: note.realValue,
     isPalmMute: !!note.isPalmMute,
+    // The plain fretted pitch, with no harmonic applied. `midiKey` above is
+    // `realValue`, which for a harmonic is already raised - so anything that
+    // needs to ADD an interval has to start from this one instead. Same reason
+    // the octave planner works from `fret + tuning` rather than `realValue`.
+    frettedMidiKey: note.isStringed ? note.calculateRealValue(false, false) : null,
+    // Which harmonic, if any, and where its node is. `harmonicValue` is a fret
+    // position for a natural one and a distance in frets for the others.
+    harmonicType: note.harmonicType,
+    harmonicValue: note.harmonicValue,
+    isNaturalHarmonic: note.harmonicType === alphaTab.model.HarmonicType.Natural,
+    isArtificialHarmonic:
+      note.harmonicType !== alphaTab.model.HarmonicType.None &&
+      note.harmonicType !== alphaTab.model.HarmonicType.Natural,
   }
+}
+
+// A midi key as a note name: 40 -> "E2", 64 -> "E4" (verified).
+//
+// Exported so a component can label a pitch without importing alphaTab, which
+// is the rule this module exists to keep: nothing outside it touches the
+// library's model.
+export function noteNameForMidi(key) {
+  if (!Number.isFinite(key)) return ''
+  return alphaTab.model.Tuning.getTextForTuning(Math.round(key), true)
 }
 
 // The tuning choices to offer for a staff: alphaTab's presets for that string
@@ -1125,6 +1148,194 @@ export function togglePalmMute(notes, settings) {
       swap()
       rederive()
     },
+  })
+}
+
+// ---------------------------------------------------------------------------
+// 7g. Harmonics
+// ---------------------------------------------------------------------------
+//
+// Two operations on one field pair, and the pair is the whole subject:
+// `note.harmonicType` says which kind, `note.harmonicValue` says WHERE on the
+// string the node is - as a fret position, which alphaTab turns into a number of
+// semitones through a table (`Note.harmonicPitch`).
+//
+// The two kinds compute their pitch differently, and that difference is pitfall
+// 4 seen from the inside:
+//
+//   Natural : realValue = harmonicPitch + stringTuning   <- THE FRET IS IGNORED
+//   anything else : realValue = fret + stringTuning + harmonicPitch
+//
+// So a natural harmonic sounds the open string's node whatever fret is written,
+// which is why every fret operation in this file refuses one. An artificial
+// harmonic sounds the fretted note raised by the node's interval, which is what
+// makes "sounding note" a meaningful choice for it and not for the other.
+
+// The semitone offset alphaTab gives each node, read off `Note.harmonicPitch`
+// rather than transcribed from theory.
+//
+// A test re-derives this from alphaTab itself, so an upstream change to that
+// table fails rather than drifting silently past us.
+const HARMONIC_OFFSETS = new Map([
+  [12, 12], // one octave, the twelfth fret
+  [7, 19], // an octave and a fifth
+  [5, 24], // two octaves
+  [4, 28], // two octaves and a major third
+  [3, 31], // two octaves and a fifth
+  [2.7, 34], // two octaves and a minor seventh
+  [2.4, 36], // three octaves
+])
+
+// Which whole frets have a node at all, computed from the same table.
+//
+// Nothing below the third fret, and nothing at 11, 13, 18, 20 or 21: alphaTab
+// answers 0 semitones there, which for a NATURAL harmonic would sound the open
+// string. That is a wrong value rather than a missing one, so it is refused.
+export const HARMONIC_FRETS = [3, 4, 5, 6, 7, 8, 9, 10, 12, 14, 15, 16, 17, 19, 22, 23, 24]
+
+// The intervals an artificial harmonic can sound, for the dialog.
+//
+// One entry per distinct offset, each with the LOWEST node that produces it -
+// alphaTab's table maps several positions to the same interval (8, 17 and 22 all
+// give three octaves), and offering one of each is the useful list rather than
+// the complete one.
+//
+// `frets` is what Guitar Pro calls the right-hand fret, as a distance: the
+// dialog shows the absolute fret by adding the note's own.
+export function harmonicSoundingChoices() {
+  return [
+    { harmonicValue: 12, frets: 12, semitones: 12, label: 'Octave' },
+    { harmonicValue: 7, frets: 7, semitones: 19, label: 'Octave + fifth' },
+    { harmonicValue: 5, frets: 5, semitones: 24, label: 'Two octaves' },
+    { harmonicValue: 4, frets: 4, semitones: 28, label: 'Two octaves + major third' },
+    { harmonicValue: 3, frets: 3, semitones: 31, label: 'Two octaves + fifth' },
+    { harmonicValue: 2.7, frets: 2.7, semitones: 34, label: 'Two octaves + minor seventh' },
+    { harmonicValue: 2.4, frets: 2.4, semitones: 36, label: 'Three octaves' },
+  ]
+}
+
+// Every note of the batch that has no node at its fret, for the refusal.
+function withoutHarmonicNode(notes) {
+  return notes.filter((note) => !HARMONIC_FRETS.includes(note.fret))
+}
+
+// 7g-1. The natural harmonic, which is the fret's own node.
+//
+// `harmonicValue` is set to the note's FRET, and that is not a formality: left
+// at 0 the offset is 0 and the note would sound the open string. The fixture's
+// imported harmonics all carry `harmonicValue === fret`, which is what this
+// reproduces.
+//
+// All or nothing, like the frets and unlike the octave. The octave's best-effort
+// exception rests on "not moving keeps a right value", and that holds here too -
+// but an octave is meant as a passage operation while a harmonic is a marking on
+// a note, so a partial answer would be a different thing from what was asked.
+// The refusal says which notes block and where the nodes are.
+export function toggleNaturalHarmonic(notes, settings) {
+  const list = [...new Set(notes ?? [])]
+  if (list.length === 0) return refused('No notes selected.')
+
+  const unstringed = list.filter((note) => !note.isStringed)
+  if (unstringed.length > 0) {
+    return refused(
+      list.length === 1
+        ? 'That note has no string: percussion cannot carry a harmonic.'
+        : `${unstringed.length} of these ${list.length} notes have no string.`,
+    )
+  }
+
+  const natural = alphaTab.model.HarmonicType.Natural
+  const on = !list.every((note) => note.harmonicType === natural)
+
+  if (on) {
+    const blocked = withoutHarmonicNode(list)
+    if (blocked.length > 0) {
+      const frets = HARMONIC_FRETS.join(', ')
+      return refused(
+        list.length === 1
+          ? `Fret ${blocked[0].fret} has no harmonic node. The frets that do: ${frets}.`
+          : `${blocked.length} of these ${list.length} notes are on a fret with no harmonic node. The frets that do: ${frets}.`,
+      )
+    }
+  }
+
+  const entries = []
+  for (const note of list) {
+    entries.push({ target: note, key: 'harmonicType', value: note.harmonicType })
+    entries.push({ target: note, key: 'harmonicValue', value: note.harmonicValue })
+  }
+  const undo = makeSwap(entries)
+  for (const note of list) {
+    note.harmonicType = on ? natural : alphaTab.model.HarmonicType.None
+    note.harmonicValue = on ? note.fret : 0
+  }
+
+  return applied({ noteCount: list.length, harmonic: on, undo })
+}
+
+// 7g-2. The artificial harmonic, which is the fretted note raised by a node.
+//
+// Always PINCH, which is a decision rather than a limitation: Guitar Pro's
+// dialog offers tap, pinch, semi and feedback under one heading, and the only one
+// wanted here is the pinch. `harmonicPitch` treats every non-natural type the
+// same, so the choice changes the marking on the score and not the pitch.
+//
+// `value` is the node as a distance in frets - Guitar Pro's "right hand fret"
+// minus the note's own - and it is the same number as the sounding interval
+// expressed the other way round. See `harmonicSoundingChoices`.
+export function setArtificialHarmonic(notes, value, settings) {
+  const list = [...new Set(notes ?? [])]
+  if (list.length === 0) return refused('No notes selected.')
+
+  const unstringed = list.filter((note) => !note.isStringed)
+  if (unstringed.length > 0) {
+    return refused(
+      list.length === 1
+        ? 'That note has no string: percussion cannot carry a harmonic.'
+        : `${unstringed.length} of these ${list.length} notes have no string.`,
+    )
+  }
+
+  // `null` removes it, which is what the dialog's own way out writes.
+  if (value === null) {
+    const entries = []
+    for (const note of list) {
+      entries.push({ target: note, key: 'harmonicType', value: note.harmonicType })
+      entries.push({ target: note, key: 'harmonicValue', value: note.harmonicValue })
+    }
+    if (list.every((note) => note.harmonicType === alphaTab.model.HarmonicType.None)) {
+      return noop({ noteCount: 0, harmonic: false })
+    }
+    const undo = makeSwap(entries)
+    for (const note of list) {
+      note.harmonicType = alphaTab.model.HarmonicType.None
+      note.harmonicValue = 0
+    }
+    return applied({ noteCount: list.length, harmonic: false, undo })
+  }
+
+  const node = Number(value)
+  if (!HARMONIC_OFFSETS.has(node)) {
+    return refused('That is not a harmonic node this editor writes.')
+  }
+
+  const entries = []
+  for (const note of list) {
+    entries.push({ target: note, key: 'harmonicType', value: note.harmonicType })
+    entries.push({ target: note, key: 'harmonicValue', value: note.harmonicValue })
+  }
+  const undo = makeSwap(entries)
+  for (const note of list) {
+    note.harmonicType = alphaTab.model.HarmonicType.Pinch
+    note.harmonicValue = node
+  }
+
+  return applied({
+    noteCount: list.length,
+    harmonic: true,
+    harmonicValue: node,
+    semitones: HARMONIC_OFFSETS.get(node),
+    undo,
   })
 }
 

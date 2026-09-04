@@ -114,6 +114,31 @@ moves them by the same amount (all 37 harmonics in one `.gpx` were artificial an
 behaved correctly). `staff.transpositionPitch` is likewise harmless: it is
 subtracted from every note on the staff, so it cancels out of every delta.
 
+### The other half: writing one, where 0 is a wrong answer
+
+The same formula bites from the other side when a harmonic is **written** rather
+than transposed. `harmonicValue` is a second field beside the fret, holding the
+node, and `harmonicPitch` maps it to semitones. A fresh note has it at 0, 0 maps
+to 0 semitones, and for a natural harmonic the fret is absent - so a natural
+harmonic written without setting it sounds the **open string**. A plausible pitch,
+silently wrong, and nothing in the model objects.
+
+`harmonicPitch` also answers 0 for frets that have no node at all:
+
+```
+nodes:    3 4 5 6 7 8 9 10 12 14 15 16 17 19 22 23 24
+no node:  0 1 2 11 13 18 20 21
+```
+
+So there is no value of `harmonicValue` that makes fret 11 a natural harmonic,
+which is why writing one there is refused rather than approximated. The list is
+`HARMONIC_FRETS`, and a test re-derives it from `harmonicPitch` so a library
+change fails rather than corrupts.
+
+Several nodes share one interval - 8, 17 and 22 all give three octaves - so the
+mapping is many-to-one and the dialog offers the lowest node of each interval
+rather than all seventeen.
+
 ## 5. `note.string` has a cached index beside it
 
 `Beat` keeps a `noteStringLookup` Map of string -> note, filled by `addNote()`

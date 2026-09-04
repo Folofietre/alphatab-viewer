@@ -8,8 +8,10 @@ import {
   RETUNE_KEEP_PITCH,
   RETUNE_REASSIGN,
   applyScoreTempo,
+  HARMONIC_FRETS,
   describeNote,
   describeTuning,
+  harmonicSoundingChoices,
   countNaturalHarmonics,
   fretRange,
   renameTrack,
@@ -21,7 +23,9 @@ import {
   shiftNotesOctave,
   shiftNoteOctave,
   shiftNotesString,
+  setArtificialHarmonic,
   stringedNotes,
+  toggleNaturalHarmonic,
   togglePalmMute,
   DURATION_LADDER,
   DURATION_LONGER,
@@ -1153,6 +1157,18 @@ describe('undo restores exactly', () => {
       ),
     ],
     [
+      'a natural harmonic',
+      (score) => toggleNaturalHarmonic(
+        [[...stringedNotes(score.tracks[LEAD].staves[0])][0]], settings,
+      ),
+    ],
+    [
+      'an artificial harmonic',
+      (score) => setArtificialHarmonic(
+        [[...stringedNotes(score.tracks[LEAD].staves[0])][0]], 12, settings,
+      ),
+    ],
+    [
       'palm mute a note',
       (score) => togglePalmMute(
         [[...stringedNotes(score.tracks[LEAD].staves[0])][0]], settings,
@@ -1912,6 +1928,241 @@ describe('stepBeatsDuration', () => {
 })
 
 // A property of the NOTE that alphaTab draws as a marking on the BEAT.
+// The two fields are one subject: `harmonicType` says which kind, `harmonicValue`
+// says where the node is. See pitfall 4.
+describe('harmonics', () => {
+  function leadNote(score, index = 0) {
+    return [...stringedNotes(score.tracks[LEAD].staves[0])][index]
+  }
+
+  it('the node table is alphaTab own, not transcribed theory', () => {
+    // Re-derived from alphaTab here, so an upstream change to `harmonicPitch`
+    // fails this rather than drifting silently past us.
+    const score = loadFixture()
+    const note = leadNote(score)
+    note.harmonicType = alphaTab.model.HarmonicType.Pinch
+
+    const withNode = []
+    for (let fret = 0; fret <= 24; fret += 1) {
+      note.harmonicValue = fret
+      if (note.harmonicPitch > 0) withNode.push(fret)
+    }
+    expect(withNode).toEqual(HARMONIC_FRETS)
+    // Nothing below the third fret, and gaps where a natural harmonic would
+    // sound the open string instead.
+    for (const fret of [0, 1, 2, 11, 13, 18, 20, 21]) {
+      expect(HARMONIC_FRETS).not.toContain(fret)
+    }
+  })
+
+  it('every sounding choice is the interval it claims', () => {
+    const score = loadFixture()
+    const note = leadNote(score)
+    note.harmonicType = alphaTab.model.HarmonicType.Pinch
+    for (const choice of harmonicSoundingChoices()) {
+      note.harmonicValue = choice.harmonicValue
+      expect(note.harmonicPitch, choice.label).toBe(choice.semitones)
+    }
+    // Octave, octave + fifth, two octaves, and up to three octaves.
+    expect(harmonicSoundingChoices().map((c) => c.semitones)).toEqual([12, 19, 24, 28, 31, 34, 36])
+  })
+
+  describe('natural', () => {
+    it('sets the type and the node, which is the note own fret', () => {
+      const score = loadFixture()
+      const note = leadNote(score) // fret 3 on the Lead track
+      expect(note.fret).toBe(3)
+      const plain = note.realValue
+
+      const result = toggleNaturalHarmonic([note], settings)
+      expect(result).toMatchObject({ ok: true, changed: true, noteCount: 1, harmonic: true })
+      expect(note.harmonicType).toBe(alphaTab.model.HarmonicType.Natural)
+      // Left at 0 the offset would be 0 and the note would sound the OPEN
+      // string, which is the trap this line exists for.
+      expect(note.harmonicValue).toBe(3)
+      // A natural harmonic ignores the fret: two octaves and a fifth above the
+      // open string.
+      expect(note.realValue).toBe(plain - 3 + 31)
+    })
+
+    it('the pitch follows with no finish() at all', () => {
+      // `realValue` is a getter over the node table, so it is already right -
+      // the same reason `setNoteFret` needs none.
+      const score = loadFixture()
+      const note = leadNote(score)
+      const before = note.realValue
+      toggleNaturalHarmonic([note], settings)
+      expect(note.realValue).not.toBe(before)
+    })
+
+    it('and the second press takes it off', () => {
+      const score = loadFixture()
+      const note = leadNote(score)
+      const plain = note.realValue
+      toggleNaturalHarmonic([note], settings)
+      expect(toggleNaturalHarmonic([note], settings)).toMatchObject({ ok: true, harmonic: false })
+      expect(note.harmonicType).toBe(alphaTab.model.HarmonicType.None)
+      expect(note.harmonicValue).toBe(0)
+      expect(note.realValue).toBe(plain)
+    })
+
+    it('refuses a fret with no node, and names the ones that have', () => {
+      const score = loadFixture()
+      // The Rhythm track reaches fret 0 and fret 24.
+      const notes = [...stringedNotes(score.tracks[RHYTHM].staves[0])]
+      const open = notes.find((n) => n.fret === 0)
+      expect(open).toBeTruthy()
+
+      const result = toggleNaturalHarmonic([open], settings)
+      expect(result.ok).toBe(false)
+      expect(result.reason).toMatch(/no harmonic node/)
+      expect(result.reason).toMatch(/3, 4, 5/)
+      expect(open.harmonicType).toBe(alphaTab.model.HarmonicType.None)
+    })
+
+    it('and refuses the whole batch when any note blocks, with the count', () => {
+      const score = loadFixture()
+      const notes = [...stringedNotes(score.tracks[RHYTHM].staves[0])].slice(0, 4)
+      const result = toggleNaturalHarmonic(notes, settings)
+      if (!result.ok) {
+        expect(result.reason).toMatch(/of these 4 notes/)
+        for (const note of notes) {
+          expect(note.harmonicType).toBe(alphaTab.model.HarmonicType.None)
+        }
+      }
+    })
+
+    it('refuses percussion', () => {
+      const score = loadFixture()
+      const drum = score.tracks[DRUMS].staves[0].bars[0].voices[0].beats[0].notes[0]
+      expect(toggleNaturalHarmonic([drum], settings).reason).toMatch(/no string/)
+    })
+
+    it('survives the .gp round trip', () => {
+      const score = loadFixture()
+      toggleNaturalHarmonic([leadNote(score)], settings)
+      const back = roundTrip(score)
+      const note = [...stringedNotes(back.tracks[LEAD].staves[0])][0]
+      expect(note.harmonicType).toBe(alphaTab.model.HarmonicType.Natural)
+      expect(note.harmonicValue).toBe(3)
+    })
+
+    it('puts both fields back, and re-applies on a second call', () => {
+      const score = loadFixture()
+      const note = leadNote(score)
+      const result = toggleNaturalHarmonic([note], settings)
+
+      result.undo()
+      expect(note.harmonicType).toBe(alphaTab.model.HarmonicType.None)
+      expect(note.harmonicValue).toBe(0)
+
+      result.undo()
+      expect(note.harmonicType).toBe(alphaTab.model.HarmonicType.Natural)
+      expect(note.harmonicValue).toBe(3)
+    })
+  })
+
+  describe('artificial', () => {
+    it('raises the FRETTED note by the interval chosen', () => {
+      const score = loadFixture()
+      const note = leadNote(score)
+      const plain = note.realValue
+
+      const result = setArtificialHarmonic([note], 12, settings)
+      expect(result).toMatchObject({
+        ok: true, changed: true, noteCount: 1, harmonic: true, harmonicValue: 12, semitones: 12,
+      })
+      // Always pinch, which is the decision rather than a limitation.
+      expect(note.harmonicType).toBe(alphaTab.model.HarmonicType.Pinch)
+      // Unlike a natural harmonic, the fret is kept and the interval is added.
+      expect(note.realValue).toBe(plain + 12)
+    })
+
+    it('every choice sounds where it says', () => {
+      for (const choice of harmonicSoundingChoices()) {
+        const score = loadFixture()
+        const note = leadNote(score)
+        const plain = note.realValue
+        expect(setArtificialHarmonic([note], choice.harmonicValue, settings).ok).toBe(true)
+        expect(note.realValue, choice.label).toBe(plain + choice.semitones)
+      }
+    })
+
+    it('works on a fret with no natural node, which is the point', () => {
+      // The right hand supplies the node, so the left hand is free.
+      const score = loadFixture()
+      const open = [...stringedNotes(score.tracks[RHYTHM].staves[0])].find((n) => n.fret === 0)
+      expect(HARMONIC_FRETS).not.toContain(0)
+      expect(setArtificialHarmonic([open], 12, settings).ok).toBe(true)
+    })
+
+    it('moves a whole batch', () => {
+      const score = loadFixture()
+      const notes = [...stringedNotes(score.tracks[LEAD].staves[0])].slice(0, 4)
+      expect(setArtificialHarmonic(notes, 7, settings)).toMatchObject({ ok: true, noteCount: 4 })
+      for (const note of notes) expect(note.harmonicValue).toBe(7)
+    })
+
+    it('null removes it, and is a no-op when there is none', () => {
+      const score = loadFixture()
+      const note = leadNote(score)
+      const plain = note.realValue
+      setArtificialHarmonic([note], 12, settings)
+
+      expect(setArtificialHarmonic([note], null, settings)).toMatchObject({ ok: true, harmonic: false })
+      expect(note.harmonicType).toBe(alphaTab.model.HarmonicType.None)
+      expect(note.realValue).toBe(plain)
+      expect(setArtificialHarmonic([note], null, settings)).toMatchObject({ ok: true, changed: false })
+    })
+
+    it('refuses a node it does not write', () => {
+      const score = loadFixture()
+      expect(setArtificialHarmonic([leadNote(score)], 11, settings).ok).toBe(false)
+      expect(setArtificialHarmonic([leadNote(score)], 0, settings).ok).toBe(false)
+    })
+
+    it('survives the .gp round trip', () => {
+      const score = loadFixture()
+      setArtificialHarmonic([leadNote(score)], 12, settings)
+      const back = roundTrip(score)
+      const note = [...stringedNotes(back.tracks[LEAD].staves[0])][0]
+      expect(note.harmonicType).toBe(alphaTab.model.HarmonicType.Pinch)
+      expect(note.harmonicValue).toBe(12)
+    })
+
+    it('and the undo puts both fields back', () => {
+      const score = loadFixture()
+      const note = leadNote(score)
+      // Over an existing natural harmonic, so the undo has something to restore
+      // rather than a default.
+      toggleNaturalHarmonic([note], settings)
+      const result = setArtificialHarmonic([note], 5, settings)
+
+      result.undo()
+      expect(note.harmonicType).toBe(alphaTab.model.HarmonicType.Natural)
+      expect(note.harmonicValue).toBe(3)
+    })
+  })
+
+  it('the descriptor tells the panel which kind it is', () => {
+    const score = loadFixture()
+    const note = leadNote(score)
+    expect(describeNote(note)).toMatchObject({
+      isNaturalHarmonic: false, isArtificialHarmonic: false,
+    })
+
+    toggleNaturalHarmonic([note], settings)
+    expect(describeNote(note)).toMatchObject({
+      isNaturalHarmonic: true, isArtificialHarmonic: false, harmonicValue: 3,
+    })
+
+    setArtificialHarmonic([note], 12, settings)
+    expect(describeNote(note)).toMatchObject({
+      isNaturalHarmonic: false, isArtificialHarmonic: true, harmonicValue: 12,
+    })
+  })
+})
+
 describe('togglePalmMute', () => {
   function leadNotes(score, count) {
     return [...stringedNotes(score.tracks[LEAD].staves[0])].slice(0, count)
