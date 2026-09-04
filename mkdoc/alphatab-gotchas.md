@@ -136,8 +136,19 @@ which is why writing one there is refused rather than approximated. The list is
 change fails rather than corrupts.
 
 Several nodes share one interval - 8, 17 and 22 all give three octaves - so the
-mapping is many-to-one and the dialog offers the lowest node of each interval
-rather than all seventeen.
+mapping is many-to-one, and it is many-to-one because a node is a position as
+well as a pitch: the same interval is reachable at up to four places along the
+string. All seventeen are offered, and the reason for that is in
+[the editing notes](editing.md#harmonics-the-node-is-a-second-field-beside-the-fret).
+
+The table is also a set of RANGES rather than of values - anything in 4.1 to 5
+gives two octaves - so a file can carry a node that is not one of the seventeen,
+and `offeredHarmonicNode` resolves it by what it sounds.
+
+One entry in it looks wrong, and is followed anyway: 22 answers +36, while
+22 semitones is 2^(22/12) = 3.56, which is the seventh partial's node at 7/2 and
+should sound +34. alphaTab both plays and draws from this table, so matching it is
+what keeps the sound, the notation and the export agreeing.
 
 ## 5. `note.string` has a cached index beside it
 

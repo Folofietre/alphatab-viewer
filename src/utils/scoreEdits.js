@@ -1171,19 +1171,54 @@ export function togglePalmMute(notes, settings) {
 // harmonic sounds the fretted note raised by the node's interval, which is what
 // makes "sounding note" a meaningful choice for it and not for the other.
 
-// The semitone offset alphaTab gives each node, read off `Note.harmonicPitch`
-// rather than transcribed from theory.
+// Every node alphaTab knows, and the semitone offset it gives each one - read
+// off `Note.harmonicPitch` rather than transcribed from theory.
 //
-// A test re-derives this from alphaTab itself, so an upstream change to that
-// table fails rather than drifting silently past us.
+// SEVENTEEN nodes over seven intervals, not one node per interval, and that
+// distinction is the whole point of the table. A node is a POSITION as well as a
+// pitch: the same interval is available at several places along the string, the
+// player's right hand goes to one of them, and which one is what the file
+// records. Offering the lowest node of each interval hid the useful half of the
+// list - a note fretted at 4 has its octave+fifth at node 19, so under the right
+// hand at fret 23, and only node 7 was on offer, at fret 11.
+//
+// The values are the ones real files carry where a real file carries one: 2.4,
+// 3.2, 4, 5, 7 and 12 all appear in the two measured scores, so 3.2 rather than
+// the 3 that also works. Elsewhere it is the node's own position, rounded the way
+// alphaTab's ranges are cut.
+//
+// A test re-derives every offset from alphaTab itself, so an upstream change to
+// that table fails rather than drifting silently past us.
 const HARMONIC_OFFSETS = new Map([
-  [12, 12], // one octave, the twelfth fret
-  [7, 19], // an octave and a fifth
-  [5, 24], // two octaves
-  [4, 28], // two octaves and a major third
-  [3, 31], // two octaves and a fifth
-  [2.7, 34], // two octaves and a minor seventh
-  [2.4, 36], // three octaves
+  [12, 12], // the twelfth fret, and the only node of the octave
+  [7, 19], // an octave and a fifth, low node
+  [19, 19], // and high
+  [5, 24], // two octaves, low node
+  [24, 24], // and high
+  [4, 28], // two octaves and a major third, three nodes
+  [9, 28],
+  [16, 28],
+  [3.2, 31], // two octaves and a fifth, one node
+  [2.7, 34], // two octaves and a minor seventh, four nodes
+  [6, 34],
+  [10, 34],
+  [15, 34],
+  [2.4, 36], // three octaves, four nodes
+  [8, 36],
+  [17, 36],
+  [22, 36],
+])
+
+// What each offset is called, once, so seventeen nodes do not carry seven
+// spellings of the same seven names.
+const HARMONIC_INTERVALS = new Map([
+  [12, 'Octave'],
+  [19, 'Octave + fifth'],
+  [24, 'Two octaves'],
+  [28, 'Two octaves + major third'],
+  [31, 'Two octaves + fifth'],
+  [34, 'Two octaves + minor seventh'],
+  [36, 'Three octaves'],
 ])
 
 // Which whole frets have a node at all, computed from the same table.
@@ -1193,25 +1228,65 @@ const HARMONIC_OFFSETS = new Map([
 // string. That is a wrong value rather than a missing one, so it is refused.
 export const HARMONIC_FRETS = [3, 4, 5, 6, 7, 8, 9, 10, 12, 14, 15, 16, 17, 19, 22, 23, 24]
 
-// The intervals an artificial harmonic can sound, for the dialog.
+// Every node an artificial harmonic can be written on, for the dialog.
 //
-// One entry per distinct offset, each with the LOWEST node that produces it -
-// alphaTab's table maps several positions to the same interval (8, 17 and 22 all
-// give three octaves), and offering one of each is the useful list rather than
-// the complete one.
+// Ordered by the pitch it sounds and then by position, which is the order the
+// dialog groups them in: one group per interval, the nodes inside it in reach
+// order. `frets` is the node as a DISTANCE, which is what Guitar Pro's
+// "right hand fret" is once the note's own fret is added.
 //
-// `frets` is what Guitar Pro calls the right-hand fret, as a distance: the
-// dialog shows the absolute fret by adding the note's own.
+// Not filtered by neck length, and that is a decision rather than an omission:
+// the model has no fret count - `staff` carries a capo and a tuning and nothing
+// else - so a filter would be a guess, and a node past the last fret is a real
+// technique anyway rather than an error.
 export function harmonicSoundingChoices() {
-  return [
-    { harmonicValue: 12, frets: 12, semitones: 12, label: 'Octave' },
-    { harmonicValue: 7, frets: 7, semitones: 19, label: 'Octave + fifth' },
-    { harmonicValue: 5, frets: 5, semitones: 24, label: 'Two octaves' },
-    { harmonicValue: 4, frets: 4, semitones: 28, label: 'Two octaves + major third' },
-    { harmonicValue: 3, frets: 3, semitones: 31, label: 'Two octaves + fifth' },
-    { harmonicValue: 2.7, frets: 2.7, semitones: 34, label: 'Two octaves + minor seventh' },
-    { harmonicValue: 2.4, frets: 2.4, semitones: 36, label: 'Three octaves' },
-  ]
+  return [...HARMONIC_OFFSETS.entries()]
+    .map(([harmonicValue, semitones]) => ({
+      harmonicValue,
+      frets: harmonicValue,
+      semitones,
+      label: HARMONIC_INTERVALS.get(semitones) ?? `+${semitones} semitones`,
+    }))
+    .sort((a, b) => a.semitones - b.semitones || a.harmonicValue - b.harmonicValue)
+}
+
+// The node this editor offers for whatever node a note actually carries.
+//
+// Needed because the two do not always match: alphaTab accepts a RANGE of values
+// per interval - 3 and 3.2 both give two octaves and a fifth - and a real file
+// carries whichever its writer chose. Opening the dialog on such a note has to
+// land on the offered node with the same interval, not fall back to the octave
+// and quietly retune the note when the user presses Apply.
+//
+// Answers null for a value with no interval at all, which is what an unwritten
+// `harmonicValue` of 0 is.
+export function offeredHarmonicNode(value) {
+  const node = Number(value)
+  if (!Number.isFinite(node) || node <= 0) return null
+  if (HARMONIC_OFFSETS.has(node)) return node
+
+  // Through alphaTab rather than through our own table, so a value we have never
+  // seen still resolves by what it SOUNDS.
+  const probe = new alphaTab.model.Note()
+  probe.harmonicType = alphaTab.model.HarmonicType.Pinch
+  // `harmonicPitch` answers 0 for a note that is not stringed, and `isStringed`
+  // is `string >= 0` - a fresh Note starts at -1, so without this the probe
+  // reports no interval for every node there is.
+  probe.string = 1
+  probe.harmonicValue = node
+  const semitones = probe.harmonicPitch
+  if (!semitones) return null
+
+  // The NEAREST node of that interval, not the first: an interval has up to four
+  // of them spread along the string, and 8.2 is the three-octave node at 8, not
+  // the one at 2.4. Nearest lands inside the right one because each offered node
+  // sits inside its own run of accepted values.
+  let best = null
+  for (const [offered, offeredSemitones] of HARMONIC_OFFSETS) {
+    if (offeredSemitones !== semitones) continue
+    if (best === null || Math.abs(offered - node) < Math.abs(best - node)) best = offered
+  }
+  return best
 }
 
 // Every note of the batch that has no node at its fret, for the refusal.

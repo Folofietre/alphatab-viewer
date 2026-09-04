@@ -1139,27 +1139,49 @@ shows up as a failure rather than as a wrong pitch.
 **The artificial one is always a pinch.** `HarmonicType` has seven values and
 Guitar Pro offers most of them in a dropdown; the choice here is that the dialog
 does not, because a pinch is what gets written in practice and a select with one
-useful entry is not a choice. What the dialog does ask is which note to sound,
-which is the node:
+useful entry is not a choice.
 
-| Node | Interval | Semitones |
+What the dialog does ask is the **node**, and the first version of it got that
+wrong in a way worth recording. It offered one entry per interval - the lowest
+node of each - on the reasoning that the interval is what a player hears and the
+rest of alphaTab's table is duplication. It is not duplication: a node is a
+POSITION as well as a pitch. The same interval is available at several places
+along the string, the right hand goes to one of them, and which one is what the
+file records. Reported from the score: a note fretted at 4 has its octave + fifth
+under the right hand at fret 23, and the list stopped at fret 11.
+
+So all seventeen are offered, grouped by what they sound:
+
+| Interval | Semitones | Nodes |
 | --- | --- | --- |
-| 12 | octave | +12 |
-| 7 | octave + fifth | +19 |
-| 5 | two octaves | +24 |
-| 4 | two octaves + major third | +28 |
-| 3 | two octaves + fifth | +31 |
-| 2.7 | two octaves + minor seventh | +34 |
-| 2.4 | three octaves | +36 |
+| Octave | +12 | 12 |
+| Octave + fifth | +19 | 7, 19 |
+| Two octaves | +24 | 5, 24 |
+| Two octaves + major third | +28 | 4, 9, 16 |
+| Two octaves + fifth | +31 | 3.2 |
+| Two octaves + minor seventh | +34 | 2.7, 6, 10, 15 |
+| Three octaves | +36 | 2.4, 8, 17, 22 |
 
-One entry per distinct interval, each with the lowest node that produces it:
-alphaTab maps several positions to the same offset (8, 17 and 22 all give three
-octaves), so offering one of each is the useful list rather than the complete one.
-The fractional nodes are between frets, which is why they are not integers.
+The values are the ones real files carry where a real file carries one: 2.4, 3.2,
+4, 5, 7 and 12 all appear in the two measured scores, which is why the table says
+3.2 and not the 3 that also works. alphaTab accepts a RANGE per interval, so a
+file may hold a node the dialog does not offer - `offeredHarmonicNode` maps it to
+the nearest offered node of the same interval, because opening the dialog on such
+a note and silently landing on the octave would retune it the moment Apply is
+pressed.
 
-Guitar Pro's "right hand fret" is not a field here either: it is
-`note.fret + harmonicValue`, so the interval already decides it. The dialog shows
-it read-only beside the left hand fret, which is how a player reads the pair.
+Two details of that table are alphaTab's rather than ours. The fractional nodes
+are between frets, so `note.fret + harmonicValue` is fractional too and the
+dialog reports it as such rather than rounding to a fret the finger does not go
+to. And the node at 22 is labelled three octaves because that is what alphaTab
+sounds there, while physically 22 semitones is the seventh partial's node at 7/2
+and should be +34 - the label follows the library, since the library is what
+plays it and draws it.
+
+Guitar Pro's "right hand fret" is still not a field: it is
+`note.fret + harmonicValue`, so choosing the node chooses it. It names each entry
+of the list, and the dialog also shows it read-only beside the left hand fret,
+which is the pair a player reads.
 
 **No `finish()`.** `realValue` is a getter over the node table, so the pitch is
 right the instant the two fields are, exactly as with `setNoteFret`. And `onPlay`

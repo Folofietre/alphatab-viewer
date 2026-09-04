@@ -240,12 +240,15 @@ and 22 to 24 - and on any other fret it refuses and names the ones that work,
 rather than writing a harmonic that would sound the open string. Across a
 passage it is all or nothing, like the frets and the strings.
 
-The artificial one has a choice in it, which is why it asks: which note it should
-sound, from the octave up to three octaves. It is written as a pinch harmonic,
-the one Guitar Pro's type dropdown is usually left on. The dialog shows the left
-and right hand frets as read-outs, because the interval already decides where the
-picking hand goes, and it can take an existing harmonic back off. Percussion is
-refused, again for want of a string.
+The artificial one has a choice in it, which is why it asks: **where the right
+hand goes**, from the octave up to three octaves. Most of those intervals are
+available at several places along the string - the octave + fifth of a note
+fretted at 4 sits under the right hand at fret 11 and again at fret 23 - so the
+list groups the seventeen positions by what they sound and names each one by its
+absolute fret. It is written as a pinch harmonic, the one Guitar Pro's type
+dropdown is usually left on. The left and right hand frets are also shown as
+read-outs, which is the pair a player reads, and an existing harmonic can be
+taken back off. Percussion is refused, again for want of a string.
 
 ## Moving around the score
 

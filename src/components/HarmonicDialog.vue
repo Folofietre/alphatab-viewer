@@ -27,22 +27,26 @@
           <template v-else>Nothing selected.</template>
         </p>
 
-        <!-- The one real choice. Guitar Pro puts the harmonic TYPE first, but
-             every artificial harmonic written here is a pinch, so that field
-             would be a select with one useful value in it. -->
+        <!-- The one real choice, and it is a NODE rather than an interval.
+             Guitar Pro puts the harmonic type first, but every artificial
+             harmonic written here is a pinch, so that field would be a select
+             with one useful value in it. What it does need is the position: most
+             intervals have several nodes along the string, so the group says
+             what it sounds and the entries say where the right hand goes. -->
         <label class="field">
           <span class="label">Sounding note</span>
           <select v-model.number="value">
-            <option v-for="choice in choices" :key="choice.harmonicValue" :value="choice.harmonicValue">
-              {{ choice.label }}<template v-if="soundingName(choice)"> - {{ soundingName(choice) }}</template>
-            </option>
+            <optgroup v-for="group in groups" :key="group.semitones" :label="group.label">
+              <option v-for="choice in group.choices" :key="choice.harmonicValue" :value="choice.harmonicValue">
+                {{ positionOf(choice) }}<template v-if="soundingName(choice)"> - {{ soundingName(choice) }}</template>
+              </option>
+            </optgroup>
           </select>
         </label>
 
-        <!-- Read-outs, not fields. The left hand fret is where the note already
-             is, and the right hand fret follows from the interval chosen above,
-             so both are shown and neither is editable: typing a right-hand fret
-             would only be a second way of picking the same interval. -->
+        <!-- Read-outs, not fields: the pair a player reads, which is how Guitar
+             Pro shows it. The left hand fret is where the note already is, and
+             the right hand one is decided by the node picked above. -->
         <div v-if="note && !range" class="frets">
           <span class="fret">
             <span class="label">Left hand</span>
@@ -88,10 +92,23 @@ const {
   selectedRange,
   setHarmonic,
   harmonicSoundingChoices,
+  offeredHarmonicNode,
   noteNameForMidi,
 } = useScoreEdit()
 
 const choices = harmonicSoundingChoices()
+
+// One group per interval, the nodes inside it in reach order - which is the
+// order `harmonicSoundingChoices` already comes in.
+const groups = choices.reduce((acc, choice) => {
+  let group = acc.find((g) => g.semitones === choice.semitones)
+  if (!group) {
+    group = { semitones: choice.semitones, label: choice.label, choices: [] }
+    acc.push(group)
+  }
+  group.choices.push(choice)
+  return acc
+}, [])
 
 const note = computed(() => selectedNote.value)
 const range = computed(() => selectedRange.value)
@@ -102,14 +119,27 @@ const hasTarget = computed(() => !!range.value || !!note.value)
 const value = ref(12)
 
 // Where the picking hand goes: the note's own fret plus the node's distance.
-// Only shown for a single note - across a range every note has a different one.
+//
+// The fractional nodes are between frets, so they are reported as such rather
+// than rounded into a fret that is not where the finger goes.
 const rightHandFret = computed(() => {
   const choice = choices.find((c) => c.harmonicValue === value.value)
   if (!note.value || !choice) return ''
-  // The fractional nodes are between frets, so they are reported as such rather
-  // than rounded into a fret that is not where the finger goes.
-  return note.value.fret + choice.frets
+  return round(note.value.fret + choice.frets)
 })
+
+// How one entry names its position. With a single note that is the absolute
+// fret, which is what a player looks for; across a range every note has a
+// different one, so it falls back to the distance the node is.
+function positionOf(choice) {
+  if (note.value && !range.value) return `Right hand ${round(note.value.fret + choice.frets)}`
+  return `${choice.frets} frets up`
+}
+
+// Trims the float noise 4 + 2.4 leaves behind.
+function round(value) {
+  return Math.round(value * 10) / 10
+}
 
 // What the chosen interval would sound, from the PLAIN fretted pitch: the note's
 // own `midiKey` already carries whatever harmonic is on it, so adding to that
@@ -143,9 +173,11 @@ watch(open, (isOpen) => {
   if (!el) return
   if (isOpen && !el.open) {
     // Opened showing what is already there, so a note carrying a harmonic starts
-    // on its own interval rather than back at the octave.
-    const current = note.value?.harmonicValue
-    value.value = choices.some((c) => c.harmonicValue === current) ? current : 12
+    // on its own node rather than back at the octave. Through
+    // `offeredHarmonicNode` because a file may carry a value we do not offer -
+    // 3 and 3.2 are the same interval to alphaTab - and jumping to the octave
+    // would retune the note the moment Apply is pressed.
+    value.value = offeredHarmonicNode(note.value?.harmonicValue) ?? 12
     el.showModal()
   } else if (!isOpen && el.open) {
     el.close()

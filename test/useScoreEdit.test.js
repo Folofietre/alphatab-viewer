@@ -2728,7 +2728,7 @@ describe('harmonics', () => {
     expect(note.realValue).toBe(plain)
   })
 
-  it('the dialog offers seven intervals, all of them writable', () => {
+  it('the dialog offers every node, all of them writable', () => {
     const note = beatAt(0, 0).notes[0]
     const plain = note.realValue
     for (const choice of edit.harmonicSoundingChoices()) {
@@ -2736,6 +2736,33 @@ describe('harmonics', () => {
       expect(edit.setHarmonic(choice.harmonicValue).ok, choice.label).toBe(true)
       expect(note.realValue, choice.label).toBe(plain + choice.semitones)
     }
+  })
+
+  it('offers the two nodes the fret-4 report was missing', () => {
+    // The bug as reported: a note fretted at 4 has harmonics under the right
+    // hand at about 23 and 26, and the list only went up to 16. Those are nodes
+    // 19 and 22, which exist in alphaTab and were not on offer.
+    const note = beatAt(0, 0).notes[0]
+    note.fret = 4
+    const plain = note.calculateRealValue(false, false)
+    const nodes = edit.harmonicSoundingChoices().map((c) => c.harmonicValue)
+    expect(nodes).toContain(19)
+    expect(nodes).toContain(22)
+
+    clickAt(note)
+    expect(edit.setHarmonic(19).ok).toBe(true)
+    expect(note.realValue).toBe(plain + 19) // an octave and a fifth
+    expect(edit.setHarmonic(22).ok).toBe(true)
+    expect(note.realValue).toBe(plain + 36) // three octaves, as alphaTab hears it
+  })
+
+  it('and resolves a node a file carries but the list does not offer', () => {
+    // 3 and 3.2 are the same interval to alphaTab, and real files carry both.
+    // Opening the dialog on one has to land on the offered node of that
+    // interval rather than the octave, or Apply would retune the note.
+    expect(edit.offeredHarmonicNode(3)).toBe(3.2)
+    expect(edit.offeredHarmonicNode(8.2)).toBe(8)
+    expect(edit.offeredHarmonicNode(0)).toBe(null)
   })
 
   it('and names the pitch it would sound, for the dialog label', () => {

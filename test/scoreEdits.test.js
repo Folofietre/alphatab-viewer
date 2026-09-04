@@ -12,6 +12,7 @@ import {
   describeNote,
   describeTuning,
   harmonicSoundingChoices,
+  offeredHarmonicNode,
   countNaturalHarmonics,
   fretRange,
   renameTrack,
@@ -1961,10 +1962,100 @@ describe('harmonics', () => {
     note.harmonicType = alphaTab.model.HarmonicType.Pinch
     for (const choice of harmonicSoundingChoices()) {
       note.harmonicValue = choice.harmonicValue
-      expect(note.harmonicPitch, choice.label).toBe(choice.semitones)
+      expect(note.harmonicPitch, `node ${choice.harmonicValue}`).toBe(choice.semitones)
     }
-    // Octave, octave + fifth, two octaves, and up to three octaves.
-    expect(harmonicSoundingChoices().map((c) => c.semitones)).toEqual([12, 19, 24, 28, 31, 34, 36])
+  })
+
+  it('and offers every node, not one per interval', () => {
+    // The bug this pins: a node is a POSITION as well as a pitch, so the same
+    // interval at a different place along the string is a different thing to
+    // play. Offering only the lowest of each hid the reachable half - a note at
+    // fret 4 has its octave + fifth under the right hand at fret 23, node 19,
+    // and only node 7 was on the list.
+    const choices = harmonicSoundingChoices()
+    expect(choices.map((c) => c.harmonicValue)).toEqual([
+      12, 7, 19, 5, 24, 4, 9, 16, 3.2, 2.7, 6, 10, 15, 2.4, 8, 17, 22,
+    ])
+    // Sorted by what it sounds, then by where the hand goes.
+    const keys = choices.map((c) => c.semitones * 100 + c.harmonicValue)
+    expect([...keys].sort((a, b) => a - b)).toEqual(keys)
+    // Seven intervals over seventeen nodes, so most intervals have more than
+    // one place to play them.
+    expect(new Set(choices.map((c) => c.label)).size).toBe(7)
+  })
+
+  it('and every node alphaTab knows is on that list', () => {
+    // The other direction, which is what would have caught the original gap:
+    // sweep alphaTab's own table and check nothing it answers for is missing.
+    // Tenths, because two of the nodes are fractional.
+    const score = loadFixture()
+    const note = leadNote(score)
+    note.harmonicType = alphaTab.model.HarmonicType.Pinch
+    const offered = new Set(harmonicSoundingChoices().map((c) => c.semitones))
+
+    // Every distinct interval alphaTab can produce is offered somewhere.
+    const reachable = new Set()
+    for (let tenths = 0; tenths <= 300; tenths += 1) {
+      note.harmonicValue = tenths / 10
+      if (note.harmonicPitch > 0) reachable.add(note.harmonicPitch)
+    }
+    expect([...reachable].sort((a, b) => a - b)).toEqual([...offered].sort((a, b) => a - b))
+
+    // And every RUN of node values alphaTab answers for has exactly one node
+    // offered inside it, so no position along the string is unreachable and
+    // none is offered twice.
+    const nodes = harmonicSoundingChoices().map((c) => c.harmonicValue)
+    let runStart = null
+    let runPitch = 0
+    const runs = []
+    for (let tenths = 0; tenths <= 301; tenths += 1) {
+      note.harmonicValue = tenths / 10
+      const pitch = tenths > 300 ? 0 : note.harmonicPitch
+      if (pitch !== runPitch) {
+        if (runPitch > 0) runs.push([runStart, (tenths - 1) / 10])
+        runStart = tenths / 10
+        runPitch = pitch
+      }
+    }
+    expect(runs).toHaveLength(17)
+    for (const [from, to] of runs) {
+      const inside = nodes.filter((n) => n >= from && n <= to)
+      expect(inside, `nodes in ${from}..${to}`).toHaveLength(1)
+    }
+  })
+
+  describe('the node a file already carries', () => {
+    it('resolves to the offered node of the same interval', () => {
+      // alphaTab accepts a range per interval and a real file carries whichever
+      // its writer chose: the two measured scores hold 2.4, 3.2, 4, 5, 7 and 12,
+      // and 3 works just as well as 3.2 for two octaves and a fifth.
+      expect(offeredHarmonicNode(3)).toBe(3.2)
+      expect(offeredHarmonicNode(3.5)).toBe(3.2)
+      expect(offeredHarmonicNode(4.5)).toBe(5)
+    })
+
+    it('and to the NEAREST one, not the first of that interval', () => {
+      // Three octaves has four nodes. 8.2 is the one at 8, not the one at 2.4,
+      // which is a different place on the string entirely.
+      expect(offeredHarmonicNode(8.2)).toBe(8)
+      expect(offeredHarmonicNode(7.1)).toBe(8)
+      expect(offeredHarmonicNode(16.1)).toBe(17)
+      expect(offeredHarmonicNode(21.1)).toBe(22)
+    })
+
+    it('and answers null where there is no interval at all', () => {
+      // 0 is an unwritten `harmonicValue`, 11 and 13 are the gaps in alphaTab's
+      // table, and nothing above 24 has a node.
+      for (const value of [0, 11, 13, 18, 30, null, undefined, NaN]) {
+        expect(offeredHarmonicNode(value), String(value)).toBe(null)
+      }
+    })
+
+    it('and every node offered resolves to itself', () => {
+      for (const choice of harmonicSoundingChoices()) {
+        expect(offeredHarmonicNode(choice.harmonicValue)).toBe(choice.harmonicValue)
+      }
+    })
   })
 
   describe('natural', () => {

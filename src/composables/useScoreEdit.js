@@ -32,6 +32,7 @@ import {
   harmonicSoundingChoices,
   newTrackTunings,
   noteNameForMidi,
+  offeredHarmonicNode,
   setArtificialHarmonic,
   shiftNotesString,
   toggleNaturalHarmonic,
@@ -2481,6 +2482,7 @@ export function useScoreEdit() {
       harmonicDialog.value = true
     },
     harmonicSoundingChoices,
+    offeredHarmonicNode,
     noteNameForMidi,
     deleteSelection,
 
