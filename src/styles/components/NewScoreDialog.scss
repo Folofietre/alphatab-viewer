@@ -1,0 +1,153 @@
+@use '@/styles/mixins' as *;
+
+// The dialog shell the other three modals share. Wider than the Add track one:
+// this form has two halves, and the pairs sit side by side.
+.new-score-dialog {
+  margin: auto;
+  padding: 0;
+  width: min(480px, calc(100vw - 2rem));
+  max-height: calc(100vh - 3rem);
+  border: 1px solid var(--chrome-border);
+  border-radius: $radius-block;
+  background: var(--chrome);
+  color: var(--chrome-text);
+  overflow: hidden;
+
+  &::backdrop {
+    background: rgba(11, 15, 22, 0.55);
+  }
+}
+
+.sheet {
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 3rem);
+  min-height: 0;
+}
+
+header {
+  @include edit-header;
+  position: static;
+
+  h2 {
+    @include section-label;
+    font-size: 0.74rem;
+    color: var(--chrome-text);
+  }
+}
+
+.close {
+  @include button-chrome;
+  padding: 0.05rem 0.4rem;
+  font-size: 1rem;
+  line-height: 1.2;
+}
+
+.body {
+  overflow-y: auto;
+  min-height: 0;
+  padding: $gap-md $gap-sm;
+  display: flex;
+  flex-direction: column;
+  gap: $gap-sm;
+}
+
+// Names one half of the form. Louder than a field label, because it is what
+// tells the reader the dialog has two halves at all.
+.group-label {
+  @include section-label;
+  margin: 0;
+  font-size: 0.66rem;
+  color: var(--accent-soft);
+}
+
+hr {
+  @include edit-divider;
+  margin: 0;
+}
+
+// Label above the control, as in the Add track dialog: the values are long
+// ("Guitar Tune down 1 step") and a side-by-side label leaves no room for them.
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
+// Two short fields on one row. Short enough that stacking them would make the
+// dialog scroll for no reason.
+.pair {
+  display: flex;
+  gap: $gap-sm;
+
+  > .field {
+    flex: 1;
+  }
+}
+
+.label {
+  @include section-label;
+  font-size: 0.62rem;
+  color: var(--chrome-text-muted);
+}
+
+input,
+select {
+  @include edit-control;
+}
+
+select {
+  @include edit-select;
+}
+
+// The two halves of the metre, reading as one value rather than two fields.
+.time-signature {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+
+  input {
+    width: 4rem;
+    flex: none;
+  }
+  select {
+    width: 5rem;
+    flex: none;
+  }
+}
+
+.over {
+  @include tabular;
+  color: var(--chrome-text-muted);
+}
+
+.hint {
+  @include edit-hint;
+  margin: 0;
+  font-size: 0.68rem;
+}
+
+footer {
+  flex: none;
+  display: flex;
+  justify-content: flex-end;
+  gap: $gap-xs;
+  padding: $gap-sm;
+  background: var(--chrome-raised);
+  border-top: 1px solid var(--chrome-border);
+}
+
+.primary {
+  @include button-chrome;
+  padding: 0.2rem 0.6rem;
+  font-weight: 600;
+  background: var(--accent);
+  border-color: var(--accent-strong);
+  color: var(--text-inverse);
+}
+
+.ghost {
+  @include button-chrome;
+  padding: 0.2rem 0.6rem;
+}

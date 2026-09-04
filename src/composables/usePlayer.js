@@ -627,6 +627,27 @@ export function usePlayer() {
     reader.readAsArrayBuffer(file)
   }
 
+  // Show a score built in memory rather than one read from a file.
+  //
+  // `api.load` takes a `Score` as readily as it takes bytes - its ui facade
+  // checks `data instanceof Score` first and hands it straight to
+  // `renderScore` - so this goes through exactly the same path as opening a
+  // file, `scoreLoaded` included. That matters: every descriptor, the mixer
+  // reset and `isDirty` are seeded there and nowhere else.
+  //
+  // No `originalBytes`, so `revertToOriginal` stays unavailable: there is no
+  // file to go back to. Undo is what walks a created score back.
+  function loadScore(score, name = '') {
+    if (!api || !score) return false
+    loadError.value = null
+    isScoreLoaded.value = false
+    fileName.value = name
+    originalBytes = null
+    canRevert.value = false
+    api.load(score)
+    return true
+  }
+
   function clearScore() {
     fileName.value = ''
     loadError.value = null
@@ -855,6 +876,7 @@ export function usePlayer() {
     init,
     destroy,
     loadFile,
+    loadScore,
     clearScore,
     revertToOriginal,
 

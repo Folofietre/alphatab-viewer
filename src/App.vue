@@ -10,6 +10,7 @@
         <FileMenu
           :is-score-loaded="isScoreLoaded"
           @file="openFile"
+          @create="newScore"
           @save="saveScore"
           @close="closeScore"
         />
@@ -44,7 +45,7 @@
       </div>
 
       <TransportBar v-if="isScoreLoaded" />
-      <p v-else class="bar-placeholder">Drop a score to begin</p>
+      <p v-else class="bar-placeholder">Open a score, or create one, to begin</p>
 
       <div class="bar-side bar-side-end">
         <BarsPerRow v-if="isScoreLoaded" />
@@ -157,7 +158,17 @@
              needs a laid-out host element to measure against. -->
         <ScoreViewer />
         <div v-if="!isScoreLoaded" class="empty-overlay">
-          <FileDropzone @file="openFile" />
+          <!-- Two ways in, and the drop target stays the bigger of them: opening
+               something is what most visits are for. Creating is offered beside
+               it rather than behind the File menu, because a blank page with no
+               visible way to start writing is a dead end. -->
+          <div class="empty-choices">
+            <FileDropzone @file="openFile" />
+            <div class="empty-or"><span>or</span></div>
+            <button type="button" class="empty-create" @click="newScore">
+              Create a new tab
+            </button>
+          </div>
         </div>
       </div>
 
@@ -231,6 +242,9 @@
     <!-- Mounted here rather than in the panel that also opens it, because
          Shift+Y opens it from the keyboard with no panel involved. -->
     <HarmonicDialog v-model="harmonicDialog" />
+    <!-- Opened from the empty page and from the File menu, so it is mounted here
+         rather than in either of them. -->
+    <NewScoreDialog v-model="newScoreDialog" />
   </div>
 </template>
 
@@ -253,6 +267,7 @@ import FileMenu from '@/components/FileMenu.vue'
 import BarsPerRow from '@/components/BarsPerRow.vue'
 import HelpDialog from '@/components/HelpDialog.vue'
 import HarmonicDialog from '@/components/HarmonicDialog.vue'
+import NewScoreDialog from '@/components/NewScoreDialog.vue'
 
 const { loadFile, clearScore, isScoreLoaded, isDirty, scoreInfo, fileName, loadError } =
   usePlayer()
@@ -265,6 +280,8 @@ const {
   redo, canRedo, redoLabel, redoDepth,
   download,
   harmonicDialog,
+  newScoreDialog,
+  openNewScoreDialog,
 } = useScoreEdit()
 
 // Saving from the menu blurs first, for the same reason Ctrl+S does: the edit
@@ -300,6 +317,14 @@ function openFile(file) {
 function closeScore() {
   if (!confirmDiscard('Close it anyway?')) return
   clearScore()
+}
+
+// Starting a new score replaces the document, so it asks the same question
+// opening a file does - and asks BEFORE the dialog rather than after it, so a
+// user who meant to keep their edits is not made to fill a form first.
+function newScore() {
+  if (!confirmDiscard('Start a new score anyway?')) return
+  openNewScoreDialog()
 }
 
 // Both sidebars slide away independently: they hold different SCOPES of

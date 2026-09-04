@@ -2458,6 +2458,24 @@ export function newTrackTunings() {
   return choices
 }
 
+// The same list grouped by string count, which is how both dialogs that offer it
+// have to render forty-nine entries: four short lists read, one long one does
+// not. Here rather than in each component so the two cannot group it differently.
+export function newTrackTuningGroups() {
+  const groups = []
+  newTrackTunings().forEach((choice, index) => {
+    // The index into the FLAT list travels with each entry, because a `<select>`
+    // carries a value and a tuning is an array. See AddTrackDialog.
+    let group = groups.find((g) => g.stringCount === choice.stringCount)
+    if (!group) {
+      group = { stringCount: choice.stringCount, choices: [] }
+      groups.push(group)
+    }
+    group.choices.push({ ...choice, index })
+  })
+  return groups
+}
+
 // 9a. A new, empty track.
 //
 // A track is not one object either: it needs a `Staff`, and that staff needs one
@@ -2874,5 +2892,94 @@ export function deleteBars(score, from, to, settings) {
       else detach()
       isDetached = !isDetached
     },
+  })
+}
+
+// ---------------------------------------------------------------------------
+// 10. A whole new score
+// ---------------------------------------------------------------------------
+
+// The denominators a time signature can have, which is not "any number": a beat
+// is a power-of-two division of a whole note, and alphaTab's `Duration` enum has
+// no other members. 32nds are the shortest this offers because the duration
+// ladder the editing keys walk stops there too.
+export const TIME_SIGNATURE_DENOMINATORS = [1, 2, 4, 8, 16, 32]
+
+// How many bars a blank score starts with, and the bounds on asking for more.
+//
+// Eight rather than one: a single bar is not enough to see whether the layout,
+// the tempo and the tuning are what you meant, and adding bars is a keypress
+// (the right arrow past the end) while removing them is a modal decision.
+export const NEW_SCORE_BARS = 8
+const MAX_NEW_SCORE_BARS = 64
+
+// A blank score with one track in it.
+//
+// The one operation in this file that does NOT edit a loaded score, and so the
+// one that returns a `score` instead of an `undo`: there is nothing to put back,
+// because the document this replaces is discarded by the caller after its own
+// confirmation. Everything else about the shape is the usual result contract, so
+// a refusal reads the same as any other.
+//
+// Built out of `addTrack` rather than beside it, which is what keeps a created
+// track and an added one identical: the channel allocation, the staff, the bar
+// per master bar and the -12 display transposition all come from there, and a
+// second implementation of those would be a second set of defaults to disagree.
+export function createScore(spec, settings) {
+  const barCount = Math.round(Number(spec?.barCount ?? NEW_SCORE_BARS))
+  if (!Number.isFinite(barCount) || barCount < 1 || barCount > MAX_NEW_SCORE_BARS) {
+    return refused(`A new score needs between 1 and ${MAX_NEW_SCORE_BARS} bars.`)
+  }
+
+  const numerator = Math.round(Number(spec?.timeSignatureNumerator ?? 4))
+  if (!Number.isFinite(numerator) || numerator < 1 || numerator > 32) {
+    return refused('The top of the time signature must be between 1 and 32.')
+  }
+  const denominator = Math.round(Number(spec?.timeSignatureDenominator ?? 4))
+  if (!TIME_SIGNATURE_DENOMINATORS.includes(denominator)) {
+    return refused(`The bottom of the time signature must be one of ${TIME_SIGNATURE_DENOMINATORS.join(', ')}.`)
+  }
+
+  const tempo = Number(spec?.tempo ?? 120)
+  if (!Number.isFinite(tempo) || tempo < MIN_TEMPO || tempo > MAX_TEMPO) {
+    return refused(`Tempo must be between ${MIN_TEMPO} and ${MAX_TEMPO} BPM.`)
+  }
+
+  const score = new alphaTab.model.Score()
+  score.title = String(spec?.title ?? '').trim()
+  score.artist = String(spec?.artist ?? '').trim()
+  score.album = String(spec?.album ?? '').trim()
+
+  for (let i = 0; i < barCount; i += 1) {
+    const masterBar = new alphaTab.model.MasterBar()
+    masterBar.timeSignatureNumerator = numerator
+    masterBar.timeSignatureDenominator = denominator
+    // `addMasterBar` computes `start` from the previous bar and files this one
+    // into the repeat groups, which is why the bars are added rather than
+    // pushed. Same reason `appendBar` uses it.
+    score.addMasterBar(masterBar)
+  }
+
+  // `score.tempo` is a GETTER over `masterBars[0].tempoAutomations[0]` and there
+  // is no setter, so the tempo of a new score is an automation or it is 120
+  // whatever this asked for. See pitfall 3 at the top of this file, and
+  // `applyScoreTempo`, which changes the same object.
+  //
+  // `false` is "not linear", 0 the position within the bar, and the reference is
+  // clamped to 2 (a quarter note) by alphaTab for anything outside 1 to 5 - its
+  // own alphaTex importer passes 0 here and gets the same thing.
+  score.masterBars[0].tempoAutomations.push(
+    alphaTab.model.Automation.buildTempoAutomation(false, 0, tempo, 2),
+  )
+
+  const track = addTrack(score, spec?.track ?? {}, settings)
+  if (!track.ok) return track
+
+  return applied({
+    score,
+    barCount,
+    trackName: track.trackName,
+    tempo: score.tempo,
+    timeSignature: `${numerator}/${denominator}`,
   })
 }

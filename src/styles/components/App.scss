@@ -369,6 +369,41 @@
   }
 }
 
+// The two ways to begin, stacked with the drop target on top: it is the larger
+// target and the more common intent, and putting the button under it keeps the
+// reading order the same as the visual weight.
+.empty-choices {
+  display: flex;
+  flex-direction: column;
+  gap: $gap-sm;
+}
+
+// A rule with the word in it, rather than the word alone: without the lines the
+// two options read as a list of three things.
+.empty-or {
+  display: flex;
+  align-items: center;
+  gap: $gap-sm;
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+
+  &::before,
+  &::after {
+    content: '';
+    flex: 1;
+    border-top: 1px solid var(--panel-border);
+  }
+}
+
+.empty-create {
+  @include button-base;
+  padding: 0.6rem 0.9rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
 // Narrow layout: the panel becomes a strip above the score and returns to the
 // normal flow, so there is no horizontal room to slide into. It simply shows or
 // hides.

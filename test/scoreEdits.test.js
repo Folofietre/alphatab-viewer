@@ -8,6 +8,10 @@ import {
   RETUNE_KEEP_PITCH,
   RETUNE_REASSIGN,
   applyScoreTempo,
+  createScore,
+  newTrackTuningGroups,
+  NEW_SCORE_BARS,
+  TIME_SIGNATURE_DENOMINATORS,
   HARMONIC_FRETS,
   describeNote,
   describeTuning,
@@ -3350,5 +3354,187 @@ describe('deleteBars', () => {
       }
     }
     expect(roundTrip(score).masterBars).toHaveLength(before)
+  })
+})
+
+describe('createScore', () => {
+  const SPEC = {
+    title: 'Blank Slate',
+    artist: 'Nobody',
+    album: 'Nothing',
+    tempo: 90,
+    barCount: 4,
+    timeSignatureNumerator: 3,
+    timeSignatureDenominator: 4,
+    track: { name: 'Lead', program: 30, tunings: [64, 59, 55, 50, 45, 40] },
+  }
+
+  it('builds a score with the metadata it was given', () => {
+    const result = createScore(SPEC, settings)
+    expect(result).toMatchObject({
+      ok: true,
+      changed: true,
+      barCount: 4,
+      timeSignature: '3/4',
+      trackName: 'Lead',
+    })
+    const score = result.score
+    expect(score.title).toBe('Blank Slate')
+    expect(score.artist).toBe('Nobody')
+    expect(score.album).toBe('Nothing')
+  })
+
+  it('and a tempo, which has to be an automation rather than a field', () => {
+    // `score.tempo` is a getter over `masterBars[0].tempoAutomations[0]` with no
+    // setter at all, so a new score without that object reports 120 whatever was
+    // asked for. Pitfall 3.
+    const score = createScore(SPEC, settings).score
+    expect(score.masterBars[0].tempoAutomations).toHaveLength(1)
+    expect(score.tempo).toBe(90)
+
+    // And the automation is the same object `applyScoreTempo` changes, so the
+    // tempo of a created score is editable like any other.
+    expect(applyScoreTempo(score, 140).ok).toBe(true)
+    expect(score.tempo).toBe(140)
+  })
+
+  it('and bars in the metre asked for, with the ticks that follow from it', () => {
+    const score = createScore(SPEC, settings).score
+    expect(score.masterBars).toHaveLength(4)
+    for (const masterBar of score.masterBars) {
+      expect(masterBar.timeSignatureNumerator).toBe(3)
+      expect(masterBar.timeSignatureDenominator).toBe(4)
+    }
+    // Three quarters to the bar, and `addMasterBar` computing each start from
+    // the one before.
+    expect(score.masterBars.map((m) => m.start)).toEqual([0, 2880, 5760, 8640])
+  })
+
+  it('and one track, built the way an added one is', () => {
+    const score = createScore(SPEC, settings).score
+    expect(score.tracks).toHaveLength(1)
+    const track = score.tracks[0]
+    expect(track.name).toBe('Lead')
+    expect(track.playbackInfo.program).toBe(30)
+    const staff = track.staves[0]
+    expect(staff.tuning).toEqual([64, 59, 55, 50, 45, 40])
+    // One bar per master bar, or the score is ragged.
+    expect(staff.bars).toHaveLength(4)
+    // The octave-up display every fretted staff carries, from `addTrack`.
+    expect(staff.displayTranspositionPitch).toBe(-12)
+  })
+
+  it('and every bar holds the placeholder that draws a whole-bar rest', () => {
+    const score = createScore(SPEC, settings).score
+    for (const bar of score.tracks[0].staves[0].bars) {
+      expect(bar.voices).toHaveLength(1)
+      expect(bar.voices[0].beats).toHaveLength(1)
+      expect(bar.voices[0].beats[0].isEmpty).toBe(true)
+    }
+    // Complete rather than under-filled, and that is `barFill`'s own rule: every
+    // voice auto-filled is a whole-bar rest, which is complete by definition.
+    // So a blank score shows no red bars.
+    expect(barFill(score.tracks[0].staves[0].bars[0])).toMatchObject({ state: BAR_EXACT })
+  })
+
+  it('is writable, playable and exportable, which is the whole claim', () => {
+    const score = createScore(SPEC, settings).score
+    const beat = score.tracks[0].staves[0].bars[0].voices[0].beats[0]
+    expect(writeNoteAtString(beat, 6, 5, settings).ok).toBe(true)
+    // String 6 is the HIGHEST, per pitfall 2: E4 is 64, so fret 5 sounds 69.
+    // At tick 0 on the track's own channel.
+    expect(midiNoteOns(score)).toContainEqual([0, 0, 69])
+
+    const back = roundTrip(score)
+    expect(back.title).toBe('Blank Slate')
+    expect(back.artist).toBe('Nobody')
+    expect(back.tempo).toBe(90)
+    expect(back.masterBars).toHaveLength(4)
+    expect(back.masterBars[0].timeSignatureNumerator).toBe(3)
+    expect(snapshotTrack(back.tracks[0])).toEqual(snapshotTrack(score.tracks[0]))
+  })
+
+  it('defaults to eight bars of 4/4 at 120', () => {
+    // Eight rather than one: a single bar is not enough to see whether the
+    // layout and the tuning are what you meant, and adding bars is a keypress.
+    const result = createScore({ track: SPEC.track }, settings)
+    expect(result.ok).toBe(true)
+    expect(result.score.masterBars).toHaveLength(NEW_SCORE_BARS)
+    expect(NEW_SCORE_BARS).toBe(8)
+    expect(result.timeSignature).toBe('4/4')
+    expect(result.score.tempo).toBe(120)
+    // An untitled score is allowed: the export falls back to a generic name.
+    expect(result.score.title).toBe('')
+  })
+
+  it('refuses a bar count outside its bounds', () => {
+    for (const barCount of [0, -1, 65, 1000, Number.NaN, 'many']) {
+      const result = createScore({ ...SPEC, barCount }, settings)
+      expect(result.ok, String(barCount)).toBe(false)
+      expect(result.reason).toMatch(/between 1 and 64 bars/)
+    }
+    expect(createScore({ ...SPEC, barCount: 1 }, settings).ok).toBe(true)
+    expect(createScore({ ...SPEC, barCount: 64 }, settings).ok).toBe(true)
+  })
+
+  it('refuses a time signature the model cannot hold', () => {
+    // A beat is a power-of-two division of a whole note, so the denominator is
+    // not a free number: alphaTab's Duration enum has no other members.
+    for (const denominator of [3, 5, 6, 7, 9, 12, 64, 0]) {
+      const result = createScore({ ...SPEC, timeSignatureDenominator: denominator }, settings)
+      expect(result.ok, String(denominator)).toBe(false)
+    }
+    for (const denominator of TIME_SIGNATURE_DENOMINATORS) {
+      expect(createScore({ ...SPEC, timeSignatureDenominator: denominator }, settings).ok).toBe(true)
+    }
+    // The top is a free count, within reason.
+    expect(createScore({ ...SPEC, timeSignatureNumerator: 7 }, settings).ok).toBe(true)
+    expect(createScore({ ...SPEC, timeSignatureNumerator: 0 }, settings).ok).toBe(false)
+    expect(createScore({ ...SPEC, timeSignatureNumerator: 33 }, settings).ok).toBe(false)
+  })
+
+  it('refuses a tempo outside the same bounds every other tempo uses', () => {
+    expect(createScore({ ...SPEC, tempo: MIN_TEMPO - 1 }, settings).ok).toBe(false)
+    expect(createScore({ ...SPEC, tempo: MAX_TEMPO + 1 }, settings).ok).toBe(false)
+    expect(createScore({ ...SPEC, tempo: MIN_TEMPO }, settings).ok).toBe(true)
+    expect(createScore({ ...SPEC, tempo: MAX_TEMPO }, settings).ok).toBe(true)
+  })
+
+  it('and passes the track refusals straight through', () => {
+    // The track is built by `addTrack`, so its validation is not repeated here -
+    // this asserts the refusal is returned rather than swallowed.
+    const noTuning = createScore({ ...SPEC, track: { name: 'X', tunings: [] } }, settings)
+    expect(noTuning.ok).toBe(false)
+    expect(noTuning.reason).toMatch(/tuning/)
+
+    const badProgram = createScore({ ...SPEC, track: { ...SPEC.track, program: 300 } }, settings)
+    expect(badProgram.ok).toBe(false)
+    expect(badProgram.reason).toMatch(/General MIDI/)
+  })
+
+  it('names the track when nothing was typed', () => {
+    const score = createScore({ ...SPEC, track: { ...SPEC.track, name: '  ' } }, settings).score
+    expect(score.tracks[0].name).toBe('Track 1')
+  })
+})
+
+describe('newTrackTuningGroups', () => {
+  it('groups every preset by string count, in count order', () => {
+    const groups = newTrackTuningGroups()
+    expect(groups.map((g) => g.stringCount)).toEqual([4, 5, 6, 7])
+    for (const group of groups) {
+      expect(group.choices.length).toBeGreaterThan(0)
+      for (const choice of group.choices) {
+        expect(choice.tunings).toHaveLength(group.stringCount)
+      }
+    }
+  })
+
+  it('and gives every entry its position in the FLAT list', () => {
+    // What a <select> binds to, because a tuning is an array and an array is not
+    // a value an option can carry.
+    const flat = newTrackTuningGroups().flatMap((g) => g.choices)
+    expect(flat.map((c) => c.index)).toEqual(flat.map((_, i) => i))
+    expect(new Set(flat.map((c) => c.index)).size).toBe(flat.length)
   })
 })

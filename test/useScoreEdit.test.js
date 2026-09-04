@@ -177,6 +177,13 @@ const player = {
   revertToOriginal: vi.fn(() => true),
   // A ref, like the real one, so the Revert control can react to it.
   canRevert: ref(true),
+  // Records what a created score was handed to be displayed. Returns true like
+  // the real one, which answers false only with no api and no score.
+  loadedScores: [],
+  loadScore: vi.fn((score, name) => {
+    player.loadedScores.push({ score, name })
+    return true
+  }),
 }
 
 vi.mock('@/composables/usePlayer', () => ({
@@ -2865,6 +2872,90 @@ describe('harmonics', () => {
     // The dialog itself closes it through the model, so nothing here resets it -
     // this suite has to, or the next test starts with it open.
     edit.harmonicDialog.value = false
+  })
+})
+
+describe('a new score', () => {
+  beforeEach(() => {
+    player.loadedScores = []
+    player.loadScore.mockClear()
+    edit.newScoreDialog.value = false
+  })
+
+  const SPEC = {
+    title: 'Blank',
+    tempo: 90,
+    barCount: 4,
+    timeSignatureNumerator: 3,
+    timeSignatureDenominator: 4,
+    track: { name: 'Lead', program: 30, tunings: [64, 59, 55, 50, 45, 40] },
+  }
+
+  it('builds one and hands it to the player to display', () => {
+    const result = edit.createNewScore(SPEC)
+    expect(result).toMatchObject({ ok: true, barCount: 4, timeSignature: '3/4', tempo: 90 })
+    expect(player.loadScore).toHaveBeenCalledTimes(1)
+
+    const [{ score, name }] = player.loadedScores
+    expect(score.title).toBe('Blank')
+    expect(score.tempo).toBe(90)
+    expect(score.masterBars).toHaveLength(4)
+    expect(score.tracks).toHaveLength(1)
+    // No file name, because there is no file: the export falls back to the
+    // title.
+    expect(name).toBe('')
+  })
+
+  it('and says what it made, after the load rather than before', () => {
+    // `scoreLoaded` clears the message on the way in, so a message set first
+    // would never be seen.
+    edit.createNewScore(SPEC)
+    expect(edit.editMessage.value).toMatchObject({ kind: 'ok' })
+    expect(edit.editMessage.value.text).toMatch(/4 bars of 3\/4 at 90 BPM/)
+  })
+
+  it('refuses a bad spec without touching what is open', () => {
+    const result = edit.createNewScore({ ...SPEC, barCount: 0 })
+    expect(result.ok).toBe(false)
+    expect(player.loadScore).not.toHaveBeenCalled()
+    expect(edit.editMessage.value.kind).toBe('error')
+    // The score that was already open is still the one loaded.
+    expect(host.score).toBe(score)
+  })
+
+  it('and keeps the dialog open on a refusal, since the caller decides', () => {
+    // The dialog closes itself on `ok`, so all this has to hold is that a
+    // refusal is reported rather than thrown.
+    expect(() => edit.createNewScore({ ...SPEC, tempo: 5000 })).not.toThrow()
+    expect(edit.createNewScore({ ...SPEC, track: { tunings: [] } }).ok).toBe(false)
+  })
+
+  it('records no undo step, because the graph is replaced', () => {
+    // Every other write here is a change TO a score. This one throws the object
+    // graph away, and `scoreLoaded` clears the history: a record pointing into
+    // the discarded score would pin it in memory.
+    const before = edit.undoDepth.value
+    edit.createNewScore(SPEC)
+    expect(edit.undoDepth.value).toBe(before)
+  })
+
+  it('the dialog flag is off until something opens it', () => {
+    expect(edit.newScoreDialog.value).toBe(false)
+    edit.openNewScoreDialog()
+    expect(edit.newScoreDialog.value).toBe(true)
+    edit.newScoreDialog.value = false
+  })
+
+  it('offers the tuning list grouped, with a flat index on every entry', () => {
+    // What both dialogs bind their <select> to: a tuning is an array, so the
+    // option value is the position in the flat list.
+    const groups = edit.newTrackTuningGroups()
+    expect(groups.map((g) => g.stringCount)).toEqual([4, 5, 6, 7])
+    const flat = groups.flatMap((g) => g.choices)
+    expect(flat.map((c) => c.index)).toEqual(flat.map((_, i) => i))
+    for (const choice of flat) {
+      expect(choice.tunings).toHaveLength(choice.stringCount)
+    }
   })
 })
 

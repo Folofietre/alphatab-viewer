@@ -6,7 +6,7 @@
       :class="{ on: isOpen }"
       aria-haspopup="menu"
       :aria-expanded="isOpen"
-      title="Open, save or close a score"
+      title="Create, open, save or close a score"
       @click="isOpen = !isOpen"
     >File</button>
 
@@ -15,6 +15,14 @@
          primitive on paper and silently did nothing here, twice. A menu that is
          our own DOM and our own state cannot be switched off by the browser. -->
     <ul v-if="isOpen" class="menu" role="menu">
+      <!-- First, because it is the one item that needs nothing to already be
+           open. Both it and Open replace the document, so both go through the
+           same unsaved-changes confirmation in App. -->
+      <li role="none">
+        <button role="menuitem" type="button" @click="choose('create')">
+          <span>New...</span>
+        </button>
+      </li>
       <li role="none">
         <button role="menuitem" type="button" @click="choose('open')">
           <span>Open...</span>
@@ -53,7 +61,7 @@ import { SCORE_FILE_ACCEPT } from '@/utils/scoreFiles'
 defineProps({
   isScoreLoaded: { type: Boolean, default: false },
 })
-const emit = defineEmits(['file', 'save', 'close'])
+const emit = defineEmits(['file', 'create', 'save', 'close'])
 
 const root = ref(null)
 const picker = ref(null)

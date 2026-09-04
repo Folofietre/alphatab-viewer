@@ -752,6 +752,49 @@ comment. `navigateBeat` is pure navigation - it writes nothing, is not gated on
 playback, and never goes near `propagate` - and the composable's `moveCursorBeat`
 layers the two writes on top of it. The write is not folded into the walk.
 
+## Creating a score, which is a blank one plus a track
+
+`createScore` is the only thing in `scoreEdits.js` that does not edit a loaded
+score, and so the only one that returns a `score` instead of an `undo`. There is
+nothing to put back: the document it replaces is discarded by the caller after
+its own confirmation, and `scoreLoaded` clears the history and the selection on
+the way in - a record pointing into the discarded graph would pin it in memory,
+which is the reason that stack is cleared at all.
+
+It builds the master bars itself and delegates the rest to `addTrack`. That is
+deliberate: the channel pair, the staff, the bar per master bar and the -12
+display transposition are decisions with reasons behind them, and a second
+implementation of them would be a second set of defaults to disagree.
+
+**The tempo has to be an automation.** `score.tempo` is a getter over
+`masterBars[0].tempoAutomations[0]` with **no setter**, so a new score without
+that object reports 120 whatever was asked for - the same pitfall
+`applyScoreTempo` exists for, met from the other side. So the tempo is written as
+`Automation.buildTempoAutomation(false, 0, bpm, 2)`, which is the same object
+`applyScoreTempo` later changes; a test asserts the tempo of a created score is
+editable like any other.
+
+`addMasterBar` rather than pushing onto the list, for the reason `appendBar`
+uses it: it computes each bar's `start` from the one before and files it into the
+repeat groups.
+
+**The denominator is not a free number.** A beat is a power-of-two division of a
+whole note and alphaTab's `Duration` enum has no other members, so
+`TIME_SIGNATURE_DENOMINATORS` is the list and anything else is refused. The
+numerator is a free count, bounded at 32 for sanity rather than by the model.
+
+On the way to the screen it goes through `usePlayer.loadScore`, which is
+`api.load(score)`: alphaTab's ui facade checks `data instanceof Score` before it
+checks for bytes and hands it straight to `renderScore`, so a built score takes
+exactly the same path as an opened file, `scoreLoaded` included. That matters
+because every track descriptor, the mixer reset and `isDirty` are seeded there
+and nowhere else. What `loadScore` does NOT do is keep `originalBytes`, so
+`revertToOriginal` stays unavailable - there is no file to go back to.
+
+An unwritten bar reads as `exact` rather than `under`, which is `barFill`'s own
+rule (every voice auto-filled is a whole-bar rest, complete by definition), so a
+blank score shows no red bars.
+
 ## Adding a track, and duplicating one
 
 ### The cloners exist and are out of reach

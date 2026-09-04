@@ -90,25 +90,17 @@ const dialog = ref(null)
 const nameInput = ref(null)
 
 const { tracks } = usePlayer()
-const { canEdit, createTrack, newTrackTunings } = useScoreEdit()
+const { canEdit, createTrack, newTrackTuningGroups } = useScoreEdit()
 
-// Every preset alphaTab has, flattened once with its position kept: the select
-// binds to the INDEX rather than to the tuning, because a tuning is an array and
-// an array is not a value a <select> can carry.
-const choices = newTrackTunings().map((choice, index) => ({ ...choice, index }))
-
-const tuningGroups = computed(() => {
-  const groups = []
-  for (const choice of choices) {
-    let group = groups.find((g) => g.stringCount === choice.stringCount)
-    if (!group) {
-      group = { stringCount: choice.stringCount, choices: [] }
-      groups.push(group)
-    }
-    group.choices.push(choice)
-  }
-  return groups
-})
+// Every preset alphaTab has, grouped by string count so a list of forty-nine
+// reads as four short ones, with each entry carrying its position in the flat
+// list: the select binds to that INDEX rather than to the tuning, because a
+// tuning is an array and an array is not a value a <select> can carry.
+//
+// The grouping is in scoreEdits because the New score dialog offers the same
+// list, and two copies of it could group it two ways.
+const tuningGroups = newTrackTuningGroups()
+const choices = tuningGroups.flatMap((group) => group.choices)
 
 // Only tracks a new one can be modelled on. A percussion track has no tuning to
 // copy, and this dialog only makes stringed tracks - offering it would fill the

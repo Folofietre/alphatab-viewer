@@ -280,6 +280,39 @@ onto its far edge - right carries on from the last note, left from the first.
 Running off the start of the score does nothing. Running off the **end** adds a
 bar - see below.
 
+## Starting from nothing
+
+**"Create a new tab"** sits beside the drop target on the empty page, and
+**File > New...** does the same thing once something is open. Both open one
+dialog, in two halves: the score (title, artist, album, tempo, time signature,
+how many bars) and its first track (name, instrument, tuning). Every field has a
+default, so a blank 4/4 guitar score at 120 is four clicks away.
+
+The dialog offers exactly the fields the score header displays, so nothing shown
+on screen is left unfillable. The time signature is two controls rather than a
+list of the usual metres: 7/8 is as real as 4/4, and the numerator is a free
+count in the model. Eight bars is the default because one is not enough to see
+whether the layout, the tempo and the tuning are what you meant - and adding
+bars is a keypress (the right arrow past the last one) while removing them is a
+modal decision.
+
+The created score is **a blank score plus one added track**, and that is
+literally how it is built: the channels, the staff, the bar per master bar and
+the octave-up display all come from the same `addTrack` the Mixer's `+ Track`
+uses, so a created track and an added one cannot drift apart.
+
+Two things behave differently from an opened file, both for the same reason -
+there is no file:
+
+- **Revert** is unavailable. Undo walks back what has been written INTO the new
+  score, but there is nothing earlier to go back to.
+- The score is not counted as unsaved until something is written into it. The
+  choices made in the dialog are not themselves an edit.
+
+Starting a new score replaces what is open, so it asks the same
+unsaved-changes question opening a file does - and asks it **before** the dialog,
+so someone who meant to keep their edits is not made to fill a form first.
+
 ## Adding and duplicating a track
 
 **`+ Track`** in the Mixer opens a dialog for a new one: its name, its instrument

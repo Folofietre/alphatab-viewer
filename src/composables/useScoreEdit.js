@@ -29,8 +29,12 @@ import {
   shiftNoteString,
   shiftNotesFret,
   shiftNotesOctave,
+  createScore,
   harmonicSoundingChoices,
   newTrackTunings,
+  newTrackTuningGroups,
+  NEW_SCORE_BARS,
+  TIME_SIGNATURE_DENOMINATORS,
   noteNameForMidi,
   offeredHarmonicNode,
   setArtificialHarmonic,
@@ -229,6 +233,10 @@ const selectedTrackIndex = ref(0)
 // Flat, plain description of the selected note. shallowRef because the value is
 // replaced wholesale, never mutated in place.
 const selectedNote = shallowRef(null)
+
+// Whether the new-score dialog is showing. See `harmonicDialog` below for why
+// this is module level.
+const newScoreDialog = ref(false)
 
 // Whether the artificial-harmonic dialog is showing.
 //
@@ -2363,6 +2371,35 @@ export function useScoreEdit() {
     }
   }
 
+  // Start a blank score, replacing whatever is open.
+  //
+  // The confirmation is the caller's job, like `revert`: only the UI knows
+  // whether it can ask, and this is asked from two places - the empty page,
+  // where there is nothing to lose, and the File menu, where there may be.
+  //
+  // No undo record, and that is not an omission. Every other write here is a
+  // change TO a score; this replaces the object graph, so `scoreLoaded` clears
+  // the history and the selection on the way in, and an undo record pointing
+  // into the discarded score would pin it in memory - the reason the stack is
+  // cleared at all. Ctrl+Z walks back what is written into the new score.
+  function createNewScore(spec) {
+    const result = createScore(spec, scoreEditHost.api?.settings)
+    if (!result.ok) {
+      message('error', result.reason)
+      return result
+    }
+    if (!player.loadScore(result.score, '')) {
+      message('error', 'Could not display the new score.')
+      return { ok: false, changed: false, reason: 'Could not display the new score.' }
+    }
+    // After the load, not before: `scoreLoaded` clears the message.
+    message(
+      'ok',
+      `New score: ${result.barCount} bars of ${result.timeSignature} at ${result.tempo} BPM, one track.`,
+    )
+    return result
+  }
+
   // Throw away every edit. The confirmation is the caller's job, because only
   // the UI knows whether it can ask.
   function revert() {
@@ -2498,6 +2535,17 @@ export function useScoreEdit() {
 
     // saving
     download,
+    createNewScore,
+    // The dialog's own state, and the lists it offers. Module level for the same
+    // reason the harmonic dialog's is: the File menu and the empty page both
+    // open it, and neither owns the other.
+    newScoreDialog,
+    openNewScoreDialog: () => {
+      newScoreDialog.value = true
+    },
+    newTrackTuningGroups,
+    TIME_SIGNATURE_DENOMINATORS,
+    NEW_SCORE_BARS,
     revert,
     canRevert: player.canRevert,
 
