@@ -160,6 +160,21 @@ function makeShiftSwap(notes, step) {
   }
 }
 
+// The same, followed by a re-derivation.
+//
+// `finish()` is not optional and not a precaution: several fields are DERIVED
+// from the ones these swaps write - `playbackDuration` from `duration` and
+// `dots` (pitfall 7), `Beat.isPalmMute` from its notes' flags - and nothing
+// recomputes them on assignment. A swap that skipped it would put the field back
+// and leave the score reading the old value, the bar-fill counter included.
+function makeFinishingSwap(entries, score, settings) {
+  const swap = makeSwap(entries)
+  return () => {
+    swap()
+    score?.finish(settings ?? null)
+  }
+}
+
 function signed(value) {
   return value > 0 ? `+${value}` : String(value)
 }
@@ -308,6 +323,7 @@ export function describeNote(note) {
     // 64 -> "E4" (verified).
     noteName: alphaTab.model.Tuning.getTextForTuning(note.realValue, true),
     midiKey: note.realValue,
+    isPalmMute: !!note.isPalmMute,
   }
 }
 
@@ -1020,6 +1036,98 @@ export function setNoteFret(note, fret) {
   return applied({ undo })
 }
 
+// 7f. Palm mute, which is a property of the NOTE and a marking on the BEAT.
+//
+// `note.isPalmMute` is a plain field, and `Beat.finish` derives the beat's own
+// flag from its notes (`if (note.isPalmMute) this.isPalmMute = true`). Measured:
+// the beat reads false after setting the note and true after finishing, so the
+// finish is what puts the P.M. bracket on the score rather than a nicety.
+//
+// It changes what is HEARD without moving the tick grid, which is why it takes
+// the `onPlay` flavour like the frets. Measured on the whole midi event stream:
+// 417 events before and after, one pair different - the note-off moves from tick
+// 960 to 160, so the note is cut short where it starts at the same instant.
+//
+// A TOGGLE, and mixed selections resolve towards ON for the same reason the dot
+// does: the first press should do what was asked rather than undo work already
+// on screen.
+//
+// Refused on a note with no string, where the technique has no meaning. alphaTab
+// would let it be set - measured, a drum note takes the flag without complaint -
+// so this refusal is ours to make, and it is the same one the frets and the
+// strings already make.
+export function togglePalmMute(notes, settings) {
+  const list = [...new Set(notes ?? [])]
+  if (list.length === 0) return refused('No notes selected.')
+
+  const score = list[0]?.beat?.voice?.bar?.staff?.track?.score ?? null
+  if (!score) return refused('Those notes are not attached to a score.')
+
+  const unstringed = list.filter((note) => !note.isStringed)
+  if (unstringed.length > 0) {
+    return refused(
+      list.length === 1
+        ? 'That note has no string: percussion cannot be palm muted.'
+        : `${unstringed.length} of these ${list.length} notes have no string: percussion cannot be palm muted.`,
+    )
+  }
+
+  const palmMute = !list.every((note) => note.isPalmMute)
+  const moves = list.filter((note) => note.isPalmMute !== palmMute)
+  if (moves.length === 0) return noop({ noteCount: 0, palmMute })
+
+  // Two fields are DERIVED from the flag, and `finish()` only ever SETS them -
+  // it never clears either - so a plain finish leaves the score claiming a palm
+  // mute that no note has any more:
+  //
+  //   Beat.finish  : `if (note.isPalmMute) this.isPalmMute = true`, plus a
+  //                  propagation onto adjacent RESTS in both directions
+  //   Note.finish  : `palmMuteDestination`, set only when the flag is true
+  //
+  // Caught by a test: unmuting the last muted note of a beat left
+  // `beat.isPalmMute` true, which is what draws the P.M. bracket.
+  //
+  // So both are reset across the AFFECTED STAVES and rebuilt from the note
+  // flags. The staff is the right unit and needs no magic constant, for the
+  // reason it is the right unit in `deleteNotes`: the propagation walks
+  // `previousBeat` / `nextBeat`, which never leave a staff. Resetting and
+  // finishing reproduces exactly the derivation the importer settles on, so
+  // nothing has to be captured - the value follows the flags, which the swap
+  // restores.
+  const staves = new Set(
+    list.map((note) => note.beat?.voice?.bar?.staff).filter((staff) => staff),
+  )
+
+  function rederive() {
+    for (const staff of staves) {
+      for (const bar of staff.bars ?? []) {
+        for (const voice of bar.voices ?? []) {
+          for (const beat of voice.beats ?? []) {
+            beat.isPalmMute = false
+            for (const note of beat.notes ?? []) note.palmMuteDestination = null
+          }
+        }
+      }
+    }
+    score.finish(settings ?? null)
+  }
+
+  const swap = makeSwap(
+    moves.map((note) => ({ target: note, key: 'isPalmMute', value: note.isPalmMute })),
+  )
+  for (const note of moves) note.isPalmMute = palmMute
+  rederive()
+
+  return applied({
+    noteCount: moves.length,
+    palmMute,
+    undo: () => {
+      swap()
+      rederive()
+    },
+  })
+}
+
 // ---------------------------------------------------------------------------
 // Bar filling
 // ---------------------------------------------------------------------------
@@ -1347,22 +1455,6 @@ function nextDuration(duration, direction) {
   if (at < 0) return null
   const to = at + (direction === DURATION_SHORTER ? 1 : -1)
   return to >= 0 && to < DURATION_LADDER.length ? DURATION_LADDER[to] : null
-}
-
-// The swap behind every structural write here: exchange the saved values, then
-// re-derive.
-//
-// `finish()` is not optional and not a precaution. `playbackDuration` and
-// `displayDuration` are DERIVED from `duration` and nothing recomputes them on
-// assignment (pitfall 7), so a swap that skipped it would put the field back and
-// leave every tick reading it stale - including the bar-fill counter that is
-// supposed to be watching for exactly this.
-function makeFinishingSwap(entries, score, settings) {
-  const swap = makeSwap(entries)
-  return () => {
-    swap()
-    score?.finish(settings ?? null)
-  }
 }
 
 function scoreOf(node) {

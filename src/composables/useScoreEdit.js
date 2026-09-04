@@ -31,6 +31,7 @@ import {
   shiftNotesOctave,
   shiftNotesString,
   tempoInfo,
+  togglePalmMute,
   transposeTrackByFrets,
   transposeTrackByTuning,
   tuningChoices,
@@ -2087,6 +2088,48 @@ export function useScoreEdit() {
     return addBarAtEnd(anchor)
   }
 
+  // "P" or "M": palm mute the selected note, or every note of a dragged passage.
+  //
+  // A property of the NOTE, unlike the length keys which belong to the beat - so
+  // muting one note of a chord mutes that note. alphaTab draws the P.M. bracket
+  // from a flag it derives on the BEAT, which is why `togglePalmMute` has to
+  // reset that derivation rather than only write the note.
+  //
+  // `onPlay` rather than `now`: measured on the whole midi event stream, the
+  // only difference is the note-OFF moving from tick 960 to 160. The note is cut
+  // short where it starts at the same instant, so the tick grid does not move
+  // and the scrub mapping stays correct.
+  function toggleSelectedPalmMute() {
+    if (!canEdit.value) return refusePlayback()
+
+    const isRange = rangeNotes.length > 0
+    const notes = isRange ? rangeNotes : selected ? [selected] : []
+    if (notes.length === 0) return refused('Click a note in the score first.')
+
+    const trackIndex = isRange
+      ? (selectedRange.value?.trackIndex ?? null)
+      : (selectedNote.value?.trackIndex ?? null)
+    const bar = isRange
+      ? (selectedRange.value?.startBar ?? null)
+      : (selectedNote.value?.barIndex ?? null)
+
+    const result = togglePalmMute(notes, scoreEditHost.api?.settings)
+    if (result.changed) {
+      if (typeof trackIndex === 'number') scoreEditHost.syncTrack(trackIndex)
+      refreshSelection()
+      // One note only, like the octave: it is a change of attack rather than of
+      // pitch, so hearing it is the only way to know what it did - and forty
+      // damped notes at once would be noise.
+      if (!isRange) scoreEditHost.previewNote(selected)
+    }
+    return propagate(result, {
+      render: true,
+      midi: 'onPlay',
+      firstChangedBar: bar,
+      label: result.palmMute ? 'Palm mute' : 'Remove palm mute',
+    })
+  }
+
   // Re-read the selected note after an edit that may have moved it, and bring
   // the cursor with it.
   //
@@ -2264,6 +2307,13 @@ export function useScoreEdit() {
     // characters, and a key that is not going to be used has to be left alone
     // BEFORE `preventDefault()`, not after.
     canWriteNote: computed(() => cursorInfo.value !== null),
+    // What the note techniques need: a NOTE, or a passage of them. A cursor on
+    // an empty string is not enough - there is nothing there to mute - which is
+    // what separates this from `canWriteNote`. It exists because "P" and "M" are
+    // bare characters and a key that will not be used has to be left alone.
+    canEditNotes: computed(
+      () => selectedNote.value !== null || selectedRange.value !== null,
+    ),
     canChangeDuration: hasTarget,
     // The bar keys part company with the other two here, which is the divergence
     // `hasTarget` was named separately for. A drag over bars that hold no notes
@@ -2302,6 +2352,7 @@ export function useScoreEdit() {
     nudgeSelectedFret,
     nudgeSelectedString,
     shiftSelectedOctave,
+    toggleSelectedPalmMute,
     deleteSelection,
 
     // undo / redo

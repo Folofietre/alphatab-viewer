@@ -425,6 +425,34 @@ export const BINDINGS = [
     appliesTo: (el) => !ownsAltArrows(el),
     run: (_player, _event, edit) => edit.shiftSelectedOctave(-1),
   },
+  // "P" or "M": palm mute the selected note, or every note of a passage.
+  //
+  // BOTH letters, one action - the same arrangement Delete and Backspace have,
+  // and here it is the notation's own abbreviation: a palm mute is written
+  // "P.M." above the staff, so either letter is the obvious reach. The help
+  // folds them into one row with the two keycaps stacked.
+  //
+  // Bare characters, so the same strictness as the digits: they stand down for
+  // anything that owns typing keys, and they stand down when no NOTE is
+  // designated - a cursor on an empty string is not enough, since there is
+  // nothing there to mute.
+  //
+  // No repeat: it is a toggle, and a held key would flip it dozens of times a
+  // second to land wherever the repeat stopped.
+  {
+    key: 'p',
+    label: 'Palm mute the selection',
+    group: 'The selected note',
+    appliesTo: (el, _player, edit) => !ownsTypingKeys(el) && edit.canEditNotes.value,
+    run: (_player, _event, edit) => edit.toggleSelectedPalmMute(),
+  },
+  {
+    key: 'm',
+    label: 'Palm mute the selection',
+    group: 'The selected note',
+    appliesTo: (el, _player, edit) => !ownsTypingKeys(el) && edit.canEditNotes.value,
+    run: (_player, _event, edit) => edit.toggleSelectedPalmMute(),
+  },
   // ---- writing -------------------------------------------------------------
   //
   // The keys that put something into the score, and the first ones here that are

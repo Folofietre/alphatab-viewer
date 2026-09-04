@@ -2488,6 +2488,115 @@ describe('durations', () => {
   })
 })
 
+describe('palm mute', () => {
+  function beatAt(bar, index, track = LEAD) {
+    return score.tracks[track].staves[0].bars[bar].voices[0].beats[index]
+  }
+
+  it('mutes the selected note, and sounds it', () => {
+    const note = beatAt(0, 0).notes[0]
+    clickAt(note)
+    host.previews = []
+
+    const result = edit.toggleSelectedPalmMute()
+    expect(result).toMatchObject({ ok: true, changed: true, noteCount: 1, palmMute: true })
+    expect(note.isPalmMute).toBe(true)
+    // The bracket alphaTab draws comes from the beat's own derived flag.
+    expect(note.beat.isPalmMute).toBe(true)
+    expect(edit.selectedNote.value.isPalmMute).toBe(true)
+    // A change of attack rather than of pitch, so hearing it is the only way to
+    // know what it did.
+    expect(host.previews).toEqual([note])
+  })
+
+  it('and unmutes on the second press, bracket included', () => {
+    const note = beatAt(0, 0).notes[0]
+    clickAt(note)
+    edit.toggleSelectedPalmMute()
+    expect(edit.toggleSelectedPalmMute()).toMatchObject({ ok: true, palmMute: false })
+    expect(note.isPalmMute).toBe(false)
+    // The one a plain finish() would have left behind: it only ever SETS this.
+    expect(note.beat.isPalmMute).toBe(false)
+    expect(edit.selectedNote.value.isPalmMute).toBe(false)
+  })
+
+  it('renders from the bar that changed and defers the midi', () => {
+    // It cuts the note short without moving where it starts, so the scrub
+    // mapping is still right and the rebuild can wait for the next play.
+    clickAt(beatAt(1, 0).notes[0])
+    host.renders = []
+    host.midiReloads = 0
+    host.midiStale = false
+
+    edit.toggleSelectedPalmMute()
+    expect(host.renders).toEqual([{ reuseViewport: true, firstChangedMasterBar: 1 }])
+    expect(host.midiReloads).toBe(0)
+    expect(host.midiStale).toBe(true)
+    expect(host.dirty).toBe(true)
+  })
+
+  it('mutes every note of a dragged passage, without sounding forty of them', () => {
+    dragOver(beatAt(0, 0), beatAt(0, 3))
+    const count = edit.selectedRange.value.noteCount
+    host.previews = []
+
+    expect(edit.toggleSelectedPalmMute()).toMatchObject({ ok: true, noteCount: count, palmMute: true })
+    for (const beat of score.tracks[LEAD].staves[0].bars[0].voices[0].beats) {
+      expect(beat.isPalmMute).toBe(true)
+    }
+    expect(host.previews).toEqual([])
+  })
+
+  it('refuses percussion, which has no string to mute', () => {
+    const drums = beatAt(0, 0, DRUMS)
+    host.api.beatMouseDown.emit(drums)
+    host.api.noteMouseDown.emit(drums.notes[0])
+
+    const result = edit.toggleSelectedPalmMute()
+    expect(result.ok).toBe(false)
+    expect(edit.editMessage.value.text).toMatch(/percussion cannot be palm muted/)
+  })
+
+  it('refuses with nothing selected, and while playing', () => {
+    edit.clearSelection()
+    expect(edit.toggleSelectedPalmMute().ok).toBe(false)
+
+    clickAt(beatAt(0, 0).notes[0])
+    player.isPlaying.value = true
+    expect(edit.toggleSelectedPalmMute().ok).toBe(false)
+    expect(edit.editMessage.value.text).toMatch(/Pause playback/)
+    expect(beatAt(0, 0).notes[0].isPalmMute).toBe(false)
+  })
+
+  it('and a cursor on an empty string is not a note to mute', () => {
+    clickAt(beatAt(0, 0).notes[0])
+    expect(edit.moveCursorString(-1).ok).toBe(true)
+    expect(edit.cursor.value.hasNote).toBe(false)
+    // The key stands down in this state rather than refusing, which is what
+    // `canEditNotes` is for.
+    expect(edit.canEditNotes.value).toBe(false)
+  })
+
+  it('undoes back, bracket and all', () => {
+    const note = beatAt(0, 0).notes[0]
+    clickAt(note)
+    edit.toggleSelectedPalmMute()
+
+    expect(edit.undo().ok).toBe(true)
+    expect(note.isPalmMute).toBe(false)
+    expect(note.beat.isPalmMute).toBe(false)
+    expect(host.dirty).toBe(false)
+  })
+
+  it('and the undo label says which way it went', () => {
+    clickAt(beatAt(0, 0).notes[0])
+    edit.toggleSelectedPalmMute()
+    expect(edit.undoLabel.value).toBe('Palm mute')
+    edit.toggleSelectedPalmMute()
+    expect(edit.undoLabel.value).toBe('Remove palm mute')
+  })
+})
+
 describe('the dot', () => {
   function beatAt(bar, index, track = LEAD) {
     return score.tracks[track].staves[0].bars[bar].voices[0].beats[index]

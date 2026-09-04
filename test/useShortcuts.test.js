@@ -192,6 +192,68 @@ describe('Ctrl+S saves the score', () => {
 
 // Taken from the browser, which is the whole point: Ctrl+A must not select the
 // page as text.
+// Two letters, one action, because a palm mute is written "P.M." above the staff
+// and either letter is the obvious reach.
+describe('P and M both palm mute', () => {
+  const armedNotes = { canEditNotes: { value: true } }
+
+  it('both resolve to the same action', () => {
+    const p = resolve(key('KeyP', { types: 'p' }))
+    const m = resolve(key('KeyM', { types: 'm' }))
+    expect(p?.label).toBe('Palm mute the selection')
+    expect(m?.label).toBe(p.label)
+  })
+
+  it('and the help shows them as ONE row with two keycaps', () => {
+    const row = shortcutRows().find((r) => r.label === 'Palm mute the selection')
+    expect(row.keys).toEqual(['P', 'M'])
+  })
+
+  it('filed with the other things that act on a note', () => {
+    const where = new Map()
+    for (const section of shortcutHelp()) {
+      for (const row of section.rows) where.set(row.label, section.group)
+    }
+    expect(where.get('Palm mute the selection')).toBe('The selected note')
+  })
+
+  it('matched by CHARACTER, so they work on any layout', () => {
+    // AZERTY puts the key labelled M where QWERTY puts the semicolon.
+    expect(resolve(key('Semicolon', { types: 'm' }))?.label).toMatch(/Palm mute/)
+    expect(resolve(key('KeyM', { types: ',' }))).toBeNull()
+  })
+
+  it('left alone under a modifier, and in a text field', () => {
+    for (const mods of [{ ctrl: true }, { alt: true }, { meta: true }]) {
+      expect(resolve(key('KeyM', { ...mods, types: 'm' }))).toBeNull()
+    }
+    const binding = resolve(key('KeyM', { types: 'm' }))
+    expect(binding.appliesTo({ tagName: 'INPUT', type: 'text' }, null, armedNotes)).toBe(false)
+    expect(binding.appliesTo({ tagName: 'TEXTAREA' }, null, armedNotes)).toBe(false)
+  })
+
+  it('and left alone when no NOTE is designated', () => {
+    // A cursor on an empty string is not enough: there is nothing there to mute.
+    const binding = resolve(key('KeyP', { types: 'p' }))
+    expect(binding.appliesTo({ tagName: 'BUTTON' }, null, { canEditNotes: { value: false } }))
+      .toBe(false)
+    expect(binding.appliesTo({ tagName: 'BUTTON' }, null, armedNotes)).toBe(true)
+  })
+
+  it('does not repeat, since it is a toggle', () => {
+    expect(!!resolve(key('KeyP', { types: 'p' })).allowRepeat).toBe(false)
+    expect(!!resolve(key('KeyM', { types: 'm' })).allowRepeat).toBe(false)
+  })
+
+  it('and calls the one action', () => {
+    for (const event of [key('KeyP', { types: 'p' }), key('KeyM', { types: 'm' })]) {
+      const edit = { ...armedNotes, toggleSelectedPalmMute: vi.fn() }
+      resolve(event).run(null, null, edit)
+      expect(edit.toggleSelectedPalmMute).toHaveBeenCalledTimes(1)
+    }
+  })
+})
+
 describe('Ctrl+A selects the notes, not the page', () => {
   it('claims Ctrl+A and Cmd+A', () => {
     expect(resolve(key('KeyA', { ctrl: true, types: 'a' }))?.label).toMatch(/Select every note/)
@@ -523,6 +585,7 @@ describe('the writing keys', () => {
     canWriteNote: { value: true },
     canChangeDuration: { value: true },
     canEditBars: { value: true },
+    canEditNotes: { value: true },
     DURATION_SHORTER: 'shorter',
     DURATION_LONGER: 'longer',
   }
@@ -531,6 +594,7 @@ describe('the writing keys', () => {
     canWriteNote: { value: false },
     canChangeDuration: { value: false },
     canEditBars: { value: false },
+    canEditNotes: { value: false },
   }
 
   function digit(character) {
@@ -762,7 +826,9 @@ describe('binding options', () => {
     // The three writing keys, which need a cursor: the digits, the two duration
     // keys, and Enter - whose FIRST binding is the checkbox toggle and needs
     // nothing.
-    const WRITES = new Set(['+', '-', '.'])
+    // The bare-character keys that need something designated: the length keys,
+    // and the two letters that palm mute.
+    const WRITES = new Set(['+', '-', '.', 'p', 'm'])
     for (const binding of BINDINGS) {
       const name = String(binding.code ?? binding.key)
       const call = () => binding.appliesTo({ tagName: 'BUTTON' })
@@ -786,6 +852,7 @@ describe('binding options', () => {
       canWriteNote: { value: true },
       canChangeDuration: { value: true },
       canEditBars: { value: true },
+      canEditNotes: { value: true },
     }
     for (const binding of BINDINGS) {
       expect(typeof binding.appliesTo({ tagName: 'BUTTON' }, player, edit)).toBe('boolean')

@@ -22,6 +22,7 @@ import {
   BAR_OVER,
   barFill,
   shiftNotesOctave,
+  togglePalmMute,
   DURATION_LONGER,
   DURATION_SHORTER,
   appendBar,
@@ -466,6 +467,50 @@ describe.skipIf(scores.length === 0)('invariants on real scores', () => {
                 expect(new Set(strings).size).toBe(strings.length)
               }
             }
+          }
+        }
+      })
+
+      // A technique that changes what is heard without moving a tick, and whose
+      // marking on the score is DERIVED from the note flags in a way finish()
+      // only ever sets. Real files use it heavily: 192 of 2856 notes on one,
+      // 960 of 7295 on the other.
+      it('palm mute goes on and comes off without leaving a bracket behind', () => {
+        const score = loadFile(file)
+        const staff = stringedTracks(score)[0]?.staves?.find((s) => s.isStringed)
+        if (!staff) return
+        const notes = [...stringedNotes(staff)].slice(0, 12)
+        if (notes.length === 0) return
+
+        const wasNotes = notes.map((n) => n.isPalmMute)
+        const beats = [...new Set(notes.map((n) => n.beat))]
+        const wasBeats = beats.map((b) => b.isPalmMute)
+
+        // One toggle and its undo, which must restore the notes AND the marking
+        // derived from them.
+        const first = togglePalmMute(notes, settings)
+        expect(first.ok).toBe(true)
+        expect(notes.every((n) => n.isPalmMute)).toBe(first.palmMute)
+        first.undo()
+        expect(notes.map((n) => n.isPalmMute)).toEqual(wasNotes)
+        expect(beats.map((b) => b.isPalmMute)).toEqual(wasBeats)
+
+        // And in every state, a beat that holds notes claims the marking only
+        // when one of its notes does. That is the invariant a plain finish()
+        // breaks, because it only ever SETS the flag: clearing the last muted
+        // note of a beat left the P.M. bracket on the score.
+        //
+        // Only beats that hold notes: alphaTab propagates the flag onto
+        // adjacent RESTS on purpose, and those follow their neighbour rather
+        // than their own contents.
+        for (let i = 0; i < 3; i += 1) {
+          const step = togglePalmMute(notes, settings)
+          if (!step.changed) continue
+          for (const beat of beats) {
+            if (beat.isRest) continue
+            expect(beat.isPalmMute, `beat ${beat.index}`).toBe(
+              beat.notes.some((n) => n.isPalmMute),
+            )
           }
         }
       })

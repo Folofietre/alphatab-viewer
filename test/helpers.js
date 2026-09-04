@@ -44,6 +44,9 @@ export function snapshotTrack(track) {
       // The sounding pitch, which is what a transposition or a retuning is
       // really about. `realValue` is a getter over `stringTuning + fret`.
       realValue: note.isStringed ? note.realValue : null,
+      // A technique that changes what is heard without moving a tick, so
+      // nothing else in this snapshot would notice it.
+      isPalmMute: note.isPalmMute,
     })),
   }))
   return {

@@ -22,6 +22,7 @@ import {
   shiftNoteOctave,
   shiftNotesString,
   stringedNotes,
+  togglePalmMute,
   DURATION_LADDER,
   DURATION_LONGER,
   DURATION_SHORTER,
@@ -1032,6 +1033,9 @@ describe('undo restores exactly', () => {
               beats: voice.beats.map((beat) => [
                 beat.index, beat.duration, beat.dots, beat.isEmpty,
                 beat.playbackStart, beat.playbackDuration, beat.notes.length,
+                // Derived from the notes' own flags, and only ever SET by
+                // finish() - so this is where a stale palm mute shows up.
+                beat.isPalmMute,
               ]),
             })),
           ),
@@ -1143,6 +1147,12 @@ describe('undo restores exactly', () => {
       'write a note into a bar full of ties',
       (score) => writeNoteAtString(
         score.tracks[TIES].staves[0].bars[0].voices[0].beats[0], 1, 4, settings,
+      ),
+    ],
+    [
+      'palm mute a note',
+      (score) => togglePalmMute(
+        [[...stringedNotes(score.tracks[LEAD].staves[0])][0]], settings,
       ),
     ],
     [
@@ -1887,6 +1897,113 @@ describe('stepBeatsDuration', () => {
     result.undo()
     expect(beats.map((b) => b.duration)).toEqual([16, 16, 16, 16])
     expect(beats[0].playbackDuration).toBe(240)
+  })
+})
+
+// A property of the NOTE that alphaTab draws as a marking on the BEAT.
+describe('togglePalmMute', () => {
+  function leadNotes(score, count) {
+    return [...stringedNotes(score.tracks[LEAD].staves[0])].slice(0, count)
+  }
+
+  it('sets the flag on the note AND on its beat, which only finish() does', () => {
+    const score = loadFixture()
+    const beat = score.tracks[LEAD].staves[0].bars[0].voices[0].beats[0]
+    const note = beat.notes[0]
+    expect(beat.isPalmMute).toBe(false)
+
+    const result = togglePalmMute([note], settings)
+    expect(result).toMatchObject({ ok: true, changed: true, noteCount: 1, palmMute: true })
+    expect(note.isPalmMute).toBe(true)
+    // `Beat.finish` derives this from its notes, so it is the finish that puts
+    // the P.M. bracket on the score.
+    expect(beat.isPalmMute).toBe(true)
+  })
+
+  it('and takes it off again on the second call', () => {
+    const score = loadFixture()
+    const beat = score.tracks[LEAD].staves[0].bars[0].voices[0].beats[0]
+    togglePalmMute([beat.notes[0]], settings)
+    expect(togglePalmMute([beat.notes[0]], settings)).toMatchObject({ ok: true, palmMute: false })
+    expect(beat.notes[0].isPalmMute).toBe(false)
+    expect(beat.isPalmMute).toBe(false)
+  })
+
+  it('cuts the note short in the midi without moving where it starts', () => {
+    // Measured on the whole event stream: the note-off moves from 960 to 160 and
+    // nothing else changes, which is why this takes the `onPlay` flavour rather
+    // than `now` - the tick grid does not move.
+    const score = loadFixture()
+    const before = midiNoteOns(score)
+    togglePalmMute([[...stringedNotes(score.tracks[LEAD].staves[0])][0]], settings)
+    expect(midiNoteOns(score)).toEqual(before)
+  })
+
+  it('moves a whole batch, and a mixed one resolves towards muted', () => {
+    const score = loadFixture()
+    const notes = leadNotes(score, 4)
+    notes[1].isPalmMute = true
+
+    // Only the three that were not muted move.
+    expect(togglePalmMute(notes, settings)).toMatchObject({ ok: true, noteCount: 3, palmMute: true })
+    expect(notes.map((n) => n.isPalmMute)).toEqual([true, true, true, true])
+    // Now they agree, so the next call clears them.
+    expect(togglePalmMute(notes, settings)).toMatchObject({ ok: true, noteCount: 4, palmMute: false })
+    expect(notes.every((n) => !n.isPalmMute)).toBe(true)
+  })
+
+  it('deduplicates a note given twice', () => {
+    const score = loadFixture()
+    const note = leadNotes(score, 1)[0]
+    expect(togglePalmMute([note, note], settings).noteCount).toBe(1)
+  })
+
+  it('refuses percussion, which alphaTab itself would allow', () => {
+    // A drum note takes the flag without complaining, so the refusal is ours.
+    const score = loadFixture()
+    const drum = score.tracks[DRUMS].staves[0].bars[0].voices[0].beats[0].notes[0]
+    expect(drum.isStringed).toBe(false)
+
+    const result = togglePalmMute([drum], settings)
+    expect(result.ok).toBe(false)
+    expect(result.reason).toMatch(/percussion cannot be palm muted/)
+    expect(drum.isPalmMute).toBe(false)
+  })
+
+  it('and counts them when only some of a batch have no string', () => {
+    const score = loadFixture()
+    const drum = score.tracks[DRUMS].staves[0].bars[0].voices[0].beats[0].notes[0]
+    const result = togglePalmMute([...leadNotes(score, 2), drum], settings)
+    expect(result.ok).toBe(false)
+    expect(result.reason).toMatch(/1 of these 3 notes/)
+  })
+
+  it('refuses an empty list', () => {
+    expect(togglePalmMute([], settings).ok).toBe(false)
+    expect(togglePalmMute(null, settings).ok).toBe(false)
+  })
+
+  it('survives the .gp round trip', () => {
+    const score = loadFixture()
+    togglePalmMute(leadNotes(score, 2), settings)
+    const back = roundTrip(score)
+    const beat = back.tracks[LEAD].staves[0].bars[0].voices[0].beats[0]
+    expect(beat.notes[0].isPalmMute).toBe(true)
+    expect(beat.isPalmMute).toBe(true)
+  })
+
+  it('puts the flags back, and re-applies on a second call', () => {
+    const score = loadFixture()
+    const notes = leadNotes(score, 3)
+    const result = togglePalmMute(notes, settings)
+
+    result.undo()
+    expect(notes.map((n) => n.isPalmMute)).toEqual([false, false, false])
+    expect(notes[0].beat.isPalmMute).toBe(false)
+
+    result.undo()
+    expect(notes.map((n) => n.isPalmMute)).toEqual([true, true, true])
+    expect(notes[0].beat.isPalmMute).toBe(true)
   })
 })
 

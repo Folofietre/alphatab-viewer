@@ -116,6 +116,19 @@ where there is no music to select and the browser's own behaviour is the only
 sensible answer - the same reasoning `Ctrl+S` uses to leave Save-page alone on
 the empty state.
 
+## Two keys, one action
+
+Three actions have more than one key, for three different reasons. `Delete` and
+`Backspace` both silence, because a keyboard may label only one of them.
+`Ctrl+Y` and `Ctrl+Shift+Z` both redo, because people reach for either. And `P`
+and `M` both palm mute, because the notation writes it "P.M." above the staff, so
+neither letter is more obvious than the other.
+
+The generated help folds them into one row and **stacks** the keycaps rather than
+putting them side by side, with a small "or" between: side by side, the widest of
+them set the width of the whole keycap column and pushed every description in the
+table away from its keys.
+
 ## One key, two sizes of delete
 
 `Delete` alone replaces the selection with silence; `Ctrl+Delete` removes the

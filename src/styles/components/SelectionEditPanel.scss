@@ -55,6 +55,13 @@ hr {
   @include edit-danger;
 }
 
+// A button that reports a state as well as performing an action: the palm mute
+// is on or off, and the button says which. Same treatment the mixer's solo and
+// mute flags get, so a toggle looks like a toggle everywhere.
+.row button.on {
+  @include control-active;
+}
+
 .inspector {
   @include edit-inspector;
 }

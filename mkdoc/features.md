@@ -223,6 +223,13 @@ operation can be taken back, the delete and the whole-bar operations included.
 **`Ctrl+Y` / `Cmd+Y` redoes**, and so does `Ctrl+Shift+Z` for people who reach
 for that instead. A new edit throws away the redo branch, as everywhere else.
 
+**`P` or `M` palm mutes** the selected note, or every note of a dragged passage.
+Either letter, because the notation writes it "P.M." above the staff. It is a
+property of the note, so muting one note of a chord mutes that note - and it
+cuts the note short without moving where it starts, so the timing of everything
+else is untouched. Pressing it again takes the mute off, bracket included.
+Percussion is refused: there is no string to mute.
+
 ## Moving around the score
 
 **Clicking an empty string puts a cursor there.** A click on a note selects it,

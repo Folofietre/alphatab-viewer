@@ -967,6 +967,51 @@ without a document, the same way `guardUnload` is. Two cases matter: an element
 with no `blur` of its own, and anything alphaTab put inside its own host, which
 is never ours to interfere with. Blurring the body needs no case - it is a no-op.
 
+## Palm mute: a note property whose MARKING is derived
+
+`note.isPalmMute` is a plain field, so setting it looks like the cheapest edit in
+the file. Two derived things say otherwise, and both are only ever **set** by
+`finish()`, never cleared:
+
+```js
+Beat.finish : if (note.isPalmMute) this.isPalmMute = true
+Note.finish : palmMuteDestination, assigned only when the flag is true
+```
+
+The beat's flag is what draws the P.M. bracket. So clearing the last muted note
+of a beat left the bracket on the score - caught by a test, not by reading, and
+it is the same shape as `Voice.isEmpty`, which the writing tier had already been
+bitten by.
+
+The fix is to reset both across the **affected staves** and let `finish()` rebuild
+them from the note flags. The staff is the right unit for the reason it is in
+`deleteNotes`: alphaTab's propagation walks `previousBeat` / `nextBeat`, which
+never leave a staff. And nothing has to be captured, unlike the delete - the
+derived values follow the flags, and the flags are what the swap restores.
+
+alphaTab also **propagates the marking onto adjacent rests**, forward onto a rest
+that follows a muted beat and backwards off the rests before an unmuted one. That
+is deliberate on its part, and it is why the real-score invariant checks the
+"a beat claims the marking only when one of its notes does" rule for beats that
+hold notes and skips the rests.
+
+**`onPlay`, not `now`,** and this one was measured rather than assumed. Over the
+whole midi event stream: 417 events before and after, with exactly one pair
+different - the note-OFF moves from tick 960 to 160. The note is cut short while
+starting at the same instant, so the tick grid does not move and a scrub position
+still maps correctly. Same flavour as the frets.
+
+It is refused on percussion, and that refusal is ours: measured, a drum note
+takes the flag without complaint. Same call the frets and the strings already
+make.
+
+**Two keys, one action.** `P` and `M` both do it, the way `Delete` and
+`Backspace` both silence - here because the notation itself writes "P.M." above
+the staff, so either letter is the obvious reach. They are bare characters, so
+they carry the digits' strictness: down for anything that owns typing keys, and
+down unless a NOTE is designated. A cursor on an empty string is not enough,
+which is what separates `canEditNotes` from `canWriteNote`.
+
 ## Sounding a note, and when the midi gets rebuilt
 
 `api.playNote(note)` generates a **one-note** midi file from the current model
@@ -987,7 +1032,7 @@ to feel responsive would have truncated it. So edits declare one of two flavours
 | Flavour | Used by | Why |
 | --- | --- | --- |
 | `now` | tempo, durations, an inserted rest, an added bar | They change **timing**, and the loaded midi is what maps a scrub position to a tick. A stale one would make the transport disagree with the score. |
-| `onPlay` | frets, strings, transposition, retuning, a written note | Marked stale, rebuilt when playback starts. Costs nothing while editing, and never cuts a preview. |
+| `onPlay` | frets, strings, transposition, retuning, a written note, palm mute | Marked stale, rebuilt when playback starts. Costs nothing while editing, and never cuts a preview. |
 
 One honest gap, which the writing tier makes more visible rather than
 introducing: **an undo always marks the midi stale rather than rebuilding it**,
