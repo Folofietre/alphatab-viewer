@@ -35,7 +35,8 @@ let scoreTracks = [] // raw alphaTab Track objects, indexed by track.index
 let hostElement = null
 
 // Set right before loadMidiForScore() so the midiLoaded handler can put the
-// playhead back where it was and resume if we were playing.
+// playhead back where it was, restore the loop range the rebuild drops, and
+// resume if we were playing.
 let pendingRestore = null
 
 // The bytes of the file that was opened, kept so an edit session always has a
@@ -148,6 +149,23 @@ function syncTrackFields(index) {
   Object.assign(descriptor, trackModelFields(track))
 }
 
+// Put back what a midi rebuild dropped, in the order that matters.
+//
+// Split out from the `midiLoaded` handler for the reason `guardUnload` is split
+// out of its listener: the ORDER is the whole content of this, and it is worth a
+// test that needs no synth.
+//
+// The range goes first because its setter has a side effect - alphaTab's
+// `set playbackRange` does `if (value) this.tickPosition = value.startTick` - so
+// restoring the tick afterwards is what stops the range from deciding where the
+// playhead lands.
+export function restoreAfterMidiReload(api, saved) {
+  if (!api || !saved) return
+  if (saved.range) api.playbackRange = saved.range
+  if (saved.tick > 0) api.tickPosition = saved.tick
+  if (saved.wasPlaying) api.play()
+}
+
 // Rebuild the midi from the data model.
 //
 // `loadMidiForScore()` STOPS playback by design, so the tick and the playing
@@ -161,7 +179,26 @@ function syncTrackFields(index) {
 function reloadMidi(wasPlaying = isPlaying.value) {
   if (!api) return
   midiStale = false
-  pendingRestore = { tick: api.tickPosition, wasPlaying }
+  // The playback range goes in here too, because a rebuild DROPS IT, silently.
+  //
+  // `api.playbackRange` is not a value alphaTab keeps of its own: the getter
+  // reads `sequencer.mainPlaybackRange`, which is a field of the sequencer's
+  // state object - and `MidiFileSequencer.loadMidi` replaces that object
+  // outright:
+  //
+  //   loadMidi(midiFile) {
+  //     this._mainState = this.createStateFromFile(midiFile);   // 1.8.4
+  //
+  // So the loop range a drag set is gone after any rebuild, and because the
+  // state is replaced rather than assigned through the setter, no
+  // `playbackRangeChanged` fires to say so. What that looked like: select a
+  // passage, palm mute it, press play, and the sound ran past the end of the
+  // selection as though nothing had been selected.
+  //
+  // It is not specific to one edit. Every `onPlay` edit rebuilds at the moment
+  // playback starts, and every `now` edit rebuilds straight away, so all of them
+  // lost the range.
+  pendingRestore = { tick: api.tickPosition, wasPlaying, range: api.playbackRange }
   api.loadMidiForScore()
 }
 
@@ -443,10 +480,9 @@ export function usePlayer() {
         endTick: args.endTick,
       }
       if (!pendingRestore) return
-      const { tick, wasPlaying } = pendingRestore
+      const saved = pendingRestore
       pendingRestore = null
-      if (tick > 0) api.tickPosition = tick
-      if (wasPlaying) api.play()
+      restoreAfterMidiReload(api, saved)
     })
   }
 

@@ -1,7 +1,7 @@
 # alphaTab gotchas
 
 
-All eleven were found by running code against alphaTab **1.8.4**, not by reading
+All twelve were found by running code against alphaTab **1.8.4**, not by reading
 the docs, and each one silently corrupts an edit - or lets a corrupt one
 through, or quietly disables a feature - if you do the obvious thing. They are the reason
 [src/utils/scoreEdits.js](../src/utils/scoreEdits.js) exists as its own module.
@@ -433,6 +433,51 @@ first thing that reads it is `Beat.finish`, which throws
 `this.voice.bar.staff.index` - a stack trace inside alphaTab with nothing in it
 about the field that was missing. The same goes for `masterBar.score`, which
 `Score.addMasterBar` sets.
+
+## 12. A midi rebuild silently drops the playback range
+
+`api.playbackRange` is not a value alphaTab keeps of its own. The getter reads
+straight through to the synth:
+
+```js
+get playbackRange() { return this._instance.playbackRange }      // AlphaSynth
+get playbackRange() { return this.sequencer.mainPlaybackRange }  // the synth
+get mainPlaybackRange() { return this._mainState.playbackRange } // the sequencer
+```
+
+And loading a midi file replaces that state object outright:
+
+```js
+loadMidi(midiFile) {
+  this._mainState = this.createStateFromFile(midiFile);   // 1.8.4
+  this._currentState = this._mainState;
+}
+```
+
+So **the loop range is gone after any rebuild** - and because the state is
+replaced rather than assigned through the setter, no `playbackRangeChanged` fires
+to say so. Nothing throws, nothing logs.
+
+What it looked like, and why it took a user to find: select a passage, palm mute
+it, press play. The sound runs past the end of the selection as though nothing
+were selected, while the playhead still stops at its edge. Not specific to the
+palm mute either - every `onPlay` edit rebuilds at the moment playback starts and
+every `now` edit rebuilds immediately, so all of them lost the range. Only an
+edit followed by a play shows it, which is why the earlier work never did.
+
+The fix is to save the range with the tick and the playing state, and put all
+three back in the `midiLoaded` handler. **The order matters**, and it is the
+reason that restore is a function of its own with a test: alphaTab's setter has a
+side effect -
+
+```js
+set playbackRange(value) {
+  this.sequencer.mainPlaybackRange = value;
+  if (value) this.tickPosition = value.startTick;
+```
+
+so a tick restored before the range is thrown away, and the playhead lands at the
+start of the selection instead of where it was.
 
 ## And one non-gotcha: `finish()` is not needed after the OTHER edits
 

@@ -10,7 +10,7 @@ works and why it is built the way it is lives here.
 | [Architecture](architecture.md) | File layout, styling rules, the state singleton |
 | [Editing internals](editing.md) | The cursor, propagation, bar filling, undo and redo |
 | [Keyboard shortcuts](shortcuts.md) | The binding table and how the help is generated |
-| [alphaTab gotchas](alphatab-gotchas.md) | Eleven verified traps the editor is built around |
+| [alphaTab gotchas](alphatab-gotchas.md) | Twelve verified traps the editor is built around |
 | [Tests](tests.md) | What is covered, and what needs a browser |
 
 ## How to read this

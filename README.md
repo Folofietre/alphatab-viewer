@@ -52,7 +52,7 @@ Everything about how the app works and why it is built the way it is lives in
 | [Architecture](mkdoc/architecture.md) | File layout, styling rules, the state singleton |
 | [Editing internals](mkdoc/editing.md) | Selection, propagation, undo and redo |
 | [Keyboard shortcuts](mkdoc/shortcuts.md) | The binding table and how the help is generated |
-| [alphaTab gotchas](mkdoc/alphatab-gotchas.md) | Eleven verified traps the editor is built around |
+| [alphaTab gotchas](mkdoc/alphatab-gotchas.md) | Twelve verified traps the editor is built around |
 | [Tests](mkdoc/tests.md) | What is covered, and what needs a browser |
 
 To read it as a site:

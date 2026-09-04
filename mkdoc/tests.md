@@ -69,6 +69,13 @@ with the coordinates that make the press place a cursor) rather than from the
 The lesson generalises: a double that is safer than the real thing hides exactly
 the bugs worth finding.
 
+`usePlayer.test.js` tests exactly one function, and the reason is the shape of
+the bug it was written for. Restoring what a midi rebuild dropped is three
+assignments whose ORDER is the whole content - the range has to go back before
+the tick, because alphaTab's range setter moves the playhead - so the fake synth
+there reproduces that one side effect and nothing else. The same
+extract-the-decision move as `guardUnload` and `focusToRelease`.
+
 Not covered by any test, and needing a browser: whether the incremental render is
 visibly faster on a large score, how a held `Alt`+arrow feels, whether the view
 follows the cursor comfortably when an arrow walks it off the screen, and whether

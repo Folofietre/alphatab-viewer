@@ -1034,6 +1034,13 @@ to feel responsive would have truncated it. So edits declare one of two flavours
 | `now` | tempo, durations, an inserted rest, an added bar | They change **timing**, and the loaded midi is what maps a scrub position to a tick. A stale one would make the transport disagree with the score. |
 | `onPlay` | frets, strings, transposition, retuning, a written note, palm mute | Marked stale, rebuilt when playback starts. Costs nothing while editing, and never cuts a preview. |
 
+**A rebuild also drops the loop range**, which is alphaTab's doing rather than
+ours: the range is a field of the sequencer state, and loading a midi replaces
+that state. So `reloadMidi` saves it alongside the tick and the playing state and
+`restoreAfterMidiReload` puts all three back, range first because its setter
+moves the playhead. Full account in
+[gotcha 12](alphatab-gotchas.md#12-a-midi-rebuild-silently-drops-the-playback-range).
+
 One honest gap, which the writing tier makes more visible rather than
 introducing: **an undo always marks the midi stale rather than rebuilding it**,
 because the history record does not carry the flavour of the edit it reverses.
