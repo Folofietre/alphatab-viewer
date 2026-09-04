@@ -752,6 +752,99 @@ comment. `navigateBeat` is pure navigation - it writes nothing, is not gated on
 playback, and never goes near `propagate` - and the composable's `moveCursorBeat`
 layers the two writes on top of it. The write is not folded into the walk.
 
+## Adding a track, and duplicating one
+
+### The cloners exist and are out of reach
+
+`NoteCloner` and `BeatCloner` are in the bundle, absent from the `.d.ts` and from
+every public namespace - `model.NoteCloner` is `undefined`, and a sweep of the
+namespaces finds none. So a duplicate clones by hand, and the field lists are
+transcribed from their source, which is the authority: the `@clone_ignore`
+annotations in the `.d.ts` are exactly what those cloners encode.
+
+For the levels with no cloner at all - Voice, Bar, Staff, Track - the list comes
+from alphaTab's **serialisers**, the ones `JsonConverter` drives. That is
+alphaTab's own answer to "what on this class is data", maintained with the class.
+
+| Level | Fields | Where the list comes from |
+| --- | --- | --- |
+| Note | 34 plus `bendPoints` | `NoteCloner` |
+| Beat | 44 plus notes, automations, lyrics, whammy points, tremolo | `BeatCloner` |
+| Bar | 10 plus voices | `BarSerializer` |
+| Staff | 9 plus bars, chords, tuning | `StaffSerializer` |
+| Track | 5 plus staves, playback info, colour, articulations | `TrackSerializer` |
+
+Three of those entries are traps rather than transcription:
+
+- **`bendPoints` is an array.** Measured: after a plain assignment,
+  `clone.bendPoints === original.bendPoints`, so editing one note's bend would
+  edit the other's. It is copied point by point.
+- **The list must not be guessed.** A plausible one threw
+  `TypeError: Cannot set property isTieOrigin of #<Note> which has only a
+  getter` - `isTieOrigin` is a getter, and `NoteCloner` deliberately skips it.
+  None of the 34 it does copy is read-only.
+- **Chord definitions travel with the staff.** Beats refer to them by `chordId`,
+  so a copy without them has chord diagrams pointing at nothing.
+
+### The links are rebuilt, not re-derived
+
+A clone carries none of the eleven cross-note links, which is what
+`@clone_ignore` means. It would be tempting to let `finish()` sort them out -
+`Note.finish` re-resolves a tie whose origin is null by looking for a note on the
+same string in the preceding bars. That is a **guess**, and it is the same
+mechanism that invents a tie on a paste and copies the wrong fret with it.
+
+Every link's other end is inside the copy, so the exact answer is available:
+walk the two trees in step, build an original-to-clone map for every note and
+beat, and remap the eleven fields plus the two beat-level effect-slur ends. A
+link whose other end somehow fell outside the track is dropped rather than left
+pointing into the original.
+
+Verified against the fixture and both large real files: the copy's whole link
+graph is identical to the original's, expressed as indexes; nothing points
+outside; the `.gp` round trip keeps it; and the generated midi of the copy is
+note for note the original's on another channel. That last one is the assertion
+that matters, because it is the one that would catch a missing field that affects
+sound.
+
+### Both need their own midi channels
+
+Sharing a pair means a program change on either track re-voices the other, which
+is the collision `trackSound.js` documents from the other side. `freeChannelPair`
+hands out the lowest unused pair and never gives out channel 9, which is
+percussion.
+
+### A new track has to be as long as the score
+
+A track is not one object either: it needs a `Staff`, and that staff needs one
+`Bar` per master bar. A staff shorter than the score is exactly the ragged shape
+`ModelUtils.consolidate` exists to repair, so the bars are built up front rather
+than left to it.
+
+`displayTranspositionPitch` defaults to **-12**, and that is measured rather than
+chosen: on the real files every guitar and bass staff carries -12 while only the
+flute, choir and violin staves carry 0. Guitar Pro writes fretted instruments an
+octave above where they sound, and every tuning the dialog offers is a fretted
+instrument. Prefilling from an existing track copies that track's value instead,
+so a non-fretted source stays right.
+
+The tuning list is its own question, and not the one `tuningChoices` answers:
+that takes an existing staff and offers the presets for ITS string count. A track
+that does not exist yet has no string count, so **the choice of tuning is the
+choice of how many strings it has**. Counted: 11 presets for four strings, 6 for
+five, 31 for six, 1 for seven, and none at all for eight - which is why eight is
+not offered.
+
+### The strip is spliced, never rebuilt
+
+All three track operations share `attachTrackView` / `detachTrackViewAt`, and the
+reason is the same as the delete's: the reactive descriptor carries the volume,
+the mute, the solo and whether the track is displayed, none of which is in the
+file. Rebuilding the list would silently reset it.
+
+A track added or duplicated on request arrives **displayed**, because one that
+appeared invisibly would look like nothing had happened.
+
 ### A whole track is the cheapest structural delete here
 
 Deleting a track needs **no link sweep and no derived capture**, where deleting

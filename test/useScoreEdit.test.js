@@ -77,6 +77,57 @@ const host = {
   clearDirty() {
     host.dirty = false
   },
+  // Models `addTrackWith` and `duplicateTrackAt`: the model write from
+  // scoreEdits, plus the reactive strip that carries the mixer state. The strip
+  // arrives DISPLAYED, which is the half a model-only stub would miss.
+  addTrack(spec) {
+    const result = addTrack(host.score, spec, host.api?.settings)
+    if (!result.changed) return result
+    const at = result.trackIndex
+    return host.withTrackView(result, at, result.track)
+  },
+  duplicateTrack(index) {
+    const result = duplicateTrack(host.score, index, host.api?.settings)
+    if (!result.changed) return result
+    return host.withTrackView(result, result.trackIndex, result.track)
+  },
+  // The shared half: splice a strip in, renumber, and re-render.
+  withTrackView(result, at, track) {
+    const descriptor = {
+      index: track.index,
+      name: track.name,
+      isStringed: track.staves.some((s) => s.isStringed),
+      isPercussion: track.staves.some((s) => s.isPercussion),
+      program: track.playbackInfo.program,
+      rendered: true,
+      volume: 1,
+      isMute: false,
+      isSolo: false,
+    }
+    const renumber = () => player.tracks.value.forEach((d, i) => { d.index = i })
+    const attachView = () => {
+      player.tracks.value.splice(Math.min(at, player.tracks.value.length), 0, descriptor)
+      renumber()
+      host.renderedTracks += 1
+    }
+    const detachView = () => {
+      player.tracks.value.splice(at, 1)
+      renumber()
+      host.renderedTracks += 1
+    }
+    attachView()
+    let isAttached = true
+    const swapModel = result.undo
+    return {
+      ...result,
+      undo: () => {
+        swapModel()
+        if (isAttached) detachView()
+        else attachView()
+        isAttached = !isAttached
+      },
+    }
+  },
   // Models `removeTrackAt`: the model splice from scoreEdits, plus the reactive
   // descriptor that carries the mixer state, spliced and renumbered with it.
   // Both halves in one undo, which is the thing worth pinning here.
@@ -149,7 +200,9 @@ apiSettings.core.includeNoteBounds = true
 const { useScoreEdit, focusToRelease } = await import('@/composables/useScoreEdit')
 const { loadFixture } = await import('./helpers')
 const {
+  addTrack,
   deleteTrack,
+  duplicateTrack,
   stringedNotes,
   MAX_FRET,
   RETUNE_KEEP_PITCH,
@@ -163,6 +216,9 @@ const RHYTHM = 1
 const BASS = 2
 const HARM = 3
 const DRUMS = 4
+// Ties, hammer-ons, a slide and a chord: the track a duplicate has to rebuild
+// the links of.
+const TIES = 5
 
 let edit
 let score
@@ -2777,6 +2833,131 @@ describe('Enter places a rest, or steps along the bar', () => {
     player.isPlaying.value = true
     expect(edit.insertRest().ok).toBe(false)
     expect(edit.editMessage.value.text).toMatch(/Pause playback/)
+  })
+})
+
+describe('adding a track', () => {
+  const SPEC = { name: 'Added', program: 27, tunings: [64, 59, 55, 50, 45, 40] }
+
+  it('adds it to the score AND gives it a mixer strip, displayed', () => {
+    const before = score.tracks.length
+    host.renderedTracks = 0
+
+    const result = edit.createTrack(SPEC)
+    expect(result).toMatchObject({ ok: true, changed: true, trackName: 'Added' })
+    expect(score.tracks).toHaveLength(before + 1)
+    // A track added on request is one the user wants to see, so it arrives
+    // displayed rather than hidden.
+    const strip = player.tracks.value[before]
+    expect(strip).toMatchObject({ name: 'Added', rendered: true, index: before })
+    expect(host.renderedTracks).toBe(1)
+    expect(host.dirty).toBe(true)
+  })
+
+  it('points the Track panel at what was just made', () => {
+    const before = score.tracks.length
+    edit.createTrack(SPEC)
+    expect(edit.selectedTrackIndex.value).toBe(before)
+  })
+
+  it('rebuilds the midi and renders through renderTracks, not twice', () => {
+    host.renders = []
+    host.midiReloads = 0
+    edit.createTrack(SPEC)
+    expect(host.midiReloads).toBe(1)
+    expect(host.renders).toEqual([])
+  })
+
+  it('passes the refusals through with their reason', () => {
+    expect(edit.createTrack({ ...SPEC, tunings: [] }).ok).toBe(false)
+    expect(edit.editMessage.value.text).toMatch(/tuning/)
+    expect(score.tracks).toHaveLength(6)
+  })
+
+  it('stands down while playing', () => {
+    player.isPlaying.value = true
+    expect(edit.createTrack(SPEC).ok).toBe(false)
+    expect(edit.editMessage.value.text).toMatch(/Pause playback/)
+    expect(score.tracks).toHaveLength(6)
+  })
+
+  it('and Ctrl+Z takes it back out, strip included', () => {
+    const before = score.tracks.length
+    edit.createTrack(SPEC)
+
+    expect(edit.undo().ok).toBe(true)
+    expect(score.tracks).toHaveLength(before)
+    expect(player.tracks.value).toHaveLength(before)
+    expect(player.tracks.value.map((t) => t.index)).toEqual([0, 1, 2, 3, 4, 5])
+    expect(host.dirty).toBe(false)
+  })
+
+  it('names the track in the undo label', () => {
+    edit.createTrack(SPEC)
+    expect(edit.undoLabel.value).toBe('Add track Added')
+  })
+})
+
+describe('duplicating a track', () => {
+  it('puts the copy straight after the original, in both lists', () => {
+    const result = edit.copyTrack(LEAD)
+    expect(result).toMatchObject({ ok: true, changed: true, trackIndex: LEAD + 1 })
+    expect(result.noteCount).toBeGreaterThan(0)
+    expect(score.tracks.map((t) => t.name)).toEqual([
+      'Lead', 'Lead copy', 'Rhythm', 'Bass', 'Harm', 'Drums', 'Ties',
+    ])
+    expect(player.tracks.value.map((t) => t.name)).toEqual([
+      'Lead', 'Lead copy', 'Rhythm', 'Bass', 'Harm', 'Drums', 'Ties',
+    ])
+    expect(player.tracks.value.map((t) => t.index)).toEqual([0, 1, 2, 3, 4, 5, 6])
+  })
+
+  it('re-reads every strip, since the panel reads fret ranges off the notes', () => {
+    host.syncedAllTracks = 0
+    edit.copyTrack(LEAD)
+    expect(host.syncedAllTracks).toBe(1)
+    expect(host.midiReloads).toBe(1)
+  })
+
+  it('points the panel at the copy, not at the original', () => {
+    edit.copyTrack(LEAD)
+    expect(edit.selectedTrackIndex.value).toBe(LEAD + 1)
+  })
+
+  it('drops the selection, whose indexes have just moved', () => {
+    clickAt(score.tracks[TIES].staves[0].bars[0].voices[0].beats[0].notes[0])
+    edit.copyTrack(LEAD)
+    expect(edit.selectedNote.value).toBeNull()
+    expect(edit.cursor.value).toBeNull()
+  })
+
+  it('names the source in the undo label, and takes the copy back out', () => {
+    edit.copyTrack(LEAD)
+    expect(edit.undoLabel.value).toBe('Duplicate Lead')
+
+    expect(edit.undo().ok).toBe(true)
+    expect(score.tracks).toHaveLength(6)
+    expect(player.tracks.value).toHaveLength(6)
+    expect(player.tracks.value.map((t) => t.name)).not.toContain('Lead copy')
+  })
+
+  it('and redo puts it back', () => {
+    edit.copyTrack(LEAD)
+    edit.undo()
+    expect(edit.redo().ok).toBe(true)
+    expect(score.tracks[LEAD + 1].name).toBe('Lead copy')
+    expect(player.tracks.value[LEAD + 1].name).toBe('Lead copy')
+  })
+
+  it('stands down while playing', () => {
+    player.isPlaying.value = true
+    expect(edit.copyTrack(LEAD).ok).toBe(false)
+    expect(score.tracks).toHaveLength(6)
+  })
+
+  it('refuses an index that is not a track', () => {
+    expect(edit.copyTrack(99).ok).toBe(false)
+    expect(edit.editMessage.value).toMatchObject({ kind: 'error' })
   })
 })
 

@@ -260,6 +260,32 @@ onto its far edge - right carries on from the last note, left from the first.
 Running off the start of the score does nothing. Running off the **end** adds a
 bar - see below.
 
+## Adding and duplicating a track
+
+**`+ Track`** in the Mixer opens a dialog for a new one: its name, its instrument
+from the 128 General MIDI programs, and its tuning. The tuning is also the choice
+of how many strings the track has, so the list is grouped by string count -
+eleven tunings for four strings, thirty-one for six, and so on, every preset
+alphaTab knows.
+
+**"Copy the settings of"** at the top fills the three fields from a track already
+in the score, which is the shortcut past all of them: most new tracks in a piece
+are another of something already there. It fills the fields rather than being
+remembered, so anything can then be changed - and it copies the source's exact
+tuning even when that tuning matches no preset, which on real files is the usual
+case.
+
+The new track arrives empty, with a rest in every bar of the score, and
+displayed.
+
+**The duplicate icon** on a strip makes a copy of that track straight after it,
+with all its notes, its effects, its ties and slides, its tuning and its
+instrument. The copy is an independent track: nothing in it points back at the
+original, and it gets its own midi channels, so changing the instrument on one
+leaves the other alone.
+
+Both are one `Ctrl+Z` away, and both are paused-only like every other edit.
+
 ## Deleting a track
 
 Each strip in the Mixer carries a **bin**, which removes that track from the

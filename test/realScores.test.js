@@ -25,8 +25,10 @@ import {
   togglePalmMute,
   DURATION_LONGER,
   DURATION_SHORTER,
+  addTrack,
   appendBar,
   deleteBars,
+  duplicateTrack,
   deleteTrack,
   insertBarBefore,
   placeRest,
@@ -870,6 +872,76 @@ describe.skipIf(scores.length === 0)('invariants on real scores', () => {
         // so say which it was rather than asserting a minimum every file cannot
         // meet.
         expect(typeof links).toBe('number')
+      })
+
+      it('a duplicated track is note for note the original, links included', () => {
+        const score = loadFile(file)
+        const at = score.tracks.length - 1
+        const LINK_FIELDS = [
+          'tieOrigin', 'tieDestination', 'hammerPullOrigin', 'hammerPullDestination',
+          'slurOrigin', 'slurDestination', 'slideOrigin', 'slideTarget',
+          'effectSlurOrigin', 'effectSlurDestination', 'bendOrigin',
+        ]
+        const linkGraph = (track) => {
+          const notes = []
+          for (const staff of track.staves) notes.push(...stringedNotes(staff))
+          const id = new Map(notes.map((n, i) => [n, i]))
+          return notes.map((n) => LINK_FIELDS.map((f) => (n[f] ? (id.get(n[f]) ?? 'OUTSIDE') : null)))
+        }
+
+        const before = snapshotTrack(score.tracks[at])
+        const beforeLinks = linkGraph(score.tracks[at])
+        const beforeCount = score.tracks.length
+
+        const result = duplicateTrack(score, at, settings)
+        expect(result).toMatchObject({ ok: true, trackIndex: at + 1 })
+        expect(score.tracks).toHaveLength(beforeCount + 1)
+        expect(score.tracks.map((t) => t.index)).toEqual(score.tracks.map((_, i) => i))
+
+        const copy = snapshotTrack(score.tracks[at + 1])
+        expect({ ...copy, name: before.name, shortName: before.shortName }).toEqual(before)
+        // The links are REBUILT by mapping original to clone rather than left to
+        // finish(), which would guess an origin by searching the same string in
+        // the preceding bars.
+        expect(linkGraph(score.tracks[at + 1])).toEqual(beforeLinks)
+        // And nothing in the copy points back into the original, which is what
+        // makes it an independent track rather than a view of one.
+        expect(linkGraph(score.tracks[at + 1]).flat()).not.toContain('OUTSIDE')
+
+        // Its own midi channels, or a program change on one would re-voice the
+        // other.
+        const a = score.tracks[at].playbackInfo
+        const b = score.tracks[at + 1].playbackInfo
+        expect(b.primaryChannel).not.toBe(a.primaryChannel)
+        expect(b.secondaryChannel).not.toBe(a.secondaryChannel)
+
+        expect(roundTrip(score).tracks).toHaveLength(beforeCount + 1)
+
+        result.undo()
+        expect(score.tracks).toHaveLength(beforeCount)
+        expect(score.tracks.map(snapshotTrack)[at]).toEqual(before)
+      })
+
+      it('an added track is as long as the score, and comes back off', () => {
+        const score = loadFile(file)
+        const bars = score.masterBars.length
+        const before = score.tracks.length
+
+        const result = addTrack(
+          score,
+          { name: 'Added', program: 27, tunings: [64, 59, 55, 50, 45, 40] },
+          settings,
+        )
+        expect(result.ok).toBe(true)
+        const staff = score.tracks[before].staves[0]
+        // A staff shorter than the score is the ragged shape `consolidate` is
+        // for, so every bar is built here.
+        expect(staff.bars).toHaveLength(bars)
+        expect(score.masterBars).toHaveLength(bars)
+        expect(roundTrip(score).tracks).toHaveLength(before + 1)
+
+        result.undo()
+        expect(score.tracks).toHaveLength(before)
       })
 
       it('carries a full set of edits through a .gp round trip', () => {

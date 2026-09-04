@@ -29,6 +29,7 @@ import {
   shiftNoteString,
   shiftNotesFret,
   shiftNotesOctave,
+  newTrackTunings,
   shiftNotesString,
   tempoInfo,
   togglePalmMute,
@@ -1303,6 +1304,50 @@ export function useScoreEdit() {
     })
   }
 
+  // A new, empty track: the instrument, the tuning and the name, from the modal.
+  //
+  // The write lives in usePlayer for the reason the delete does: half of it is
+  // app state, the reactive strip that carries the mixer settings.
+  //
+  // The cursor and the selection go, because the new track shifts nothing but
+  // could still leave the panel pointing at an index that means something else
+  // after a duplicate lands in the middle. Cheaper to drop than to reason about.
+  function createTrack(spec) {
+    if (!canEdit.value) return refusePlayback()
+
+    const result = scoreEditHost.addTrack(spec)
+    if (result.changed) {
+      clearSelection()
+      clearRange()
+      scoreEditHost.syncScoreInfo()
+      selectedTrackIndex.value = result.trackIndex
+    }
+    return propagate(result, {
+      // No `render`: `renderTracks` inside the write already re-renders, and a
+      // second pass would lay the whole score out twice.
+      midi: 'now',
+      label: `Add track ${result.trackName ?? ''}`.trim(),
+    })
+  }
+
+  // A copy of a track, notes and all, straight after it.
+  function copyTrack(index) {
+    if (!canEdit.value) return refusePlayback()
+
+    const result = scoreEditHost.duplicateTrack(index)
+    if (result.changed) {
+      clearSelection()
+      clearRange()
+      scoreEditHost.syncScoreInfo()
+      scoreEditHost.syncAllTracks()
+      selectedTrackIndex.value = result.trackIndex
+    }
+    return propagate(result, {
+      midi: 'now',
+      label: `Duplicate ${result.sourceName ?? 'track'}`,
+    })
+  }
+
   // Ctrl+A: every note of the track being edited.
   //
   // NOT gated on being paused, because it writes nothing - the same reason
@@ -2276,6 +2321,9 @@ export function useScoreEdit() {
     selectTrack,
     selectAll,
     removeTrack,
+    createTrack,
+    copyTrack,
+    newTrackTunings,
     clearSelection,
 
     // the cursor: a position, which may or may not hold a note

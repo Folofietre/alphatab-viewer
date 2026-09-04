@@ -27,8 +27,11 @@ import {
   DURATION_LONGER,
   DURATION_SHORTER,
   appendBar,
+  addTrack,
   deleteBars,
   deleteTrack,
+  duplicateTrack,
+  newTrackTunings,
   insertBarBefore,
   describeDuration,
   placeRest,
@@ -1190,6 +1193,14 @@ describe('undo restores exactly', () => {
       (score) => insertBarBefore(score, 0, settings),
     ],
     [
+      'add a track',
+      (score) => addTrack(score, { name: 'New', program: 25, tunings: [64, 59, 55, 50, 45, 40] }, settings),
+    ],
+    [
+      'duplicate a track, ties and all',
+      (score) => duplicateTrack(score, TIES, settings),
+    ],
+    [
       'delete a bar',
       (score) => deleteBars(score, 1, 1, settings),
     ],
@@ -2312,6 +2323,265 @@ describe('appendBar', () => {
     const before = score.masterBars.length
     appendBar(score, settings).undo()
     expect(roundTrip(score).masterBars).toHaveLength(before)
+  })
+})
+
+describe('newTrackTunings', () => {
+  it('offers every preset alphaTab has, in string-count order', () => {
+    const choices = newTrackTunings()
+    expect(choices.length).toBeGreaterThan(40)
+    expect(choices.map((c) => c.stringCount)).toEqual([...choices.map((c) => c.stringCount)].sort())
+    // Counted: 11 for four strings, 6 for five, 31 for six, 1 for seven.
+    const byCount = {}
+    for (const c of choices) byCount[c.stringCount] = (byCount[c.stringCount] ?? 0) + 1
+    expect(byCount).toEqual({ 4: 11, 5: 6, 6: 31, 7: 1 })
+    // And nothing for eight, because alphaTab has no preset for it.
+    expect(choices.some((c) => c.stringCount === 8)).toBe(false)
+  })
+
+  it('every choice carries a tuning of its own length', () => {
+    for (const choice of newTrackTunings()) {
+      expect(choice.tunings).toHaveLength(choice.stringCount)
+      expect(choice.name.length).toBeGreaterThan(0)
+    }
+  })
+
+  it('and hands out copies, not the presets themselves', () => {
+    const a = newTrackTunings()[0]
+    a.tunings[0] = 999
+    expect(newTrackTunings()[0].tunings[0]).not.toBe(999)
+  })
+})
+
+describe('addTrack', () => {
+  const SPEC = { name: 'Added', program: 27, tunings: [64, 59, 55, 50, 45, 40] }
+
+  it('adds a track with a staff and a bar for every master bar', () => {
+    const score = loadFixture()
+    const before = score.tracks.length
+
+    const result = addTrack(score, SPEC, settings)
+    expect(result).toMatchObject({
+      ok: true, changed: true, trackIndex: before, trackName: 'Added', stringCount: 6,
+    })
+    expect(score.tracks).toHaveLength(before + 1)
+
+    const track = score.tracks[before]
+    expect(track.staves).toHaveLength(1)
+    // A staff shorter than the score is the ragged shape `consolidate` exists to
+    // repair, so the bars are built here rather than left to it.
+    expect(track.staves[0].bars).toHaveLength(score.masterBars.length)
+    expect(track.staves[0].isStringed).toBe(true)
+    expect(track.staves[0].tuning).toEqual(SPEC.tunings)
+    expect(track.playbackInfo.program).toBe(27)
+  })
+
+  it('is empty, so every bar of it reads as a whole-bar rest', () => {
+    const score = loadFixture()
+    addTrack(score, SPEC, settings)
+    const staff = score.tracks[score.tracks.length - 1].staves[0]
+    for (const bar of staff.bars) {
+      expect(bar.voices[0].beats).toHaveLength(1)
+      expect(bar.voices[0].isEmpty).toBe(true)
+      expect(barFill(bar).state).toBe(BAR_EXACT)
+    }
+  })
+
+  it('takes a midi channel pair nothing else is using', () => {
+    // Sharing one means a program change on either track re-voices the other.
+    const score = loadFixture()
+    const used = new Set()
+    for (const track of score.tracks) {
+      used.add(track.playbackInfo.primaryChannel)
+      used.add(track.playbackInfo.secondaryChannel)
+    }
+    addTrack(score, SPEC, settings)
+    const info = score.tracks[score.tracks.length - 1].playbackInfo
+    expect(used.has(info.primaryChannel)).toBe(false)
+    expect(used.has(info.secondaryChannel)).toBe(false)
+    expect(info.primaryChannel).not.toBe(info.secondaryChannel)
+    // Never channel 9, which is the percussion channel.
+    expect(info.primaryChannel).not.toBe(9)
+    expect(info.secondaryChannel).not.toBe(9)
+  })
+
+  it('writes fretted notation an octave up, the way Guitar Pro does', () => {
+    // Measured on the real files: every guitar and bass staff carries -12, and
+    // only the flute, choir and violin staves carry 0.
+    const score = loadFixture()
+    addTrack(score, SPEC, settings)
+    expect(score.tracks[score.tracks.length - 1].staves[0].displayTranspositionPitch).toBe(-12)
+
+    // And a prefill from a non-fretted source keeps its own value.
+    const other = loadFixture()
+    addTrack(other, { ...SPEC, displayTranspositionPitch: 0 }, settings)
+    expect(other.tracks[other.tracks.length - 1].staves[0].displayTranspositionPitch).toBe(0)
+  })
+
+  it('names itself when given no name', () => {
+    const score = loadFixture()
+    const result = addTrack(score, { ...SPEC, name: '   ' }, settings)
+    expect(result.trackName).toBe(`Track ${score.tracks.length}`)
+  })
+
+  it('refuses without a tuning, and with a program that is not one', () => {
+    const score = loadFixture()
+    expect(addTrack(score, { ...SPEC, tunings: [] }, settings).reason).toMatch(/tuning/)
+    expect(addTrack(score, { ...SPEC, program: 200 }, settings).reason).toMatch(/General MIDI/)
+    expect(addTrack(new alphaTab.model.Score(), SPEC, settings).ok).toBe(false)
+  })
+
+  it('survives the .gp round trip', () => {
+    const score = loadFixture()
+    addTrack(score, SPEC, settings)
+    const back = roundTrip(score)
+    const track = back.tracks[back.tracks.length - 1]
+    expect(back.tracks).toHaveLength(7)
+    expect(track.name).toBe('Added')
+    expect(track.staves[0].tuning).toEqual(SPEC.tunings)
+    expect(track.staves[0].bars).toHaveLength(back.masterBars.length)
+  })
+
+  it('takes the track back out, and puts it back on a second call', () => {
+    const score = loadFixture()
+    const before = score.tracks.length
+    const result = addTrack(score, SPEC, settings)
+
+    result.undo()
+    expect(score.tracks).toHaveLength(before)
+    expect(score.tracks.map((t) => t.index)).toEqual([0, 1, 2, 3, 4, 5])
+
+    result.undo()
+    expect(score.tracks).toHaveLength(before + 1)
+    // The bars are rebuilt rather than doubled, which is what the detach clears.
+    expect(score.tracks[before].staves[0].bars).toHaveLength(score.masterBars.length)
+  })
+})
+
+describe('duplicateTrack', () => {
+  const LINK_FIELDS = [
+    'tieOrigin', 'tieDestination', 'hammerPullOrigin', 'hammerPullDestination',
+    'slurOrigin', 'slurDestination', 'slideOrigin', 'slideTarget',
+    'effectSlurOrigin', 'effectSlurDestination', 'bendOrigin',
+  ]
+  function linkGraph(track) {
+    const notes = []
+    for (const staff of track.staves) notes.push(...notesOf(staff))
+    const id = new Map(notes.map((n, i) => [n, i]))
+    return notes.map((n) => LINK_FIELDS.map((f) => (n[f] ? (id.get(n[f]) ?? 'OUTSIDE') : null)))
+  }
+
+  it('puts the copy straight after the original, and renumbers', () => {
+    const score = loadFixture()
+    const result = duplicateTrack(score, LEAD, settings)
+    expect(result).toMatchObject({
+      ok: true, changed: true, trackIndex: LEAD + 1, sourceName: 'Lead', trackName: 'Lead copy',
+    })
+    expect(score.tracks.map((t) => t.name)).toEqual([
+      'Lead', 'Lead copy', 'Rhythm', 'Bass', 'Harm', 'Drums', 'Ties',
+    ])
+    expect(score.tracks.map((t) => t.index)).toEqual([0, 1, 2, 3, 4, 5, 6])
+  })
+
+  it('copies every note, and the staff it is written on', () => {
+    const score = loadFixture()
+    const before = snapshotTrack(score.tracks[TIES])
+    duplicateTrack(score, TIES, settings)
+    const copy = snapshotTrack(score.tracks[TIES + 1])
+    // Everything but the name, which is deliberately different.
+    expect({ ...copy, name: before.name, shortName: before.shortName }).toEqual(before)
+  })
+
+  // The links are REBUILT by mapping original to clone, not left to finish() -
+  // which re-resolves a tie by looking for a note on the same string in the
+  // preceding bars, and that is a guess.
+  it('rebuilds the ties inside the copy, exactly as they were', () => {
+    const score = loadFixture()
+    const before = linkGraph(score.tracks[TIES])
+    // The Ties track is the one that has any, or this proves nothing.
+    expect(before.flat().some((v) => v !== null)).toBe(true)
+
+    duplicateTrack(score, TIES, settings)
+    expect(linkGraph(score.tracks[TIES + 1])).toEqual(before)
+  })
+
+  it('and no link in the copy points back into the original', () => {
+    const score = loadFixture()
+    duplicateTrack(score, TIES, settings)
+    const graph = linkGraph(score.tracks[TIES + 1])
+    expect(graph.flat()).not.toContain('OUTSIDE')
+
+    // Nor the other way: the original is untouched.
+    expect(linkGraph(score.tracks[TIES]).flat()).not.toContain('OUTSIDE')
+  })
+
+  it('gives the copy its own midi channels', () => {
+    const score = loadFixture()
+    const source = score.tracks[LEAD].playbackInfo
+    duplicateTrack(score, LEAD, settings)
+    const copy = score.tracks[LEAD + 1].playbackInfo
+    expect(copy.program).toBe(source.program)
+    expect(copy.primaryChannel).not.toBe(source.primaryChannel)
+    expect(copy.secondaryChannel).not.toBe(source.secondaryChannel)
+  })
+
+  it('does not share a mutable array with the original', () => {
+    // `bendPoints` assigned rather than copied would mean editing one note's
+    // bend edits the other's.
+    const score = loadFixture()
+    const source = score.tracks[LEAD].staves[0]
+    duplicateTrack(score, LEAD, settings)
+    const copy = score.tracks[LEAD + 1].staves[0]
+    expect(copy.tuning).not.toBe(source.tuning)
+    const a = [...notesOf(source)]
+    const b = [...notesOf(copy)]
+    for (let i = 0; i < a.length; i += 1) {
+      expect(b[i]).not.toBe(a[i])
+      if (a[i].bendPoints) expect(b[i].bendPoints).not.toBe(a[i].bendPoints)
+    }
+  })
+
+  it('plays the same notes, on another channel', () => {
+    const score = loadFixture()
+    const before = midiNoteOns(score).filter(([, channel]) => channel === 0)
+    duplicateTrack(score, LEAD, settings)
+    const after = midiNoteOns(score)
+    const copyChannel = score.tracks[LEAD + 1].playbackInfo.primaryChannel
+    const copied = after.filter(([, channel]) => channel === copyChannel)
+    // The generated midi is what proves the clone kept everything that sounds.
+    expect(copied.map(([tick, , key]) => [tick, key])).toEqual(
+      before.map(([tick, , key]) => [tick, key]),
+    )
+  })
+
+  it('refuses an index that is not a track', () => {
+    const score = loadFixture()
+    expect(duplicateTrack(score, -1, settings).ok).toBe(false)
+    expect(duplicateTrack(score, 99, settings).ok).toBe(false)
+  })
+
+  it('survives the .gp round trip', () => {
+    const score = loadFixture()
+    duplicateTrack(score, TIES, settings)
+    const back = roundTrip(score)
+    expect(back.tracks).toHaveLength(7)
+    const a = snapshotTrack(back.tracks[TIES])
+    const b = snapshotTrack(back.tracks[TIES + 1])
+    expect({ ...b, name: a.name, shortName: a.shortName }).toEqual(a)
+  })
+
+  it('takes the copy back out, and puts it back on a second call', () => {
+    const score = loadFixture()
+    const before = score.tracks.map((t) => t.name)
+    const result = duplicateTrack(score, LEAD, settings)
+
+    result.undo()
+    expect(score.tracks.map((t) => t.name)).toEqual(before)
+    expect(score.tracks.map((t) => t.index)).toEqual([0, 1, 2, 3, 4, 5])
+
+    result.undo()
+    expect(score.tracks).toHaveLength(7)
+    expect(score.tracks[LEAD + 1].name).toBe('Lead copy')
   })
 })
 

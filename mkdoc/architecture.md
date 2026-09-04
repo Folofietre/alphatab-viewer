@@ -22,13 +22,14 @@ src/
     SelectionEditPanel.vue   "Edit": the selected note or passage, and the cursor
     HelpTip.vue              the "?" marker beside a label that has a tooltip
     HelpDialog.vue           the "?" modal: shortcuts, generated from BINDINGS
+    AddTrackDialog.vue       the "+ Track" modal: name, instrument, tuning
     TransportBar.vue         play, stop, scrub, speed, volume, loop, click (in the action bar)
     BarsPerRow.vue           force a fixed number of bars per system
     FileDropzone.vue         window-wide drag & drop + the empty-state target
     FileMenu.vue             the File menu: open / save / save as / close
   assets/
     loop.png metronome.png   monochrome toggle icons, used as CSS masks
-    trash.png                the same, for the mixer's delete-a-track button
+    trash.png duplicate.png  the same, for the mixer's two file-side buttons
   styles/
     main.scss                :root custom properties + element resets (global)
     _tokens.scss             SCSS spacing / radius / transition scale

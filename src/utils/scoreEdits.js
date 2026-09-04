@@ -1890,6 +1890,146 @@ export function appendBar(score, settings) {
   })
 }
 
+// ---------------------------------------------------------------------------
+// 9. Whole tracks: adding one, and duplicating one
+// ---------------------------------------------------------------------------
+
+// Every field each level of the model carries, taken from alphaTab's OWN
+// cloners and serialisers rather than written from memory.
+//
+// The cloners exist in the bundle and are unreachable: `NoteCloner`,
+// `BeatCloner` and the leaf ones are absent from the `.d.ts` and from every
+// public namespace (`model.NoteCloner` is `undefined`, and a sweep of the
+// namespaces finds none). So a duplicate has to clone by hand, and the lists
+// below are transcribed from their source - which is the authority, since the
+// `@clone_ignore` annotations are exactly what they encode.
+//
+// For the levels that have no cloner at all - Voice, Bar, Staff, Track - the
+// list comes from alphaTab's SERIALIZERS, which are what `JsonConverter` writes
+// and therefore alphaTab's own answer to "what on this class is data".
+//
+// Guessing is not an option: a plausible-looking field list threw
+// `TypeError: Cannot set property isTieOrigin of #<Note> which has only a
+// getter`, because `isTieOrigin` is a getter and `NoteCloner` deliberately skips
+// it. None of the 34 it does copy is read-only.
+const NOTE_CLONE_FIELDS = [
+  'index', 'accentuated', 'bendType', 'bendStyle', 'isContinuedBend', 'fret',
+  'string', 'showStringNumber', 'octave', 'tone', 'percussionArticulation',
+  'isVisible', 'isLeftHandTapped', 'isHammerPullOrigin', 'isSlurDestination',
+  'harmonicType', 'harmonicValue', 'isGhost', 'isLetRing', 'isPalmMute',
+  'isDead', 'isStaccato', 'slideInType', 'slideOutType', 'vibrato',
+  'isTieDestination', 'leftHandFinger', 'rightHandFinger', 'trillValue',
+  'trillSpeed', 'durationPercent', 'accidentalMode', 'dynamics', 'ornament',
+]
+
+const BEAT_CLONE_FIELDS = [
+  'index', 'isEmpty', 'whammyStyle', 'ottava', 'isLegatoOrigin', 'duration',
+  'isLetRing', 'isPalmMute', 'dots', 'fade', 'pop', 'slap', 'tap', 'text',
+  'slashed', 'deadSlapped', 'brushType', 'brushDuration', 'tupletDenominator',
+  'tupletNumerator', 'isContinuedWhammy', 'whammyBarType', 'vibrato', 'chordId',
+  'graceType', 'pickStroke', 'crescendo', 'displayStart', 'playbackStart',
+  'displayDuration', 'playbackDuration', 'overrideDisplayDuration', 'golpe',
+  'dynamics', 'invertBeamDirection', 'preferredBeamDirection',
+  'isEffectSlurOrigin', 'beamingMode', 'wahPedal', 'barreFret', 'barreShape',
+  'rasgueado', 'showTimer', 'timer',
+]
+
+const BAR_CLONE_FIELDS = [
+  'clef', 'clefOttava', 'simileMark', 'displayScale', 'displayWidth',
+  'barLineLeft', 'barLineRight', 'keySignature', 'keySignatureType',
+  'barNumberDisplay',
+]
+
+const STAFF_CLONE_FIELDS = [
+  'capo', 'transpositionPitch', 'displayTranspositionPitch', 'showSlash',
+  'showNumbered', 'showTablature', 'showStandardNotation', 'isPercussion',
+  'standardNotationLineCount',
+]
+
+const TRACK_CLONE_FIELDS = [
+  'name', 'shortName', 'isVisibleOnMultiTrack', 'defaultSystemsLayout',
+  'systemsLayout',
+]
+
+// The channels are deliberately NOT here: a duplicate needs its own pair, or the
+// two tracks share a midi channel and a program change on one silently
+// re-voices the other - which is the mixer gotcha this file already documents
+// from the other side.
+const PLAYBACK_CLONE_FIELDS = [
+  'volume', 'balance', 'port', 'program', 'bank', 'isMute', 'isSolo',
+]
+
+function copyFields(from, to, fields) {
+  for (const field of fields) to[field] = from[field]
+  return to
+}
+
+function cloneBendPoint(point) {
+  const clone = new alphaTab.model.BendPoint()
+  clone.offset = point.offset
+  clone.value = point.value
+  return clone
+}
+
+function cloneAutomation(automation) {
+  const clone = new alphaTab.model.Automation()
+  copyFields(automation, clone, ['isLinear', 'type', 'value', 'ratioPosition', 'text', 'isVisible'])
+  return clone
+}
+
+function cloneNote(note) {
+  const clone = copyFields(note, new alphaTab.model.Note(), NOTE_CLONE_FIELDS)
+  // A plain assignment would SHARE the array: measured, `clone.bendPoints ===
+  // original.bendPoints`, so editing one note's bend would edit the other's.
+  if (note.bendPoints) {
+    clone.bendPoints = []
+    for (const point of note.bendPoints) clone.addBendPoint(cloneBendPoint(point))
+  }
+  return clone
+}
+
+function cloneBeat(beat) {
+  const clone = copyFields(beat, new alphaTab.model.Beat(), BEAT_CLONE_FIELDS)
+  clone.notes = []
+  for (const note of beat.notes) clone.addNote(cloneNote(note))
+  clone.automations = []
+  for (const automation of beat.automations) clone.automations.push(cloneAutomation(automation))
+  clone.lyrics = beat.lyrics ? beat.lyrics.slice() : null
+  clone.whammyBarPoints = []
+  for (const point of beat.whammyBarPoints ?? []) clone.addWhammyBarPoint(cloneBendPoint(point))
+  if (beat.tremoloPicking) {
+    const tremolo = new alphaTab.model.TremoloPickingEffect()
+    tremolo.marks = beat.tremoloPicking.marks
+    tremolo.style = beat.tremoloPicking.style
+    clone.tremoloPicking = tremolo
+  }
+  return clone
+}
+
+function cloneBar(bar) {
+  const clone = copyFields(bar, new alphaTab.model.Bar(), BAR_CLONE_FIELDS)
+  for (const voice of bar.voices) {
+    const voiceClone = new alphaTab.model.Voice()
+    clone.addVoice(voiceClone)
+    for (const beat of voice.beats) voiceClone.addBeat(cloneBeat(beat))
+  }
+  return clone
+}
+
+function cloneStaff(staff) {
+  const clone = copyFields(staff, new alphaTab.model.Staff(), STAFF_CLONE_FIELDS)
+  clone.stringTuning.tunings = [...(staff.stringTuning?.tunings ?? [])]
+  clone.stringTuning.name = staff.stringTuning?.name ?? ''
+  // Chord definitions are keyed by an id the beats refer to through `chordId`,
+  // so they have to come along or every chord diagram in the copy points at
+  // nothing.
+  if (staff.chords) {
+    for (const [id, chord] of staff.chords) clone.addChord(id, chord)
+  }
+  for (const bar of staff.bars) clone.addBar(cloneBar(bar))
+  return clone
+}
+
 // 8e. A whole track.
 //
 // The cheapest structural delete in this file, and the measurement is the reason:
@@ -1969,6 +2109,262 @@ export function deleteTrack(score, index) {
       if (isDetached) attach()
       else detach()
       isDetached = !isDetached
+    },
+  })
+}
+
+// The next midi channel pair nothing is using.
+//
+// Sharing a channel is not cosmetic: the program change one track writes would
+// re-voice the other, which is the same collision `trackSound.js` documents from
+// the other side. Channel 9 is the percussion channel and is never handed out.
+function freeChannelPair(score) {
+  const used = new Set([alphaTab.model.SynthConstants?.PercussionChannel ?? 9])
+  for (const track of score.tracks ?? []) {
+    used.add(track.playbackInfo.primaryChannel)
+    used.add(track.playbackInfo.secondaryChannel)
+  }
+  let primary = 0
+  while (used.has(primary)) primary += 1
+  used.add(primary)
+  let secondary = primary + 1
+  while (used.has(secondary)) secondary += 1
+  return { primary, secondary }
+}
+
+// One empty Bar per master bar, for a staff that has none yet.
+function fillStaffWithEmptyBars(score, staff) {
+  for (let i = 0; i < (score.masterBars?.length ?? 0); i += 1) {
+    const bar = new alphaTab.model.Bar()
+    staff.addBar(bar)
+    const previous = bar.previousBar
+    if (previous) {
+      bar.clef = previous.clef
+      bar.clefOttava = previous.clefOttava
+      bar.keySignature = previous.keySignature
+      bar.keySignatureType = previous.keySignatureType
+    }
+    const voice = new alphaTab.model.Voice()
+    bar.addVoice(voice)
+    const beat = new alphaTab.model.Beat()
+    beat.isEmpty = true
+    voice.addBeat(beat)
+  }
+}
+
+// The tunings a NEW track can be given, which is not the same question
+// `tuningChoices` answers.
+//
+// That one takes an existing staff and offers the presets for ITS string count,
+// plus its own tuning when it matches none. A track that does not exist yet has
+// no string count, so the choice of tuning IS the choice of how many strings it
+// has - and the list is every preset alphaTab knows, in string-count order.
+//
+// Counted: 11 presets for 4 strings, 6 for 5, 31 for 6, 1 for 7 and none for 8.
+// So eight strings is not offered, because alphaTab has nothing to offer for it.
+export function newTrackTunings() {
+  const choices = []
+  for (const count of [4, 5, 6, 7]) {
+    for (const preset of alphaTab.model.Tuning.getPresetsFor(count)) {
+      choices.push({ name: preset.name, tunings: [...preset.tunings], stringCount: count })
+    }
+  }
+  return choices
+}
+
+// 9a. A new, empty track.
+//
+// A track is not one object either: it needs a `Staff`, and that staff needs one
+// `Bar` per master bar of the score - otherwise it is short and the score is
+// ragged, which is the shape `ModelUtils.consolidate` exists to repair.
+//
+// `displayTranspositionPitch` defaults to -12 because every tuning offered is a
+// fretted instrument, and Guitar Pro writes those an octave above where they
+// sound: measured on the real files, every guitar and bass staff carries -12 and
+// only the flute, choir and violin staves carry 0. Prefilling from an existing
+// track copies its value instead, so a non-fretted source stays right.
+export function addTrack(score, spec, settings) {
+  if (!score?.tracks) return refused('No score to add a track to.')
+  if (!score.masterBars?.length) return refused('This score has no bars.')
+
+  const name = String(spec?.name ?? '').trim() || `Track ${score.tracks.length + 1}`
+  const tunings = [...(spec?.tunings ?? [])]
+  if (tunings.length === 0) return refused('Choose a tuning for the new track.')
+
+  const program = Math.round(Number(spec?.program ?? 25))
+  if (!Number.isFinite(program) || program < 0 || program > 127) {
+    return refused('That is not a General MIDI program number.')
+  }
+
+  const track = new alphaTab.model.Track()
+  track.name = name
+  track.shortName = name.slice(0, 10)
+  track.playbackInfo.program = program
+  const channels = freeChannelPair(score)
+  track.playbackInfo.primaryChannel = channels.primary
+  track.playbackInfo.secondaryChannel = channels.secondary
+
+  const staff = new alphaTab.model.Staff()
+  staff.showStandardNotation = true
+  staff.showTablature = true
+  staff.stringTuning.tunings = tunings
+  staff.displayTranspositionPitch = spec?.displayTranspositionPitch ?? -12
+  track.addStaff(staff)
+
+  function attach() {
+    score.addTrack(track)
+    fillStaffWithEmptyBars(score, staff)
+    score.finish(settings ?? null)
+  }
+
+  function detach() {
+    const at = score.tracks.indexOf(track)
+    if (at >= 0) score.tracks.splice(at, 1)
+    // The bars go with it, so a re-attach starts from an empty staff rather
+    // than doubling them.
+    staff.bars = []
+    score.tracks.forEach((t, i) => {
+      t.index = i
+    })
+    score.finish(settings ?? null)
+  }
+
+  attach()
+
+  let isAttached = true
+  return applied({
+    track,
+    trackIndex: track.index,
+    trackName: name,
+    trackCount: score.tracks.length,
+    stringCount: tunings.length,
+    undo: () => {
+      if (isAttached) detach()
+      else attach()
+      isAttached = !isAttached
+    },
+  })
+}
+
+// 9b. A copy of a track, notes and all, placed straight after it.
+//
+// The clone is built from alphaTab's own field lists (see NOTE_CLONE_FIELDS) and
+// carries no reference into the original, which is what `@clone_ignore` means on
+// the eleven cross-note links: they are rebuilt rather than copied.
+//
+// REBUILT EXPLICITLY, not left to `finish()`. `Note.finish` re-resolves a tie
+// whose origin is null by looking for a note on the same string in the preceding
+// bars, and that is a guess: on a duplicate it would usually find the right note
+// and sometimes not. Every link's other end is inside the copy, so mapping
+// original to clone and remapping the eleven fields is exact - and a test
+// compares the copy's whole link graph against the original's.
+export function duplicateTrack(score, index, settings) {
+  const tracks = score?.tracks ?? []
+  const at = Math.round(Number(index))
+  if (!Number.isFinite(at) || at < 0 || at >= tracks.length) {
+    return refused('That is not a track of this score.')
+  }
+
+  const source = tracks[at]
+  const track = copyFields(source, new alphaTab.model.Track(), TRACK_CLONE_FIELDS)
+  track.name = `${source.name} copy`
+  track.shortName = track.name.slice(0, 10)
+  copyFields(source.playbackInfo, track.playbackInfo, PLAYBACK_CLONE_FIELDS)
+  const channels = freeChannelPair(score)
+  track.playbackInfo.primaryChannel = channels.primary
+  track.playbackInfo.secondaryChannel = channels.secondary
+  if (source.color) track.color = source.color
+  if (source.percussionArticulations?.length) {
+    track.percussionArticulations = [...source.percussionArticulations]
+  }
+
+  for (const staff of source.staves) track.addStaff(cloneStaff(staff))
+
+  // original -> clone, note by note and beat by beat, in the order both trees
+  // are walked. The trees are congruent by construction, so a single walk of
+  // each in step is enough and needs no keys.
+  const noteMap = new Map()
+  const beatMap = new Map()
+  source.staves.forEach((staff, si) => {
+    staff.bars.forEach((bar, bi) => {
+      bar.voices.forEach((voice, vi) => {
+        voice.beats.forEach((beat, bti) => {
+          const copy = track.staves[si]?.bars[bi]?.voices[vi]?.beats[bti]
+          if (!copy) return
+          beatMap.set(beat, copy)
+          beat.notes.forEach((note, ni) => {
+            const noteCopy = copy.notes[ni]
+            if (noteCopy) noteMap.set(note, noteCopy)
+          })
+        })
+      })
+    })
+  })
+
+  // The eleven links, remapped. A link whose other end is somehow outside the
+  // track is dropped rather than left pointing into the original - that is what
+  // an autonomous copy means, and no such link exists in practice: measured,
+  // zero note links cross a track on the fixture or on either large real file.
+  for (const [note, copy] of noteMap) {
+    for (const field of NOTE_LINK_FIELDS) {
+      const other = note[field]
+      copy[field] = other ? (noteMap.get(other) ?? null) : null
+    }
+  }
+  for (const [beat, copy] of beatMap) {
+    copy.effectSlurOrigin = beat.effectSlurOrigin
+      ? (beatMap.get(beat.effectSlurOrigin) ?? null)
+      : null
+    copy.effectSlurDestination = beat.effectSlurDestination
+      ? (beatMap.get(beat.effectSlurDestination) ?? null)
+      : null
+  }
+
+  let noteCount = 0
+  for (const staff of track.staves) {
+    for (const bar of staff.bars) {
+      for (const voice of bar.voices) {
+        for (const beat of voice.beats) noteCount += beat.notes.length
+      }
+    }
+  }
+
+  // Straight after the original, which is where a copy belongs - and the reason
+  // this needs the renumbering pass that appending would not.
+  const to = at + 1
+
+  function attach() {
+    score.tracks.splice(to, 0, track)
+    track.score = score
+    score.tracks.forEach((t, i) => {
+      t.index = i
+    })
+    score.finish(settings ?? null)
+  }
+
+  function detach() {
+    const where = score.tracks.indexOf(track)
+    if (where >= 0) score.tracks.splice(where, 1)
+    score.tracks.forEach((t, i) => {
+      t.index = i
+    })
+    score.finish(settings ?? null)
+  }
+
+  attach()
+
+  let isAttached = true
+  return applied({
+    track,
+    trackIndex: to,
+    trackName: track.name,
+    sourceName: source.name,
+    noteCount,
+    trackCount: score.tracks.length,
+    undo: () => {
+      if (isAttached) detach()
+      else attach()
+      isAttached = !isAttached
     },
   })
 }

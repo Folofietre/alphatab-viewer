@@ -2,7 +2,14 @@ import { ref, shallowRef, watch } from 'vue'
 import * as alphaTab from '@coderline/alphatab'
 import { familyOf, programName } from '@/utils/gmPrograms'
 import { applyTrackProgram, applyTrackBalance } from '@/utils/trackSound'
-import { countNaturalHarmonics, deleteTrack, describeTuning, fretRange } from '@/utils/scoreEdits'
+import {
+  addTrack,
+  countNaturalHarmonics,
+  deleteTrack,
+  describeTuning,
+  duplicateTrack,
+  fretRange,
+} from '@/utils/scoreEdits'
 
 // Single shared alphaTab instance for the whole app.
 //
@@ -231,6 +238,108 @@ function applyRenderedTracks() {
 // both halves back, so `useScoreEdit` can put it on the history like anything
 // else. Nothing about the undo stack had to change for this: no note link
 // crosses a track, so the model side is a splice and a renumber.
+// The reactive half of any track appearing or disappearing.
+//
+// Shared by all three operations, because the ordering is the same for all three
+// and worth writing once: the MODEL goes first, since `applyRenderedTracks` hands
+// alphaTab `Track` objects out of the score as it now is.
+//
+// The descriptors are spliced and renumbered rather than rebuilt, because they
+// carry the mixer state - volume, mute, solo, and what is displayed - which is
+// app state rather than file state and a rebuild would silently reset.
+function renumberDescriptors() {
+  tracks.value.forEach((d, i) => {
+    d.index = i
+  })
+}
+
+// A track has joined the score at `at`: give it a strip, displayed, and redraw.
+//
+// Displayed on purpose: a track added or duplicated on request is a track the
+// user wants to see, and one that arrived invisible would look like nothing had
+// happened.
+function attachTrackView(at, track) {
+  const descriptor = trackDescriptor(track, new Set([track.index]))
+  descriptor.rendered = true
+  tracks.value.splice(Math.min(at, tracks.value.length), 0, descriptor)
+  renumberDescriptors()
+  applyRenderedTracks()
+  return descriptor
+}
+
+// The same strip going away and coming back, for the undo of an add.
+function detachTrackViewAt(at) {
+  const [descriptor] = tracks.value.splice(at, 1)
+  renumberDescriptors()
+  if (tracks.value.length > 0 && !tracks.value.some((d) => d.rendered)) {
+    tracks.value[0].rendered = true
+  }
+  applyRenderedTracks()
+  return descriptor
+}
+
+// Add an empty track: the model write, and the strip that goes with it.
+function addTrackWith(spec) {
+  const score = api?.score ?? null
+  if (!score) return { ok: false, changed: false, reason: 'No score is open.' }
+
+  const result = addTrack(score, spec, api?.settings)
+  if (!result.changed) return result
+
+  const at = result.trackIndex
+  let descriptor = attachTrackView(at, result.track)
+  const swapModel = result.undo
+
+  let isAttached = true
+  return {
+    ...result,
+    undo: () => {
+      swapModel()
+      if (isAttached) {
+        // Kept, so a redo restores the strip with whatever mixer state it had
+        // rather than a fresh one.
+        descriptor = tracks.value[at] ?? descriptor
+        detachTrackViewAt(at)
+      } else {
+        tracks.value.splice(Math.min(at, tracks.value.length), 0, descriptor)
+        renumberDescriptors()
+        applyRenderedTracks()
+      }
+      isAttached = !isAttached
+    },
+  }
+}
+
+// A copy of a track, notes and all, with a strip of its own.
+function duplicateTrackAt(index) {
+  const score = api?.score ?? null
+  if (!score) return { ok: false, changed: false, reason: 'No score is open.' }
+
+  const result = duplicateTrack(score, index, api?.settings)
+  if (!result.changed) return result
+
+  const at = result.trackIndex
+  let descriptor = attachTrackView(at, result.track)
+  const swapModel = result.undo
+
+  let isAttached = true
+  return {
+    ...result,
+    undo: () => {
+      swapModel()
+      if (isAttached) {
+        descriptor = tracks.value[at] ?? descriptor
+        detachTrackViewAt(at)
+      } else {
+        tracks.value.splice(Math.min(at, tracks.value.length), 0, descriptor)
+        renumberDescriptors()
+        applyRenderedTracks()
+      }
+      isAttached = !isAttached
+    },
+  }
+}
+
 function removeTrackAt(index) {
   const score = api?.score ?? null
   if (!score) return { ok: false, changed: false, reason: 'No score is open.' }
@@ -249,15 +358,9 @@ function removeTrackAt(index) {
   // spliced and positions will not line up afterwards.
   const wasRendered = tracks.value.map((d) => ({ descriptor: d, rendered: d.rendered }))
 
-  function renumber() {
-    tracks.value.forEach((d, i) => {
-      d.index = i
-    })
-  }
-
   function detachView() {
     tracks.value.splice(at, 1)
-    renumber()
+    renumberDescriptors()
     // alphaTab needs a non-empty selection, so deleting the only displayed
     // track promotes the first one left rather than rendering nothing.
     if (tracks.value.length > 0 && !tracks.value.some((d) => d.rendered)) {
@@ -268,7 +371,7 @@ function removeTrackAt(index) {
 
   function attachView() {
     tracks.value.splice(Math.min(at, tracks.value.length), 0, descriptor)
-    renumber()
+    renumberDescriptors()
     for (const entry of wasRendered) entry.descriptor.rendered = entry.rendered
     applyRenderedTracks()
   }
@@ -873,6 +976,9 @@ export const scoreEditHost = {
   },
   // Delete a track, model and mixer together. See `removeTrackAt`.
   removeTrack: removeTrackAt,
+  // Add an empty one, and copy an existing one. Same division of labour.
+  addTrack: addTrackWith,
+  duplicateTrack: duplicateTrackAt,
   // Set by useScoreEdit. Called by clearScore(), which has no alphaTab event to
   // hang off.
   onScoreCleared: null,

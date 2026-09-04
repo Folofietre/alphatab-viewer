@@ -6,6 +6,15 @@
         <HelpTip />
       </h2>
       <div class="bulk">
+        <!-- The one control up here that changes the FILE rather than the view,
+             so it is set apart and named for what it makes. -->
+        <button
+          type="button"
+          class="add"
+          :disabled="!canEdit"
+          :title="canEdit ? 'Add a new track to the score' : 'Pause playback to add a track'"
+          @click="isAdding = true"
+        >+ Track</button>
         <button type="button" title="Render every track" @click="showAllTracks">All</button>
         <button type="button" title="Reset volume, mute and solo" @click="resetMixer">Reset mix</button>
         <button
@@ -113,14 +122,26 @@
             title="Mute"
             @click="setTrackMute(track.index, !track.isMute)"
           >M</button>
-          <!-- The only control in this strip that changes the FILE rather than
-               what is heard, so it is the only one that is disabled while
-               playing and the only one that is red. Icon-only, so it carries
-               its own aria-label: with the words gone the mask is the whole
-               cue, and none at all for a screen reader. -->
+          <!-- The two controls in this strip that change the FILE rather than
+               what is heard, so they are the only ones disabled while playing.
+               Icon-only, so each carries its own aria-label: with the words
+               gone the mask is the whole cue, and none at all for a screen
+               reader. -->
           <button
             type="button"
-            class="flag trash"
+            class="flag icon"
+            :disabled="!canEdit"
+            :aria-label="`Duplicate the track ${track.name}`"
+            :title="canEdit
+              ? `Duplicate ${track.name} with all its notes. Ctrl+Z puts it back.`
+              : 'Pause playback to duplicate a track'"
+            @click="copyTrack(track.index)"
+          >
+            <span class="duplicate-icon" aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            class="flag icon trash"
             :disabled="!canEdit || tracks.length === 1"
             :aria-label="`Delete the track ${track.name}`"
             :title="deleteHelp(track)"
@@ -131,14 +152,17 @@
         </div>
       </li>
     </ul>
+
+    <AddTrackDialog v-model="isAdding" />
   </section>
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { usePlayer } from '@/composables/usePlayer'
 import { useScoreEdit } from '@/composables/useScoreEdit'
 import { formatBalance } from '@/utils/format'
+import AddTrackDialog from '@/components/AddTrackDialog.vue'
 import HelpTip from '@/components/HelpTip.vue'
 
 defineEmits(['collapse'])
@@ -148,8 +172,9 @@ const PANEL_HELP =
   'Mute, solo and volume control what is heard: every track is audible whether ' +
   'it is displayed or not, and none of it is saved with the score. Names, ' +
   'instruments and tunings are, and they live in the Track panel. ' +
-  'The bin deletes a track from the score itself, notes and all - Ctrl+Z puts ' +
-  'it back.'
+  'The two icons on a strip change the score itself: one duplicates the track ' +
+  'with all its notes, the other deletes it. Both are one Ctrl+Z away, and ' +
+  '"+ Track" adds an empty one.'
 
 const {
   tracks,
@@ -163,7 +188,9 @@ const {
   resetMixer,
 } = usePlayer()
 
-const { canEdit, removeTrack } = useScoreEdit()
+const { canEdit, removeTrack, copyTrack } = useScoreEdit()
+
+const isAdding = ref(false)
 
 const renderedCount = computed(() => tracks.value.filter((t) => t.rendered).length)
 
