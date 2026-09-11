@@ -147,7 +147,18 @@ it needs the edit state.
 table: on a German QWERTZ layout the key labelled Y sits where QWERTY puts Z, so a
 code would have put the harmonic on the undo key.
 
-## One key, two sizes of delete
+## One key, three sizes of delete
+
+`Delete` alone is note-sized on the first press and beat-sized on the second -
+it writes a silence, then takes that silence out - while `Ctrl+Delete` removes
+the whole bar it is in.
+
+The two steps need no second binding and no predicate of their own: the key runs
+`deleteSelection`, which branches on what is designated. That is deliberate. A
+`canRemoveRest`-style predicate would make the key stand DOWN where there is
+nothing to remove, and standing down is silent; refusing from inside the
+composable is what lets it say "this beat sounds on another string" instead of
+doing nothing at all.
 
 `Delete` alone replaces the selection with silence; `Ctrl+Delete` removes the
 whole bar it is in. The modifier match is exact, so the two never collide, and

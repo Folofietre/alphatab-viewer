@@ -369,6 +369,20 @@
           <kbd>Enter</kbd>
         </div>
 
+        <!-- The inverse of the row above, and the only control that gives a bar
+             its time back: silencing a note leaves a rest exactly as long as the
+             note was, so an overfull bar stays overfull until a beat goes. -->
+        <div class="row">
+          <button
+            type="button"
+            class="danger"
+            :disabled="!canEdit || !cursor.isRest || cursor.isUnwritten"
+            title="Take this silence out of the bar. Everything after it moves back by its length."
+            @click="deleteSelection"
+          >Remove rest</button>
+          <kbd title="Delete silences a note, and removes the silence it left">Delete</kbd>
+        </div>
+
         <!-- Whole BARS, which no other control here reaches: the right arrow
              only ever adds one at the end of the score. Repeated in both
              branches of this panel because a dragged passage hides the cursor
@@ -431,6 +445,9 @@ const CURSOR_HELP =
   'replaces it, so 1 then 2 is fret 12. Shorter and Longer act on the whole ' +
   'beat, so on every note of a chord, and on every beat of a dragged passage, ' +
   'and so does the dot. ' +
+  'Delete works in two steps, which is how a bar that holds too much gets its ' +
+  'time back: on a note it writes a silence of the same length, and on that ' +
+  'silence it removes the beat, moving everything after it back. ' +
   'The right arrow makes room: on the last beat of a bar that is not exactly ' +
   'full it inserts a rest for the next note, and past the end of the score it ' +
   'adds a bar. Insert bar and Delete bar act on the bar the cursor is in, on ' +
@@ -463,6 +480,7 @@ const selectionHelp = computed(() =>
       'Palm mute cuts the note short without moving where it starts, and draws P.M. above the staff. ' +
       'Harmonic sounds the node of the fret the note is already on, so it only works where that fret has one. ' +
       'Artificial asks which note to sound instead, and is written as a pinch harmonic. ' +
+      'Silence replaces it with a rest of the same length, so the bar is as full as it was - press Delete again on that rest to take the beat out. ' +
       'Silence removes it, leaving a rest of the same length. ' +
       'Insert bar and Delete bar act on the whole bar this note is in, on every track at once. ' +
       'Everything here is one Ctrl+Z away.',

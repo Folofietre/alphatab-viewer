@@ -1369,6 +1369,149 @@ describe('Delete replaces the selection with silence', () => {
   })
 })
 
+describe('the second press of Delete, which takes the silence out', () => {
+  function beatsOf(track = LEAD) {
+    return score.tracks[track].staves[0].bars[0].voices[0].beats
+  }
+
+  it('silences on the first press and removes the beat on the second', () => {
+    // The pair, and the reported bug: silencing alone leaves a rest exactly as
+    // long as the note, so the bar never gets its time back.
+    const beats = beatsOf()
+    const note = beats[1].notes[0]
+    clickAt(note)
+
+    expect(edit.deleteSelection().ok).toBe(true)
+    expect(beats[1].isRest).toBe(true)
+    expect(edit.cursor.value).not.toBeNull()
+
+    const before = beats.length
+    const result = edit.deleteSelection()
+    expect(result).toMatchObject({ ok: true, changed: true, beatCount: 1 })
+    expect(beatsOf()).toHaveLength(before - 1)
+    expect(beatsOf().map((b) => b.notes[0]?.fret)).toEqual([3, 7, 9])
+  })
+
+  it('and the bar gets its time back, which is the whole point', () => {
+    const voice = score.tracks[LEAD].staves[0].bars[0].voices[0]
+    clickAt(voice.beats[1].notes[0])
+    expect(edit.cursorBarFill.value).toMatchObject({ state: 'exact' })
+
+    edit.deleteSelection()
+    // Still full: a rest is as long as the note it replaced.
+    expect(edit.cursorBarFill.value).toMatchObject({ state: 'exact' })
+
+    edit.deleteSelection()
+    expect(edit.cursorBarFill.value).toMatchObject({ state: 'under' })
+  })
+
+  it('leaves the cursor in the slot the rest occupied', () => {
+    // The same rule the cut follows: the position is where the work was, not
+    // where a particular beat went.
+    const beats = beatsOf()
+    clickAt(beats[1].notes[0])
+    edit.deleteSelection()
+    edit.deleteSelection()
+
+    expect(edit.cursor.value.beatIndex).toBe(1)
+    // Which now holds what moved up into it.
+    expect(beatsOf()[1].notes[0].fret).toBe(7)
+  })
+
+  it('rebuilds the midi at once, because a beat leaving moves every tick after it', () => {
+    const beats = beatsOf()
+    clickAt(beats[1].notes[0])
+    edit.deleteSelection()
+    host.renders = []
+    host.midiReloads = 0
+    host.midiStale = false
+
+    edit.deleteSelection()
+    expect(host.renders).toEqual([{ reuseViewport: true, firstChangedMasterBar: 0 }])
+    // `now`, unlike the silence before it: that one changed no tick.
+    expect(host.midiReloads).toBe(1)
+    expect(host.midiStale).toBe(false)
+  })
+
+  it('refuses when the beat still sounds on another string, and says how to proceed', () => {
+    // A cursor parked on a free string of a beat that has notes is not a
+    // silence: removing that beat would take notes the user can see with it.
+    const chord = score.tracks[TIES].staves[0].bars[1].voices[0].beats.find(
+      (beat) => beat.notes.length > 1,
+    )
+    expect(chord).toBeDefined()
+    clickAt(chord.notes[0])
+    // Onto a string the chord does not use.
+    const free = [1, 2, 3, 4, 5, 6].find((s) => !chord.notes.some((n) => n.string === s))
+    expect(edit.moveCursorString(free - edit.cursor.value.string).ok).toBe(true)
+    expect(edit.cursor.value.hasNote).toBe(false)
+
+    const result = edit.deleteSelection()
+    expect(result.ok).toBe(false)
+    expect(result.reason).toMatch(/sounds on another string/)
+    expect(chord.notes.length).toBeGreaterThan(0)
+  })
+
+  it('leaves an untouched bar alone rather than churning its placeholder', () => {
+    // `beatRemoval` would put an identical placeholder straight back: an undo
+    // step and a dirty flag for no visible change.
+    // Past the end of the score, which is where an untouched bar comes from:
+    // the right arrow adds one and stands on its placeholder.
+    const staff = score.tracks[LEAD].staves[0]
+    const last = staff.bars[staff.bars.length - 1].voices[0]
+    clickAt(last.beats[last.beats.length - 1].notes[0])
+    expect(edit.moveCursorBeat(1, { canWrite: true }).ok).toBe(true)
+    expect(edit.cursor.value.isUnwritten).toBe(true)
+
+    host.dirty = false
+    const depth = edit.undoDepth.value
+
+    const result = edit.deleteSelection()
+    expect(result.ok).toBe(false)
+    expect(result.reason).toMatch(/Nothing has been written here yet/)
+    expect(host.dirty).toBe(false)
+    expect(edit.undoDepth.value).toBe(depth)
+  })
+
+  it('goes back on one Ctrl+Z, notes and time included', () => {
+    const beats = beatsOf()
+    const frets = beats.map((b) => b.notes[0].fret)
+    clickAt(beats[1].notes[0])
+    edit.deleteSelection()
+    edit.deleteSelection()
+    expect(beatsOf()).toHaveLength(3)
+
+    expect(edit.undo().ok).toBe(true)
+    expect(beatsOf()).toHaveLength(4)
+    // The rest is back, still silent: that is the step before it.
+    expect(beatsOf()[1].isRest).toBe(true)
+
+    expect(edit.undo().ok).toBe(true)
+    expect(beatsOf().map((b) => b.notes[0].fret)).toEqual(frets)
+    expect(host.dirty).toBe(false)
+  })
+
+  it('and the undo label tells the two steps apart', () => {
+    const beats = beatsOf()
+    clickAt(beats[1].notes[0])
+    edit.deleteSelection()
+    expect(edit.undoLabel.value).toBe('Silence note')
+    edit.deleteSelection()
+    expect(edit.undoLabel.value).toBe('Delete a rest')
+  })
+
+  it('is blocked by playback like every other edit', () => {
+    const beats = beatsOf()
+    clickAt(beats[1].notes[0])
+    edit.deleteSelection()
+    const before = beatsOf().length
+    player.isPlaying.value = true
+
+    expect(edit.deleteSelection().ok).toBe(false)
+    expect(beatsOf()).toHaveLength(before)
+  })
+})
+
 describe('undo', () => {
   it('is unavailable until something has been edited', () => {
     expect(edit.canUndo.value).toBe(false)

@@ -1961,6 +1961,8 @@ export function toggleBeatsDot(beats, settings) {
 // unwritten voices with, not a rest somebody wrote. Turning that into a real rest
 // in place is what "there is nothing here yet" means, and inserting beside it
 // would leave the placeholder behind to be counted twice.
+// Its inverse is `deleteBeats`, which is what `Delete` reaches for once the beat
+// holds no notes.
 export function placeRest(beat, settings) {
   if (!beat) return refused('No position to write at.')
   const voice = beat.voice ?? null
@@ -3389,6 +3391,58 @@ export function cutBeats(beats, settings) {
     beatCount: copied.beatCount,
     noteCount: copied.noteCount,
     stringCount: copied.stringCount,
+    landing: removal.landing,
+    undo: () => {
+      if (isDetached) attach()
+      else detach()
+      isDetached = !isDetached
+    },
+  })
+}
+
+// Take beats out without putting them anywhere: `cutBeats` minus the clipboard.
+//
+// This is what `Delete` does on a SILENCE, and it is the other half of a pair the
+// editor was missing. `deleteNotes` empties a beat and leaves it sounding as a
+// rest of the same length, which is right for "I played the wrong note" and wrong
+// for "there is one beat too many in this bar": a rest occupies exactly as much
+// of the bar as the note did, so silencing alone can never make an overfull bar
+// correct again. Removing the beat is what shortens the bar.
+//
+// It is `placeRest`'s inverse, and the two agree on the awkward case: a voice
+// cannot end up with no beats at all - `Voice._chain` dereferences the next
+// voice's first beat - so `beatRemoval` puts alphaTab's own `isEmpty` placeholder
+// back when the last beat of a voice goes, which is exactly the state
+// `placeRest` writes into.
+//
+// Everything hard here is already in `beatRemoval`: the splice, the chain links
+// finish() provably does not repair, the placeholder, and the sweep for links
+// pointing at a note that left with its beat.
+export function deleteBeats(beats, settings) {
+  const list = [...new Set(beats ?? [])].filter((beat) => beat)
+  if (list.length === 0) return refused('Nothing selected to delete.')
+
+  const score = scoreOf(list[0])
+  if (!score) return refused('Those beats are not attached to a score.')
+
+  const removal = beatRemoval(list, score, settings)
+  if (removal.places.length === 0) return refused('Those beats are not in the score.')
+
+  function detach() {
+    removal.remove()
+    score.finish(settings ?? null)
+  }
+  function attach() {
+    removal.restore()
+    score.finish(settings ?? null)
+  }
+
+  detach()
+
+  let isDetached = true
+  return applied({
+    beatCount: removal.places.length,
+    noteCount: removal.noteCount,
     landing: removal.landing,
     undo: () => {
       if (isDetached) attach()

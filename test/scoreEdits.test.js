@@ -38,6 +38,7 @@ import {
   appendBar,
   addTrack,
   deleteBars,
+  deleteBeats,
   deleteTrack,
   duplicateTrack,
   newTrackTunings,
@@ -1282,6 +1283,14 @@ describe('undo restores exactly', () => {
     [
       'delete the FIRST bar, which moves the tempo and the score start',
       (score) => deleteBars(score, 0, 0, settings),
+    ],
+    [
+      'delete a beat, which takes its notes and its time out',
+      (score) => deleteBeats([score.tracks[LEAD].staves[0].bars[0].voices[0].beats[1]], settings),
+    ],
+    [
+      'delete every beat of a voice, which leaves the placeholder behind',
+      (score) => deleteBeats([...score.tracks[LEAD].staves[0].bars[0].voices[0].beats], settings),
     ],
     [
       'silence one note of a chord',
@@ -4213,5 +4222,152 @@ describe('newTrackTuningGroups', () => {
     const flat = newTrackTuningGroups().flatMap((g) => g.choices)
     expect(flat.map((c) => c.index)).toEqual(flat.map((_, i) => i))
     expect(new Set(flat.map((c) => c.index)).size).toBe(flat.length)
+  })
+})
+
+describe('deleteBeats', () => {
+  it('takes a beat out, so the bar gets its time back', () => {
+    // The whole point, and what silencing can never do: a rest is exactly as
+    // long as the note it replaced, so only removing the beat shortens the bar.
+    const score = loadFixture()
+    const voice = score.tracks[LEAD].staves[0].bars[0].voices[0]
+    expect(barFill(voice.bar)).toMatchObject({ state: BAR_EXACT, filled: 3840 })
+
+    const result = deleteBeats([voice.beats[1]], settings)
+    expect(result).toMatchObject({ ok: true, changed: true, beatCount: 1, noteCount: 1 })
+    expect(voice.beats).toHaveLength(3)
+    expect(voice.beats.map((b) => b.notes[0].fret)).toEqual([3, 7, 9])
+    expect(barFill(voice.bar)).toMatchObject({ state: BAR_UNDER, filled: 2880 })
+  })
+
+  it('and brings an overfull bar back to exact, which is the reported bug', () => {
+    const score = loadFixture()
+    const voice = score.tracks[LEAD].staves[0].bars[0].voices[0]
+    // One beat too many: four quarters plus a fifth.
+    const extra = placeRest(voice.beats[3], settings)
+    expect(extra.ok).toBe(true)
+    expect(barFill(voice.bar).state).toBe(BAR_OVER)
+
+    // Silencing does not help - the rest is as long as the note was.
+    deleteNotes([voice.beats[0].notes[0]], settings)
+    expect(barFill(voice.bar).state).toBe(BAR_OVER)
+
+    // Removing the beat does.
+    expect(deleteBeats([extra.beat], settings).ok).toBe(true)
+    expect(barFill(voice.bar)).toMatchObject({ state: BAR_EXACT })
+  })
+
+  it('renumbers and re-chains what is left', () => {
+    // `Voice.finish` renumbers the beats and rebuilds the forward chain, and
+    // `beatRemoval` cuts the links into the beat that went - which finish
+    // provably does not.
+    const score = loadFixture()
+    const voice = score.tracks[LEAD].staves[0].bars[0].voices[0]
+    const gone = voice.beats[1]
+
+    deleteBeats([gone], settings)
+    voice.beats.forEach((beat, index) => {
+      expect(beat.index, `beat ${index}`).toBe(index)
+      expect(beat.previousBeat).toBe(voice.beats[index - 1] ?? beat.previousBeat)
+    })
+    for (const beat of voice.beats) {
+      expect(beat.nextBeat).not.toBe(gone)
+      expect(beat.previousBeat).not.toBe(gone)
+    }
+  })
+
+  it('leaves a placeholder when the last beat of a voice goes', () => {
+    // A voice with no beats at all breaks alphaTab's own chaining, so the bar
+    // goes back to being unwritten - which is exactly the state `placeRest`
+    // writes into from the other side.
+    const score = loadFixture()
+    const voice = score.tracks[LEAD].staves[0].bars[0].voices[0]
+
+    const result = deleteBeats([...voice.beats], settings)
+    expect(result).toMatchObject({ ok: true, beatCount: 4 })
+    expect(voice.beats).toHaveLength(1)
+    expect(voice.beats[0].isEmpty).toBe(true)
+    expect(voice.beats[0].notes).toHaveLength(0)
+    // An untouched bar counts as complete, so no red bar is left behind.
+    expect(barFill(voice.bar)).toMatchObject({ state: BAR_EXACT })
+  })
+
+  it('is the inverse of placeRest', () => {
+    const score = loadFixture()
+    const voice = score.tracks[LEAD].staves[0].bars[0].voices[0]
+    const before = voice.beats.map((b) => b.notes[0].fret)
+
+    const rest = placeRest(voice.beats[1], settings)
+    expect(voice.beats).toHaveLength(5)
+    expect(deleteBeats([rest.beat], settings).ok).toBe(true)
+    expect(voice.beats.map((b) => b.notes[0].fret)).toEqual(before)
+  })
+
+  it('cuts the links that pointed into a beat that left', () => {
+    // The sweep `beatRemoval` does and `finish()` does not: a tie whose origin
+    // went with its beat would otherwise point at a note no longer in the score.
+    const score = loadFixture()
+    const staff = score.tracks[TIES].staves[0]
+    let tied = null
+    for (const bar of staff.bars) {
+      for (const voice of bar.voices) {
+        for (const beat of voice.beats) {
+          for (const note of beat.notes) if (note.isTieDestination) tied ??= note
+        }
+      }
+    }
+    expect(tied).not.toBeNull()
+    const origin = tied.tieOrigin
+    expect(origin).not.toBeNull()
+
+    deleteBeats([origin.beat], settings)
+    // Either re-resolved by finish() to a note still in the score, or cleared -
+    // never left pointing at the note that went.
+    const stillThere = new Set()
+    for (const bar of staff.bars) {
+      for (const voice of bar.voices) {
+        for (const beat of voice.beats) for (const note of beat.notes) stillThere.add(note)
+      }
+    }
+    if (tied.tieOrigin) expect(stillThere.has(tied.tieOrigin)).toBe(true)
+  })
+
+  it('refuses nothing, and beats that are not in a score', () => {
+    expect(deleteBeats([], settings).ok).toBe(false)
+    expect(deleteBeats(null, settings).ok).toBe(false)
+    expect(deleteBeats([new alphaTab.model.Beat()], settings).ok).toBe(false)
+  })
+
+  it('counts each beat once, however many times it is named', () => {
+    const score = loadFixture()
+    const voice = score.tracks[LEAD].staves[0].bars[0].voices[0]
+    const beat = voice.beats[1]
+    const result = deleteBeats([beat, beat, beat], settings)
+    expect(result.beatCount).toBe(1)
+    expect(voice.beats).toHaveLength(3)
+  })
+
+  it('reports where the cursor should land', () => {
+    const score = loadFixture()
+    const voice = score.tracks[LEAD].staves[0].bars[0].voices[0]
+    const result = deleteBeats([voice.beats[1]], settings)
+    // The slot the beat occupied, which now holds whatever moved up into it.
+    //
+    // Identity, never `toMatchObject`: a Voice reaches the whole score graph
+    // through its back-references, so a deep compare against one walks a cyclic
+    // structure and never returns. Cost an hour to find once.
+    expect(result.landing.voice).toBe(voice)
+    expect(result.landing.at).toBe(1)
+    expect(voice.beats[result.landing.at].notes[0].fret).toBe(7)
+  })
+
+  it('survives the .gp round trip', () => {
+    const score = loadFixture()
+    const voice = score.tracks[LEAD].staves[0].bars[0].voices[0]
+    deleteBeats([voice.beats[1]], settings)
+
+    const back = roundTrip(score)
+    const backVoice = back.tracks[LEAD].staves[0].bars[0].voices[0]
+    expect(backVoice.beats.map((b) => b.notes[0].fret)).toEqual([3, 7, 9])
   })
 })

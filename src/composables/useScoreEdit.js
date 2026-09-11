@@ -13,6 +13,7 @@ import {
   copyBeats,
   cutBeats,
   deleteBars,
+  deleteBeats,
   insertBarBefore,
   describeBarFill,
   describeDuration,
@@ -1660,9 +1661,7 @@ export function useScoreEdit() {
     if (!canEdit.value) return refusePlayback()
 
     const notes = selected ? [selected] : rangeNotes
-    if (notes.length === 0) {
-      return { ok: false, changed: false, reason: 'Nothing selected to delete.' }
-    }
+    if (notes.length === 0) return deleteCursorRest()
 
     const trackIndex = selected
       ? (selectedNote.value?.trackIndex ?? null)
@@ -1693,6 +1692,63 @@ export function useScoreEdit() {
       midi: 'onPlay',
       firstChangedBar: bar,
       label: result.noteCount === 1 ? 'Silence note' : `Silence ${result.noteCount} notes`,
+    })
+  }
+
+  // The second press: with no note designated, `Delete` takes the SILENCE out.
+  //
+  // The pair is what makes an overfull bar fixable, and neither half alone does.
+  // Silencing a note leaves a rest of exactly the same length, so the bar is as
+  // full as it was - there was no way at all to give a bar its time back, which
+  // is the bug this answers. So: once to silence, again to remove.
+  //
+  // Only when the BEAT holds nothing. A cursor parked on an empty string of a
+  // beat that still sounds elsewhere is not a silence, and removing that beat
+  // would take notes the user can see with it - so that case is explained
+  // instead, and it is the only refusal here that names a way forward.
+  //
+  // An untouched bar is left alone. Its placeholder is not a rest somebody
+  // wrote, and `beatRemoval` would put an identical one straight back: an undo
+  // step and a dirty flag for no visible change.
+  function deleteCursorRest() {
+    if (!cursorBeat) return refused('Nothing selected to delete.')
+    if (cursorBeat.notes.length > 0) {
+      return refused('This beat sounds on another string. Click that note to silence it.')
+    }
+    if (cursorBeat.isEmpty) return refused('Nothing has been written here yet.')
+
+    const beat = cursorBeat
+    const string = cursorString
+    const bar = beat.voice?.bar?.masterBar?.index ?? null
+    const trackIndex = beat.voice?.bar?.staff?.track?.index ?? null
+
+    const result = deleteBeats([beat], scoreEditHost.api?.settings)
+    if (result.changed) {
+      // The slot the rest occupied, which is now whatever moved up into it -
+      // the same rule the cut follows, and the same reason: the position is
+      // where the work was, not where a particular beat went. When the rest was
+      // the last of its voice, that slot holds the placeholder `beatRemoval`
+      // put back.
+      const lane = result.landing
+      const landed = lane
+        ? (lane.voice.beats[Math.min(lane.at, lane.voice.beats.length - 1)] ?? null)
+        : null
+      if (landed) {
+        setCursor(landed, string)
+        cursorMoves.value += 1
+      } else {
+        clearSelection()
+        clearRange()
+      }
+      if (typeof trackIndex === 'number') scoreEditHost.syncTrack(trackIndex)
+    }
+    return propagate(result, {
+      render: true,
+      // A beat left, so every tick after it moved - the same timing change an
+      // inserted rest is, in the other direction.
+      midi: 'now',
+      firstChangedBar: bar,
+      label: 'Delete a rest',
     })
   }
 

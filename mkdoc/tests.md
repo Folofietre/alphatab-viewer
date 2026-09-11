@@ -77,6 +77,13 @@ the truth was "the file has one". It now records the count per beat beforehand a
 asserts the edit does not RAISE it. The general form: a postcondition on real
 input has to be a delta, or the input's own defects come back as yours.
 
+One assertion shape is forbidden outright, and finding out why cost an hour: a
+test that deep-compared a `Voice` (`toMatchObject({ voice, at: 1 })`) hung the
+whole run with no output, and `--testTimeout` could not fire because the loop was
+synchronous. Every model object reaches the entire score graph through its
+back-references, so a deep compare walks a cyclic structure of thousands of
+objects. Compare model objects with `toBe`.
+
 `usePlayer.test.js` tests exactly one function, and the reason is the shape of
 the bug it was written for. Restoring what a midi rebuild dropped is three
 assignments whose ORDER is the whole content - the range has to go back before

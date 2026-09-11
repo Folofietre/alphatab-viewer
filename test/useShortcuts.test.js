@@ -575,7 +575,7 @@ describe('the generated help', () => {
     expect(where.get('Save the score as .gp')).toBe('Global')
     expect(where.get('Move the cursor to the previous beat')).toBe('Moving around')
     expect(where.get('Up one semitone')).toBe('The selected note')
-    expect(where.get('Replace the selection with silence')).toBe('The selected note')
+    expect(where.get('Silence a note, then remove the silence')).toBe('The selected note')
     expect(where.get('Write a fret at the cursor')).toBe('Writing')
     expect(where.get('Dotted note')).toBe('Writing')
     expect(where.get('Delete this bar')).toBe('Writing')

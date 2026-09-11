@@ -113,6 +113,7 @@ on what is selected, from the Edit tab:
 | Notes by a semitone | `note.fret`, via the buttons or `Alt` + `Shift` + up/down |
 | Notes by an octave | `note.string` + `note.fret`, via the buttons or `Alt` + PageUp/PageDown |
 | Notes replaced by silence | removes them from their beats, via `Silence` or `Delete` |
+| Silences removed, and their time | takes the beat out, via `Remove rest` or a second `Delete` |
 
 Then `Save .gp` downloads the result - or **`Ctrl+S`** / **`Cmd+S`**, which
 deliberately takes the key from the browser's "Save page as" - and `Revert`
@@ -202,12 +203,33 @@ invalidates; the panel renders flat reactive data. That is also what keeps an
 undo stack possible later without touching the UI - each function is already a
 command and would only need its inverse.
 
-**`Delete` (or `Backspace`) replaces the selection with silence.** A note becomes
-silence by being removed from its beat, and the duration takes care of itself:
-`Beat.isRest` is a getter over `notes.length === 0` and `beat.duration` is
-independent of its notes, so emptying a beat turns it into a rest of exactly the
-same length. A beat that still holds other notes keeps sounding them, so deleting
-one note of a chord silences that note, not the chord.
+**`Delete` (or `Backspace`) works in two steps: silence, then remove.**
+
+Press it on a note and the note becomes silence, by being removed from its beat.
+The duration takes care of itself: `Beat.isRest` is a getter over
+`notes.length === 0` and `beat.duration` is independent of its notes, so emptying
+a beat turns it into a rest of exactly the same length. A beat that still holds
+other notes keeps sounding them, so deleting one note of a chord silences that
+note, not the chord.
+
+Press it again, on that silence, and the **beat itself goes**. Everything after
+it moves back by its length.
+
+The second press is what makes a bar that holds too much fixable, and nothing
+else did: a rest is exactly as long as the note it replaced, so silencing a bar
+note by note leaves it just as overfull as it started. The pair is also the
+inverse of `Enter`, which puts a rest in.
+
+Two cases are left alone on purpose. A cursor parked on a free string of a beat
+that still sounds elsewhere is not a silence - removing that beat would take
+notes you can see with it - so it says which note to click instead. And a bar
+nobody has written into is already empty: its placeholder is not a rest somebody
+wrote, and removing it would put an identical one straight back, costing an undo
+step for no visible change.
+
+When the last written beat of a bar goes, the bar returns to being untouched
+rather than to having no beats at all: a voice with none breaks alphaTab's own
+beat chaining.
 
 There is deliberately no confirmation: asking every time would make it useless
 for one note, and a threshold on the count would be arbitrary. `Ctrl+Z` takes it
@@ -504,11 +526,14 @@ there.
 | Key | What goes | The bar |
 | --- | --- | --- |
 | `Delete` | the note; the beat stays and becomes a rest | as full as it was |
+| `Delete` again | that rest, and its time | **incomplete**, and the counter says so |
 | `Ctrl+X` | the beat, and every note in it | **incomplete**, and the counter says so |
 
-So `Ctrl+X` takes a whole beat, chord included: `Delete` is the key that takes one
-note out of a chord. Cutting everything out of a bar leaves it as an empty bar you
-can write into again, not as a hole.
+So `Ctrl+X` takes a whole beat, chord included, in one press and puts it on the
+clipboard: `Delete` is the key that takes one note out of a chord, and it needs a
+second press to reach the beat. For a whole dragged passage, `Ctrl+X` is the one
+to reach for - it removes every beat of it at once. Cutting everything out of a
+bar leaves it as an empty bar you can write into again, not as a hole.
 
 **Pasting over a selected passage replaces it**, in one `Ctrl+Z`. If the passage
 covers more bars than the clipboard fills, the extra bars are left empty - what

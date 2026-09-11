@@ -341,18 +341,23 @@ export const BINDINGS = [
   // keyboard may label only one of them. They stand down for anything that owns
   // typing keys, where these are the text-editing keys and not ours.
   //
+  // ONE key, two steps, and the label says so: on a note it writes a silence of
+  // the same length, and on that silence it takes the beat out. Pressing it
+  // twice is what gives an overfull bar its time back - silencing alone never
+  // could, since a rest is exactly as long as the note it replaced.
+  //
   // No repeat: the selection is cleared by the delete, so a held key would have
   // nothing to act on anyway, and a chain-delete is not a gesture anyone means.
   {
     code: 'Delete',
-    label: 'Replace the selection with silence',
+    label: 'Silence a note, then remove the silence',
     group: 'The selected note',
     appliesTo: (el) => !ownsTypingKeys(el),
     run: (_player, _event, edit) => edit.deleteSelection(),
   },
   {
     code: 'Backspace',
-    label: 'Replace the selection with silence',
+    label: 'Silence a note, then remove the silence',
     group: 'The selected note',
     appliesTo: (el) => !ownsTypingKeys(el),
     run: (_player, _event, edit) => edit.deleteSelection(),

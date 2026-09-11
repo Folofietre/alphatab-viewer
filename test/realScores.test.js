@@ -32,6 +32,7 @@ import {
   addTrack,
   appendBar,
   deleteBars,
+  deleteBeats,
   duplicateTrack,
   deleteTrack,
   insertBarBefore,
@@ -720,6 +721,80 @@ describe.skipIf(scores.length === 0)('invariants on real scores', () => {
         expect(barFill(voice.bar).state).toBe(BAR_OVER)
         result.undo()
         expect(barFill(voice.bar).state).toBe('exact')
+      })
+
+      it('a deleted beat gives the bar its time back, and comes back exactly', () => {
+        // The pair `Delete` presses through, on real music: silencing leaves the
+        // bar as full as it was, and only removing the beat shortens it.
+        const score = loadFile(file)
+        const staff = stringedTracks(score)[0]?.staves?.find((s) => s.isStringed)
+        if (!staff) return
+
+        // A bar with more than one written beat, so the removal is a splice
+        // rather than the placeholder case.
+        const bar = staff.bars.find((b) =>
+          b.voices.some((v) => v.beats.length > 1 && v.beats.some((beat) => !beat.isEmpty)),
+        )
+        if (!bar) return
+        const voice = bar.voices.find((v) => v.beats.length > 1)
+        const victim = voice.beats[1]
+
+        const beforeFill = barFill(bar).filled
+        const beforeCount = voice.beats.length
+        const beforeSnapshot = snapshotTrack(staff.track)
+        const beforeMidi = midiNoteOns(score)
+        const duration = victim.playbackDuration
+
+        const result = deleteBeats([victim], settings)
+        expect(result.ok).toBe(true)
+        expect(voice.beats).toHaveLength(beforeCount - 1)
+        expect(voice.beats).not.toContain(victim)
+        // The bar is shorter by exactly what left it.
+        expect(barFill(bar).filled).toBe(beforeFill - duration)
+        // And the beats that stayed are renumbered and re-chained, with no link
+        // left pointing at the one that went.
+        voice.beats.forEach((beat, index) => {
+          expect(beat.index, `beat ${index}`).toBe(index)
+          expect(beat.nextBeat).not.toBe(victim)
+          expect(beat.previousBeat).not.toBe(victim)
+        })
+
+        result.undo()
+        expect(voice.beats).toHaveLength(beforeCount)
+        expect(barFill(bar).filled).toBe(beforeFill)
+        expect(snapshotTrack(staff.track)).toEqual(beforeSnapshot)
+        expect(midiNoteOns(score)).toEqual(beforeMidi)
+      })
+
+      it('and never leaves a voice with no beats at all', () => {
+        // A voice with none breaks alphaTab's own chaining, so the placeholder
+        // goes back in - the state an untouched bar is already in.
+        const score = loadFile(file)
+        const staff = stringedTracks(score)[0]?.staves?.find((s) => s.isStringed)
+        if (!staff) return
+        const voice = staff.bars.find((b) => b.voices[0]?.beats?.length > 0)?.voices?.[0]
+        if (!voice) return
+        // What was there, so the undo is checked against it rather than against
+        // an assumption: a real file's first bar may legitimately hold nothing
+        // but alphaTab's own placeholder.
+        const before = voice.beats.map((beat) => ({ beat, isEmpty: beat.isEmpty }))
+
+        const result = deleteBeats([...voice.beats], settings)
+        expect(result.ok).toBe(true)
+        expect(voice.beats).toHaveLength(1)
+        expect(voice.beats[0].isEmpty).toBe(true)
+        // Every voice of the score still holds at least one beat.
+        for (const track of score.tracks) {
+          for (const st of track.staves) {
+            for (const bar of st.bars) {
+              for (const v of bar.voices) {
+                expect(v.beats.length, `bar ${bar.index}`).toBeGreaterThan(0)
+              }
+            }
+          }
+        }
+        result.undo()
+        expect(voice.beats.map((beat) => ({ beat, isEmpty: beat.isEmpty }))).toEqual(before)
       })
 
       it('an inserted rest renumbers and re-chains the beats of its voice', () => {

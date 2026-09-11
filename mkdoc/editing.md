@@ -468,6 +468,61 @@ hierarchy comes from weight and size - the rule `ScoreHeader.scss` already
 documents for the metadata beside it - and the overfull state moves its contrast
 into a filled chip, where white on `--warn-solid` measures 6.89:1.
 
+## Delete in two steps, and why one was not enough
+
+`deleteNotes` empties a beat and leaves it sounding as a rest of the same length.
+That is right for "I played the wrong note" and it is the whole of what `Delete`
+used to do - which left a hole in the editor that a user found: **there was no way
+to make an overfull bar correct again.** A rest occupies exactly as much of the
+bar as the note it replaced, so silencing every note of a bar that holds too much
+leaves it holding too much. Nothing in the editing tier removed a beat, so nothing
+could give a bar its time back.
+
+So `Delete` is two presses:
+
+| The cursor is on | What happens | The bar |
+| --- | --- | --- |
+| a note | `deleteNotes` empties the beat | as full as it was |
+| the rest that leaves | `deleteBeats` takes the beat out | shorter by that beat |
+
+`deleteBeats` is `cutBeats` minus the clipboard, and reuses `beatRemoval` whole -
+the splice, the chain links `finish()` provably does not repair, the placeholder,
+and the sweep for links pointing at a note that left with its beat. There was no
+new machinery to write, only a second caller for it.
+
+It is `placeRest`'s inverse, and the two agree on the awkward case. A voice must
+never end up with no beats at all: `Voice._chain` dereferences the next voice's
+first beat, so an empty one is a crash waiting for the next `finish()`. When the
+last beat of a voice goes, `beatRemoval` puts alphaTab's own `isEmpty` placeholder
+back, which is exactly the state `placeRest` writes into from the other side. A
+real-score invariant sweeps every voice of every track afterwards to assert none
+is ever left empty.
+
+Two states are refused rather than acted on, and both would be silent damage:
+
+- **A cursor on a free string of a beat that still sounds.** `cursorBeat.notes`
+  is not empty, so this is not a silence; removing the beat would take notes the
+  user can see with it. It names the note to click instead - the only refusal in
+  the composable that points at a way forward.
+- **An untouched bar.** Its placeholder is not a rest somebody wrote, and
+  `beatRemoval` would replace it with an identical one: an undo step and a dirty
+  flag for no visible change.
+
+`midi: 'now'`, unlike the silence before it. Removing a beat moves every tick
+after it, which is the same timing change an inserted rest is in the other
+direction - and the loaded midi is what maps a scrub position to a tick.
+
+The cursor lands in the **slot** the rest occupied rather than following a
+particular beat, which is the rule the cut already follows: the position is where
+the work was.
+
+One trap worth recording, because it cost an hour. A test wrote
+`expect(result.landing).toMatchObject({ voice, at: 1 })`, and the run hung with no
+output and no timeout - `--testTimeout` could not fire, because the loop was
+synchronous. A `Voice` reaches the whole score graph through its back-references,
+so a deep compare against one walks a cyclic structure of thousands of objects.
+Compare model objects with `toBe`, never with `toEqual` or `toMatchObject`.
+
 ## The octave is a re-fingering, not a fret shift
 
 Measured on two real files, and this is the number that decides the design:
