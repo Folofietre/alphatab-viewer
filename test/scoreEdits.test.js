@@ -44,6 +44,11 @@ import {
   insertBarBefore,
   describeDuration,
   placeRest,
+  beatsInTickRange,
+  copyBeats,
+  cutBeats,
+  pasteBeats,
+  notesInTickRange,
   stepBeatsDuration,
   toggleBeatsDot,
   writeNoteAtString,
@@ -1013,6 +1018,51 @@ describe('deleteNotes', () => {
 // whole score, edit, undo, and compare - plus the generated midi, which catches
 // derived state a field-by-field comparison would miss.
 describe('undo restores exactly', () => {
+  // The marking `finish()` clears when it can no longer resolve the other end.
+  //
+  // Reachable long before the clipboard existed, and missed because the fixture's
+  // links almost always have somewhere else to re-resolve to. The last bar of the
+  // Ties track is the one place with nothing later on the string, so deleting
+  // what follows the hammer-on leaves finish() no choice but to drop the
+  // marking - and `NOTE_DERIVED_FIELDS` did not carry it, so the undo did not put
+  // it back. The generated midi is IDENTICAL either way, which is why only the
+  // exported bytes showed it: 7126 against 7122.
+  function lastBarHammerOn(score) {
+    const staff = score.tracks[TIES].staves[0]
+    const voice = staff.bars[staff.bars.length - 1].voices[0]
+    return { voice, origin: voice.beats[1].notes[0] }
+  }
+
+  it('including a marking finish() cleared because its other end had gone', () => {
+    const score = loadFixture()
+    const bytes = new alphaTab.exporter.Gp7Exporter().export(score, settings).length
+    const { voice, origin } = lastBarHammerOn(score)
+    expect(origin.isHammerPullOrigin).toBe(true)
+
+    const result = deleteNotes(
+      voice.beats.slice(2).flatMap((beat) => beat.notes),
+      settings,
+    )
+    expect(origin.isHammerPullOrigin).toBe(false)
+
+    result.undo()
+    expect(origin.isHammerPullOrigin).toBe(true)
+    expect(new alphaTab.exporter.Gp7Exporter().export(score, settings).length).toBe(bytes)
+  })
+
+  it('and the same through a cut, which is how it was found', () => {
+    const score = loadFixture()
+    const bytes = new alphaTab.exporter.Gp7Exporter().export(score, settings).length
+    const { voice, origin } = lastBarHammerOn(score)
+
+    const result = cutBeats(voice.beats.slice(2), settings)
+    expect(origin.isHammerPullOrigin).toBe(false)
+
+    result.undo()
+    expect(origin.isHammerPullOrigin).toBe(true)
+    expect(new alphaTab.exporter.Gp7Exporter().export(score, settings).length).toBe(bytes)
+  })
+
   function fullSnapshot(score) {
     return {
       tempo: tempoMap(score),
@@ -3354,6 +3404,633 @@ describe('deleteBars', () => {
       }
     }
     expect(roundTrip(score).masterBars).toHaveLength(before)
+  })
+})
+
+// The eleven fields a Note uses to point at another Note. A clipboard clone must
+// carry NONE of them, which is what makes it autonomous - the same property
+// `@clone_ignore` gives a track duplicate.
+const NOTE_LINKS = [
+  'tieOrigin', 'tieDestination', 'hammerPullOrigin', 'hammerPullDestination',
+  'slurOrigin', 'slurDestination', 'slideOrigin', 'slideTarget',
+  'effectSlurOrigin', 'effectSlurDestination', 'bendOrigin',
+]
+
+// The lane every clipboard test copies from, as a tick window over one voice.
+function laneOf(track, from = 0, to = 3840) {
+  return beatsInTickRange(track.staves[0], 0, from, to)
+}
+
+describe('beatsInTickRange', () => {
+  it('takes the beats of ONE lane, not the notes of a track', () => {
+    const score = loadFixture()
+    const beats = laneOf(score.tracks[LEAD])
+    expect(beats).toHaveLength(4)
+    expect(beats.map((b) => b.notes[0].fret)).toEqual([3, 5, 7, 9])
+  })
+
+  it('keeps a beat that holds no note, which is the whole reason it exists', () => {
+    // A range is a set of NOTES, so a clipboard built from `notesInTickRange`
+    // would silently drop the rests inside a copied passage: `note - rest - note`
+    // would come out two beats long and the paste would shorten the music.
+    //
+    // The fixture carries no rest at all - measured, 0 of its 96 beats hold no
+    // note - so one is made here the same way a user makes one, by silencing a
+    // note that was there.
+    const score = loadFixture()
+    const voice = score.tracks[LEAD].staves[0].bars[0].voices[0]
+    deleteNotes([...voice.beats[1].notes], settings)
+    expect(voice.beats[1].isRest).toBe(true)
+
+    expect(notesInTickRange(score.tracks[LEAD], 0, 3840)).toHaveLength(3)
+    expect(laneOf(score.tracks[LEAD])).toHaveLength(4)
+  })
+
+  it('takes beats that START inside the window, like notesInTickRange', () => {
+    const score = loadFixture()
+    // One quarter note in, so the first beat of the bar is outside.
+    expect(laneOf(score.tracks[LEAD], 960, 3840).map((b) => b.notes[0].fret)).toEqual([5, 7, 9])
+    // And a window that ends exactly on a beat excludes it.
+    expect(laneOf(score.tracks[LEAD], 0, 960).map((b) => b.notes[0].fret)).toEqual([3])
+  })
+
+  it('answers nothing for a staff or a voice that is not there', () => {
+    const score = loadFixture()
+    expect(beatsInTickRange(null, 0, 0, 3840)).toEqual([])
+    expect(beatsInTickRange(score.tracks[LEAD].staves[0], 7, 0, 3840)).toEqual([])
+  })
+})
+
+describe('copyBeats', () => {
+  it('writes nothing and records no undo', () => {
+    const score = loadFixture()
+    const before = snapshotTrack(score.tracks[LEAD])
+    const result = copyBeats(laneOf(score.tracks[LEAD]))
+
+    expect(result).toMatchObject({ ok: true, changed: false, beatCount: 4, noteCount: 4 })
+    expect(result.undo).toBeUndefined()
+    expect(snapshotTrack(score.tracks[LEAD])).toEqual(before)
+  })
+
+  it('clones every beat, with no reference left into the source score', () => {
+    const score = loadFixture()
+    const source = laneOf(score.tracks[LEAD])
+    const { clipboard } = copyBeats(source)
+
+    expect(clipboard.beats).toHaveLength(4)
+    clipboard.beats.forEach((beat, index) => {
+      expect(beat).not.toBe(source[index])
+      // A clipboard beat belongs to no voice, so it reaches no bar, no staff and
+      // no score. That is what lets a copy outlive the document it came from.
+      expect(beat.voice).toBeFalsy()
+      beat.notes.forEach((note, ni) => {
+        expect(note).not.toBe(source[index].notes[ni])
+        expect(note.beat).toBe(beat)
+        for (const field of NOTE_LINKS) expect(note[field], field).toBeFalsy()
+      })
+    })
+  })
+
+  it('and shares no array with it either', () => {
+    // Measured: after a plain assignment `clone.bendPoints === original.bendPoints`,
+    // so editing one note's bend would edit the other's - in the source score.
+    const score = loadFixture()
+    const note = score.tracks[LEAD].staves[0].bars[0].voices[0].beats[0].notes[0]
+    note.addBendPoint(new alphaTab.model.BendPoint(0, 0))
+    note.addBendPoint(new alphaTab.model.BendPoint(60, 4))
+
+    const copy = copyBeats(laneOf(score.tracks[LEAD])).clipboard.beats[0].notes[0]
+    expect(copy.bendPoints).not.toBe(note.bendPoints)
+    expect(copy.bendPoints.map((p) => [p.offset, p.value])).toEqual([[0, 0], [60, 4]])
+    expect(copy.bendPoints[0]).not.toBe(note.bendPoints[0])
+  })
+
+  it('leaves the placeholder marker behind, so a copied empty bar is a real rest', () => {
+    const score = loadFixture()
+    appendBar(score, settings)
+    const staff = score.tracks[LEAD].staves[0]
+    const voice = staff.bars[staff.bars.length - 1].voices[0]
+    expect(voice.beats[0].isEmpty).toBe(true)
+
+    const copy = copyBeats([voice.beats[0]]).clipboard.beats[0]
+    expect(copy.isEmpty).toBe(false)
+    expect(copy.isRest).toBe(true)
+  })
+
+  it('leaves the beat automations behind, which are a mixer snapshot', () => {
+    // `Beat.finish` strips Tempo automations itself (pitfall 3), but an
+    // Instrument one would re-voice whatever track the paste lands on - the
+    // collision trackSound.js documents from the other side.
+    const score = loadFixture()
+    const beat = score.tracks[LEAD].staves[0].bars[0].voices[0].beats[0]
+    beat.automations.push(
+      alphaTab.model.Automation.buildInstrumentAutomation(false, 0, 73),
+    )
+    expect(copyBeats([beat]).clipboard.beats[0].automations).toHaveLength(0)
+  })
+
+  it('refuses a staff with no strings, which is the call Ctrl+A already makes', () => {
+    const score = loadFixture()
+    const result = copyBeats(laneOf(score.tracks[DRUMS]))
+    expect(result.ok).toBe(false)
+    expect(result.reason).toMatch(/strings/)
+  })
+
+  it('refuses an empty selection', () => {
+    expect(copyBeats([]).ok).toBe(false)
+    expect(copyBeats(null).ok).toBe(false)
+  })
+
+  it('clears the link flags at the BORDERS and leaves the middle alone', () => {
+    // The Ties track's first bar is `5 | 5(tied) | 7(hammer-on) | 9`, so a copy
+    // that starts on the tie destination and ends on the hammer-on origin has one
+    // dangling link at each end - and nothing dangling in between.
+    const score = loadFixture()
+    const source = laneOf(score.tracks[TIES], 960, 3840)
+    expect(source[0].notes[0].isTieDestination).toBe(true)
+
+    const opening = copyBeats(source).clipboard.beats
+    expect(opening[0].notes[0].isTieDestination).toBe(false)
+    // The hammer-on is the LAST beat of this copy, so its destination stayed
+    // behind and the flag goes with it.
+    expect(opening[opening.length - 1].notes[0].isHammerPullOrigin).toBe(false)
+
+    // The same bar copied whole: the tie destination is now in the middle, its
+    // origin came along, and the flag is left exactly where it was.
+    const whole = copyBeats(laneOf(score.tracks[TIES])).clipboard.beats
+    expect(whole[1].notes[0].isTieDestination).toBe(true)
+    expect(whole[2].notes[0].isHammerPullOrigin).toBe(true)
+  })
+
+  it('clears isSlurDestination on EVERY note, not only at the borders', () => {
+    // The one flag whose cost is not a wrong value. `slurOrigin` is set by
+    // alphaTab's importers and by nothing else - no amount of finishing gives a
+    // clone one back - and two places read it through the flag with no null
+    // check. Measured on the fixture: the alphaTex export throws
+    // `Cannot read properties of null (reading 'id')`, and a render produces zero
+    // staff systems rather than raising anything at all.
+    const score = loadFixture()
+    for (const beat of laneOf(score.tracks[LEAD])) beat.notes[0].isSlurDestination = true
+
+    const copies = copyBeats(laneOf(score.tracks[LEAD])).clipboard.beats
+    for (const beat of copies) {
+      for (const note of beat.notes) expect(note.isSlurDestination).toBe(false)
+    }
+  })
+})
+
+describe('pasteBeats', () => {
+  // A clipboard taken from the Ties track, which is the only one carrying links.
+  function tiesClipboard(score, from = 0, to = 3840) {
+    return copyBeats(laneOf(score.tracks[TIES], from, to)).clipboard
+  }
+
+  it('inserts the sequence after the anchor, IN ORDER', () => {
+    // The order is not free, and it is why the insertion is a splice rather than
+    // a run of `Voice.insertBeat`. Verified in Node against 1.8.4: `insertBeat`
+    // splices at `after.index + 1` and never sets `index` on what it inserted, so
+    // a run of them reads a stale 0 from the beat it has just placed and puts
+    // everything after the first one back at the front, in reverse -
+    // 3,92,91,5,7,9,90 where 3,5,7,9,90,91,92 was meant. Nothing throws.
+    const score = loadFixture()
+    const clipboard = copyBeats(laneOf(score.tracks[BASS])).clipboard
+    const voice = score.tracks[BASS].staves[0].bars[1].voices[0]
+    const anchor = voice.beats[voice.beats.length - 1]
+    const before = voice.beats.map((b) => b.notes[0].fret)
+
+    const result = pasteBeats(clipboard, anchor, settings)
+    expect(result).toMatchObject({ ok: true, changed: true, beatCount: 4, replaced: false })
+    expect(voice.beats.map((b) => b.notes[0].fret)).toEqual([...before, 3, 5, 3, 1])
+    expect(voice.beats.map((b) => b.index)).toEqual([0, 1, 2, 3, 4, 5, 6, 7])
+    // And the chain alphaTab's own link resolution walks.
+    voice.beats.forEach((beat, index) => {
+      if (index > 0) expect(beat.previousBeat).toBe(voice.beats[index - 1])
+      if (index < voice.beats.length - 1) expect(beat.nextBeat).toBe(voice.beats[index + 1])
+    })
+  })
+
+  it('REPLACES the placeholder of an untouched bar rather than sitting beside it', () => {
+    // Leaving it behind would have the bar counted with a whole-bar rest in it on
+    // top of everything that was pasted. `placeRest` has the same two cases.
+    const score = loadFixture()
+    appendBar(score, settings)
+    const clipboard = copyBeats(laneOf(score.tracks[LEAD])).clipboard
+    const staff = score.tracks[LEAD].staves[0]
+    const bar = staff.bars[staff.bars.length - 1]
+    const voice = bar.voices[0]
+    expect(voice.beats[0].isEmpty).toBe(true)
+
+    const result = pasteBeats(clipboard, voice.beats[0], settings)
+    expect(result).toMatchObject({ ok: true, changed: true, replaced: true })
+    expect(voice.beats).toHaveLength(4)
+    expect(voice.beats.map((b) => b.notes[0].fret)).toEqual([3, 5, 7, 9])
+    expect(voice.isEmpty).toBe(false)
+    // Counted once, which is the point: four quarters and not five.
+    expect(barFill(bar)).toMatchObject({ state: BAR_EXACT, filled: 3840 })
+
+    result.undo()
+    expect(voice.beats).toHaveLength(1)
+    expect(voice.beats[0].isEmpty).toBe(true)
+    expect(voice.isEmpty).toBe(true)
+  })
+
+  it('invents no tie, and does not move the fret with it', () => {
+    // The finding this whole section is built around. `Note.chain` runs
+    // `this.tieOrigin ?? Note.findTieOrigin(this)` and then copies the origin's
+    // FRET, OCTAVE and TONE onto the destination - so a copied tie destination
+    // pasted anywhere would be re-tied to whatever happens to sit on its string
+    // before it, and would sound that note instead of the one that was copied.
+    //
+    // Measured before the flags were cleared: string 4 fret 5, copied out of the
+    // Ties track and pasted into Lead, came back tied to a note of Lead and
+    // sounding fret 3.
+    const score = loadFixture()
+    const source = laneOf(score.tracks[TIES], 960, 1920)
+    expect(source[0].notes[0]).toMatchObject({ isTieDestination: true, string: 4, fret: 5 })
+    expect(source[0].notes[0].tieOrigin).toBeTruthy()
+
+    const clipboard = copyBeats(source).clipboard
+    const lead = score.tracks[LEAD].staves[0].bars[0].voices[0]
+    // The note the paste lands after is on the same string, which is exactly what
+    // `findTieOrigin` would have latched onto.
+    expect(lead.beats[0].notes[0]).toMatchObject({ string: 4, fret: 3 })
+
+    const pasted = pasteBeats(clipboard, lead.beats[0], settings).beats[0].notes[0]
+    expect(pasted.fret).toBe(5)
+    expect(pasted.isTieDestination).toBe(false)
+    expect(pasted.tieOrigin).toBeFalsy()
+  })
+
+  it('and keeps a link whose two ends were BOTH copied', () => {
+    // The other half of the border rule: cleaning the middle as well would throw
+    // away music that was really there. finish() re-derives these from the flags,
+    // and it derives them right because both ends moved together.
+    const score = loadFixture()
+    const clipboard = tiesClipboard(score)
+    const lead = score.tracks[LEAD].staves[0].bars[3].voices[0]
+    const beats = pasteBeats(clipboard, lead.beats[lead.beats.length - 1], settings).beats
+
+    // beat 1 was tied to beat 0, and still is - to the PASTED beat 0.
+    expect(beats[1].notes[0].isTieDestination).toBe(true)
+    expect(beats[1].notes[0].tieOrigin).toBe(beats[0].notes[0])
+    expect(beats[1].notes[0].fret).toBe(5)
+    // beat 2 hammers onto beat 3, and still does.
+    expect(beats[2].notes[0].isHammerPullOrigin).toBe(true)
+    expect(beats[2].notes[0].hammerPullDestination).toBe(beats[3].notes[0])
+  })
+
+  it('refuses a staff with a different number of strings, with both numbers', () => {
+    const score = loadFixture()
+    const clipboard = copyBeats(laneOf(score.tracks[LEAD])).clipboard
+    const bass = score.tracks[BASS].staves[0].bars[0].voices[0]
+    const result = pasteBeats(clipboard, bass.beats[0], settings)
+
+    expect(result.ok).toBe(false)
+    expect(result.reason).toMatch(/6/)
+    expect(result.reason).toMatch(/4/)
+    expect(bass.beats).toHaveLength(4)
+  })
+
+  it('refuses percussion, which has no strings at all', () => {
+    const score = loadFixture()
+    const clipboard = copyBeats(laneOf(score.tracks[LEAD])).clipboard
+    const drums = score.tracks[DRUMS].staves[0].bars[0].voices[0]
+    expect(pasteBeats(clipboard, drums.beats[0], settings).ok).toBe(false)
+  })
+
+  it('refuses an empty clipboard and a position that is not in a score', () => {
+    const score = loadFixture()
+    const beat = score.tracks[LEAD].staves[0].bars[0].voices[0].beats[0]
+    expect(pasteBeats(null, beat, settings).ok).toBe(false)
+    expect(pasteBeats({ stringCount: 6, beats: [] }, beat, settings).ok).toBe(false)
+
+    const clipboard = copyBeats(laneOf(score.tracks[LEAD])).clipboard
+    expect(pasteBeats(clipboard, null, settings).ok).toBe(false)
+    expect(pasteBeats(clipboard, new alphaTab.model.Beat(), settings).ok).toBe(false)
+  })
+
+  it('can be pasted twice, each paste owning its own beats', () => {
+    const score = loadFixture()
+    const clipboard = copyBeats(laneOf(score.tracks[LEAD])).clipboard
+    const voice = score.tracks[LEAD].staves[0].bars[1].voices[0]
+
+    const first = pasteBeats(clipboard, voice.beats[0], settings)
+    const second = pasteBeats(clipboard, voice.beats[0], settings)
+    expect(voice.beats).toHaveLength(12)
+    expect(first.beats[0]).not.toBe(second.beats[0])
+    expect(first.beats[0].notes[0]).not.toBe(second.beats[0].notes[0])
+    // And neither of them is the clipboard's own beat, so a third paste is still
+    // possible.
+    expect(first.beats[0]).not.toBe(clipboard.beats[0])
+  })
+
+  it('drops a chord id the target staff does not know', () => {
+    // `Beat.hasChord` is `!!this.chordId` while `Beat.chord` looks the id up and
+    // answers null, so an id carried across staves is a beat claiming a chord it
+    // cannot produce.
+    const score = loadFixture()
+    const source = laneOf(score.tracks[TIES])
+    source[0].chordId = 'a-chord-of-the-ties-staff'
+    score.tracks[TIES].staves[0].addChord(source[0].chordId, new alphaTab.model.Chord())
+
+    const clipboard = copyBeats(source).clipboard
+    expect(clipboard.beats[0].chordId).toBe('a-chord-of-the-ties-staff')
+
+    const lead = score.tracks[LEAD].staves[0].bars[0].voices[0]
+    expect(pasteBeats(clipboard, lead.beats[0], settings).beats[0].chordId).toBeNull()
+  })
+
+  it('survives the .gp round trip', () => {
+    const score = loadFixture()
+    const clipboard = tiesClipboard(score)
+    const lead = score.tracks[LEAD].staves[0].bars[0].voices[0]
+    pasteBeats(clipboard, lead.beats[3], settings)
+
+    const beats = roundTrip(score).tracks[LEAD].staves[0].bars[0].voices[0].beats
+    expect(beats).toHaveLength(8)
+    expect(beats.map((b) => b.notes[0].fret)).toEqual([3, 5, 7, 9, 5, 5, 7, 9])
+  })
+
+  it('keeps the copied LENGTHS, which is the only reading that exists', () => {
+    // A settled question rather than a preference: there is no "current
+    // duration" state anywhere, because the cursor's duration IS the duration of
+    // the beat it stands on - and that has no meaning at all for a paste of
+    // several beats. So the clipboard carries the lengths it was copied with.
+    const score = loadFixture()
+    const source = laneOf(score.tracks[LEAD])
+    source[0].duration = alphaTab.model.Duration.Half
+    source[1].dots = 1
+    source[2].tupletNumerator = 3
+    source[2].tupletDenominator = 2
+    score.finish(settings)
+
+    const clipboard = copyBeats(source).clipboard
+    const voice = score.tracks[LEAD].staves[0].bars[3].voices[0]
+    const beats = pasteBeats(clipboard, voice.beats[3], settings).beats
+
+    expect(beats.map((b) => b.duration)).toEqual(source.map((b) => b.duration))
+    expect(beats.map((b) => b.dots)).toEqual([0, 1, 0, 0])
+    expect(beats[2].tupletNumerator).toBe(3)
+    expect(beats[2].tupletDenominator).toBe(2)
+    // And the derived tick lengths follow, which they only do after finish().
+    expect(beats.map((b) => b.playbackDuration)).toEqual(source.map((b) => b.playbackDuration))
+  })
+
+  it('and leaves the score exportable as alphaTex, which the slur flag would not', () => {
+    // The consequence that made `isSlurDestination` a clear-everywhere rather
+    // than a border case: the exporter reads `note.slurOrigin.id` with no null
+    // check, and a clone can never have a slurOrigin.
+    const score = loadFixture()
+    for (const beat of laneOf(score.tracks[TIES])) {
+      for (const note of beat.notes) note.isSlurDestination = true
+    }
+    const clipboard = tiesClipboard(score)
+    // The source itself is now unexportable, which is the point of the flag.
+    expect(() => new alphaTab.exporter.AlphaTexExporter().export(score, settings)).toThrow()
+
+    const fresh = loadFixture()
+    const lead = fresh.tracks[LEAD].staves[0].bars[0].voices[0]
+    pasteBeats(clipboard, lead.beats[0], settings)
+    expect(() => new alphaTab.exporter.AlphaTexExporter().export(fresh, settings)).not.toThrow()
+  })
+
+  it('takes the beats back out, and puts them back on a second call', () => {
+    const score = loadFixture()
+    const clipboard = copyBeats(laneOf(score.tracks[LEAD])).clipboard
+    const voice = score.tracks[LEAD].staves[0].bars[1].voices[0]
+    const before = voice.beats.map((b) => b.notes[0].fret)
+    const result = pasteBeats(clipboard, voice.beats[1], settings)
+    expect(voice.beats).toHaveLength(8)
+
+    result.undo()
+    expect(voice.beats.map((b) => b.notes[0].fret)).toEqual(before)
+    expect(voice.beats.map((b) => b.index)).toEqual([0, 1, 2, 3])
+    expect(voice.calculateDuration()).toBe(3840)
+    expect(voice.beats[1].nextBeat).toBe(voice.beats[2])
+
+    // The swap runs the other way, which is the whole of redo.
+    result.undo()
+    expect(voice.beats).toHaveLength(8)
+    expect(voice.beats[2]).toBe(result.beats[0])
+  })
+})
+
+describe('cutBeats', () => {
+  it('puts the beats on the clipboard and takes them out of the bar', () => {
+    const score = loadFixture()
+    const voice = score.tracks[LEAD].staves[0].bars[0].voices[0]
+    const gone = voice.beats.slice(2)
+
+    const result = cutBeats(gone, settings)
+    expect(result).toMatchObject({ ok: true, changed: true, beatCount: 2, noteCount: 2 })
+    expect(result.clipboard.beats.map((b) => b.notes[0].fret)).toEqual([7, 9])
+    expect(voice.beats.map((b) => b.notes[0].fret)).toEqual([3, 5])
+    // The visible difference from Delete: the bar is now INCOMPLETE, where a
+    // delete would have left two rests and the bar exactly as full as it was.
+    expect(barFill(voice.bar)).toMatchObject({ state: BAR_UNDER, filled: 1920 })
+  })
+
+  it('takes the WHOLE beat, chord and all, because Delete is the note-sized key', () => {
+    // The one place this parts company with the plan that designed it. A
+    // note-sized cut would put a beat holding one note on the clipboard while the
+    // score lost only a note and gained no gap, so pasting it back would not
+    // restore what was cut. `Delete` already takes one note out of a chord.
+    const score = loadFixture()
+    const voice = score.tracks[TIES].staves[0].bars[1].voices[0]
+    const chord = voice.beats.find((beat) => beat.notes.length > 1)
+    expect(chord.notes).toHaveLength(2)
+
+    const result = cutBeats([chord], settings)
+    expect(result).toMatchObject({ beatCount: 1, noteCount: 2 })
+    expect(result.clipboard.beats[0].notes).toHaveLength(2)
+    expect(voice.beats).not.toContain(chord)
+  })
+
+  it('puts alphaTab own placeholder back where a voice is left with nothing', () => {
+    // Verified in Node: an emptied voice renders, plays and exports perfectly
+    // well, and a .gp round trip turns it into exactly one `isEmpty` beat anyway.
+    // It is still wrong to leave: the cursor walks THROUGH an empty bar rather
+    // than landing in it, so the bar would be a hole nothing could write into.
+    const score = loadFixture()
+    const voice = score.tracks[LEAD].staves[0].bars[1].voices[0]
+    const before = voice.beats.map((b) => b.notes[0].fret)
+
+    const result = cutBeats([...voice.beats], settings)
+    expect(voice.beats).toHaveLength(1)
+    expect(voice.beats[0].isEmpty).toBe(true)
+    expect(voice.isEmpty).toBe(true)
+    // Which is an implicit whole-bar rest, so the bar reads as complete rather
+    // than as empty.
+    expect(barFill(voice.bar).state).toBe(BAR_EXACT)
+
+    result.undo()
+    expect(voice.beats.map((b) => b.notes[0].fret)).toEqual(before)
+    expect(voice.isEmpty).toBe(false)
+  })
+
+  it('cuts the chain at the end of the run, which finish() does not', () => {
+    // Measured on the fixture: `Voice.finish` re-links a voice's last beat to the
+    // next bar's first only `if (bar.nextBar)`, so in the LAST bar it keeps
+    // whatever `nextBeat` it had. Without the manual cut, the surviving hammer-on
+    // came back pointing at a note that had left the score - gotcha 6 arriving
+    // from the structural side.
+    const score = loadFixture()
+    const staff = score.tracks[TIES].staves[0]
+    const voice = staff.bars[staff.bars.length - 1].voices[0]
+    const hammer = voice.beats[1].notes[0]
+    expect(hammer.isHammerPullOrigin).toBe(true)
+    const gone = voice.beats.slice(2)
+
+    cutBeats(gone, settings)
+
+    expect(voice.beats).toHaveLength(2)
+    expect(voice.beats[1].nextBeat).toBeFalsy()
+    expect(hammer.hammerPullDestination).toBeFalsy()
+    expect(hammer.isHammerPullOrigin).toBe(false)
+  })
+
+  it('and the undo restores what finish() re-derived over the SURVIVORS', () => {
+    // Cutting a tie origin leaves its destinations with none, so finish() finds
+    // them a new one further back and copies ITS fret over them - the same
+    // mechanism gotcha 13 documents from the paste side. Restoring only the beats
+    // that were cut would leave those notes sounding the wrong pitch, which is
+    // why `beatRemoval` carries `deleteNotes`' capture.
+    const score = loadFixture()
+    const voice = score.tracks[TIES].staves[0].bars[2].voices[0]
+    const survivors = voice.beats.slice(1)
+    const before = survivors.map((b) => ({
+      fret: b.notes[0].fret,
+      isTieDestination: b.notes[0].isTieDestination,
+    }))
+    expect(before.every((n) => n.isTieDestination)).toBe(true)
+
+    const result = cutBeats([voice.beats[0]], settings)
+    result.undo()
+
+    expect(
+      survivors.map((b) => ({
+        fret: b.notes[0].fret,
+        isTieDestination: b.notes[0].isTieDestination,
+      })),
+    ).toEqual(before)
+  })
+
+  it('sweeps every link into a beat that left', () => {
+    const score = loadFixture()
+    const voice = score.tracks[TIES].staves[0].bars[0].voices[0]
+    const gone = new Set(voice.beats.slice(0, 2).flatMap((b) => b.notes))
+
+    cutBeats(voice.beats.slice(0, 2), settings)
+
+    for (const note of notesOf(score.tracks[TIES].staves[0])) {
+      for (const field of NOTE_LINKS) {
+        expect(gone.has(note[field]), field).toBe(false)
+      }
+    }
+  })
+
+  it('refuses what copy refuses, and writes nothing when it does', () => {
+    const score = loadFixture()
+    const drums = score.tracks[DRUMS].staves[0].bars[0].voices[0]
+    const result = cutBeats([...drums.beats], settings)
+    expect(result.ok).toBe(false)
+    expect(drums.beats).toHaveLength(4)
+    expect(cutBeats([], settings).ok).toBe(false)
+  })
+
+  it('survives the .gp round trip, and so does its undo', () => {
+    const score = loadFixture()
+    const before = snapshotTrack(score.tracks[LEAD])
+    const voice = score.tracks[LEAD].staves[0].bars[0].voices[0]
+    const result = cutBeats(voice.beats.slice(1, 3), settings)
+
+    expect(
+      roundTrip(score).tracks[LEAD].staves[0].bars[0].voices[0].beats.map(
+        (b) => b.notes[0].fret,
+      ),
+    ).toEqual([3, 9])
+
+    result.undo()
+    expect(snapshotTrack(roundTrip(score).tracks[LEAD])).toEqual(before)
+
+    // And the swap runs the other way, which is redo.
+    result.undo()
+    expect(voice.beats.map((b) => b.notes[0].fret)).toEqual([3, 9])
+  })
+
+  it('is an exact move: cut then paste puts the music back', () => {
+    const score = loadFixture()
+    const before = snapshotTrack(score.tracks[LEAD])
+    const voice = score.tracks[LEAD].staves[0].bars[0].voices[0]
+
+    const cut = cutBeats(voice.beats.slice(1, 3), settings)
+    pasteBeats(cut.clipboard, voice.beats[0], settings)
+
+    expect(snapshotTrack(score.tracks[LEAD])).toEqual(before)
+  })
+})
+
+describe('pasteBeats over a passage', () => {
+  it('replaces every beat of it, in one step', () => {
+    const score = loadFixture()
+    const clipboard = copyBeats(laneOf(score.tracks[LEAD], 0, 960)).clipboard
+    const voice = score.tracks[LEAD].staves[0].bars[1].voices[0]
+    const replacing = voice.beats.slice(1, 3)
+
+    const result = pasteBeats(clipboard, replacing[0], settings, replacing)
+    expect(result).toMatchObject({ ok: true, beatCount: 1, replacedCount: 2, replaced: true })
+    // In the slot the passage occupied, not after it.
+    expect(voice.beats.map((b) => b.notes[0].fret)).toEqual([12, 3, 7])
+
+    result.undo()
+    expect(voice.beats.map((b) => b.notes[0].fret)).toEqual([12, 10, 8, 7])
+  })
+
+  it('reaches position 0, which `insertBeat` cannot', () => {
+    // `Voice.insertBeat` inserts AFTER a beat, so a passage that starts a bar has
+    // no anchor to insert against. This is why the insertion is a splice.
+    const score = loadFixture()
+    const clipboard = copyBeats(laneOf(score.tracks[LEAD], 0, 960)).clipboard
+    const voice = score.tracks[LEAD].staves[0].bars[1].voices[0]
+    const replacing = voice.beats.slice(0, 2)
+
+    pasteBeats(clipboard, replacing[0], settings, replacing)
+    expect(voice.beats.map((b) => b.notes[0].fret)).toEqual([3, 8, 7])
+    expect(voice.beats.map((b) => b.index)).toEqual([0, 1, 2])
+    expect(voice.beats[0].nextBeat).toBe(voice.beats[1])
+  })
+
+  it('spans bars, and leaves the ones it empties as whole-bar rests', () => {
+    const score = loadFixture()
+    const clipboard = copyBeats(laneOf(score.tracks[LEAD], 0, 960)).clipboard
+    const staff = score.tracks[LEAD].staves[0]
+    const first = staff.bars[1].voices[0]
+    const second = staff.bars[2].voices[0]
+    const replacing = [...first.beats, ...second.beats]
+
+    const result = pasteBeats(clipboard, replacing[0], settings, replacing)
+    expect(result).toMatchObject({ beatCount: 1, replacedCount: 8 })
+    expect(first.beats.map((b) => b.notes[0].fret)).toEqual([3])
+    expect(second.beats).toHaveLength(1)
+    expect(second.beats[0].isEmpty).toBe(true)
+
+    result.undo()
+    expect(first.beats.map((b) => b.notes[0].fret)).toEqual([12, 10, 8, 7])
+    expect(second.beats.map((b) => b.notes[0].fret)).toEqual([5, 7, 9, 10])
+    expect(second.isEmpty).toBe(false)
+  })
+
+  it('and the whole replacement survives the .gp round trip', () => {
+    const score = loadFixture()
+    const clipboard = copyBeats(laneOf(score.tracks[TIES])).clipboard
+    const voice = score.tracks[LEAD].staves[0].bars[1].voices[0]
+
+    pasteBeats(clipboard, voice.beats[0], settings, [...voice.beats])
+    expect(
+      roundTrip(score).tracks[LEAD].staves[0].bars[1].voices[0].beats.map(
+        (b) => b.notes[0].fret,
+      ),
+    ).toEqual([5, 5, 7, 9])
   })
 })
 

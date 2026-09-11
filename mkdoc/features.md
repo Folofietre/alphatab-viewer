@@ -487,7 +487,69 @@ either, which is the same call as everywhere else here: undo covers it, and the
 unsaved-changes warning covers the file.
 
 **Deliberately out of scope for this tier:** tuplets, changing a time signature,
-changing the number of strings, and copy and paste.
+and changing the number of strings. Copy, cut and paste have since landed and
+have [a section of their own](#copying-cutting-and-pasting).
+
+## Copying, cutting and pasting
+
+**`Ctrl+C` copies the passage you dragged**, or the beat the cursor is on if
+there is no passage. **`Ctrl+X` cuts it**, which copies it and takes it out.
+**`Ctrl+V` puts it back**: over the passage you have selected, or after the
+cursor if there is none. With a cursor, pressing paste twice repeats the phrase
+twice - the cursor lands on the last beat that arrived, so it carries on from
+there.
+
+**Cut is not Delete**, and the difference is what happens to the bar:
+
+| Key | What goes | The bar |
+| --- | --- | --- |
+| `Delete` | the note; the beat stays and becomes a rest | as full as it was |
+| `Ctrl+X` | the beat, and every note in it | **incomplete**, and the counter says so |
+
+So `Ctrl+X` takes a whole beat, chord included: `Delete` is the key that takes one
+note out of a chord. Cutting everything out of a bar leaves it as an empty bar you
+can write into again, not as a hole.
+
+**Pasting over a selected passage replaces it**, in one `Ctrl+Z`. If the passage
+covers more bars than the clipboard fills, the extra bars are left empty - what
+is pasted goes where the passage started.
+
+Two more things are worth knowing rather than discovering.
+
+**It copies beats, not notes**, which means the **rests come too**. Copying
+`note - rest - note` gives three beats and pastes three beats. Everything else
+about a dragged passage - the pitches, the lengths, the octave, the silence - is
+about its notes, and this one deliberately is not.
+
+**It refuses between different instruments.** A fret means a pitch only against a
+string that exists, so pasting six-string music onto a four-string bass is
+refused with both numbers rather than guessed at, the same way changing the
+number of strings on a track is refused. Copying from a percussion staff, or from
+a staff with no tablature showing, is refused for the same reason: there are no
+strings there to compare.
+
+What travels is the whole beat: the notes with their frets, strings, bends,
+harmonics, palm mutes and fingering, the length and the dot, and the tuplet. A
+tie, a hammer-on or a slide **between two copied notes** comes along; one whose
+other end stayed behind does not, and does not re-attach itself to whatever it
+lands next to - which is not a detail, because it would otherwise change the
+pitch of the pasted note without saying so. Beat-level slurs are the one thing
+that does not survive a copy.
+
+Pasting into a bar nobody has written into replaces its whole-bar rest rather
+than sitting beside it. A paste can leave a bar holding **more than its time
+signature allows**, which is allowed and shown in red, like everything else in
+this tier.
+
+The clipboard **survives opening another file**, so a passage can be carried from
+one score to another - subject to the same string-count refusal. It is the app's
+own clipboard, not the system one: there is nothing to paste into another
+application, and nothing from another application to paste in.
+
+One `Ctrl+Z` takes a paste or a cut back in one step, however many beats it moved,
+and a paste over a passage is one step for both halves. Copy is not an edit at
+all - it changes nothing, marks nothing unsaved, and works during playback, where
+cutting and pasting are refused like every other write.
 
 ## Clicking the score takes the keyboard back
 

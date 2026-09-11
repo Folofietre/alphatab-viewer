@@ -292,12 +292,41 @@ function fakeStaffSystems(bar) {
   ]
 }
 
+// The window the host belongs to, which is where a release that alphaTab never
+// hears has to be caught: alphaTab registers its own `mouseup` on its CANVAS, so
+// letting go anywhere else fires nothing at all.
+function fakeWindow() {
+  const listeners = new Map()
+  return {
+    MouseEvent: class {
+      constructor(type, init = {}) {
+        this.type = type
+        Object.assign(this, init)
+      }
+    },
+    addEventListener(name, fn) {
+      if (!listeners.has(name)) listeners.set(name, new Set())
+      listeners.get(name).add(fn)
+    },
+    removeEventListener(name, fn) {
+      listeners.get(name)?.delete(fn)
+    },
+    get watchers() {
+      return listeners.get('mouseup')?.size ?? 0
+    },
+    fire(name) {
+      for (const fn of [...(listeners.get(name) ?? [])]) fn()
+    },
+  }
+}
+
 // A stand-in for the alphaTab host element, which is where the DOM
 // `alphaTab.beatMouseDown` carrying the mouse coordinates is dispatched.
 function fakeHostElement() {
   const listeners = new Map()
   return {
     isConnected: true,
+    ownerDocument: { defaultView: fakeWindow() },
     addEventListener: (name, fn) => listeners.set(name, fn),
     getBoundingClientRect: () => ({ left: 0, top: 0 }),
     fire: (name, event) => listeners.get(name)?.(event),
@@ -322,6 +351,9 @@ function fakeApi() {
     playbackRange: null,
     _selectionStart: null,
     _selectionEnd: null,
+    // alphaTab's own "the button is still down", which only its canvas mouseup
+    // ever clears.
+    _isBeatMouseDown: false,
     // Every beat the playhead was moved to, so a test can assert the playhead
     // followed the cursor rather than only that nothing threw.
     seeks: [],
@@ -392,6 +424,7 @@ function fakeApi() {
       const [down, ...moves] = beats
       this._selectionStart = down
       this._selectionEnd = null
+      this._isBeatMouseDown = true
       this.beatMouseDown.emit(down)
       if (point) host.hostElement.fire('alphaTab.beatMouseDown', { originalEvent: point })
       // The deselect microtask, which in a browser really does run between the
@@ -415,10 +448,67 @@ function fakeApi() {
       // that hands the state back to us.
       this.applyPlaybackRangeFromHighlight()
       this.beatMouseUp.emit(this._selectionEnd ?? down)
+      this._isBeatMouseDown = false
+    },
+
+    // The SAME gesture, released where alphaTab cannot hear it.
+    //
+    // Not a variant for completeness: alphaTab's mouseup listener is on its own
+    // canvas, so letting go on the action bar, on a side panel or below the last
+    // system runs none of the code above - and dragging past the end of a
+    // passage is how a passage gets selected. `_isBeatMouseDown` stays true,
+    // which is alphaTab still believing the button is held.
+    async dragOffTheCanvas(beats, point = null) {
+      const [down, ...moves] = beats
+      this._selectionStart = down
+      this._selectionEnd = null
+      this._isBeatMouseDown = true
+      this.beatMouseDown.emit(down)
+      if (point) host.hostElement.fire('alphaTab.beatMouseDown', { originalEvent: point })
+      await Promise.resolve()
+      for (const beat of moves) {
+        if (this._selectionEnd === beat) continue
+        this._selectionEnd = beat
+        if (!this._selectionStart || this._selectionStart === beat) {
+          this.playbackRangeHighlightChanged.emit({})
+        } else {
+          this.playbackRangeHighlightChanged.emit({
+            startBeat: this._selectionStart,
+            endBeat: beat,
+          })
+        }
+      }
+      // and then nothing at all.
     },
     settings: apiSettings,
     boundsLookup: fakeBoundsLookup(),
-    render: (hints) => host.renders.push(hints ?? null),
+    render(hints) {
+      host.renders.push(hints ?? null)
+      this.replayPostRenderHighlight()
+    },
+    // alphaTab's own canvas, which is where it listens for `mouseup` - and the
+    // only element a release has to land on for it to hear one. `canvasElement`
+    // is public in the .d.ts and alphaTab reads `canvasElement.element` itself.
+    //
+    // MODELS ITS GUARD, which is what makes a redundant dispatch harmless:
+    //
+    //   this.canvasElement.mouseUp.on((e) => {
+    //     if (!this._isBeatMouseDown) return
+    //
+    canvasElement: {
+      element: {
+        dispatched: [],
+        dispatchEvent(event) {
+          this.dispatched.push(event?.type)
+          const api = host.api
+          if (event?.type !== 'mouseup' || !api._isBeatMouseDown) return true
+          api.applyPlaybackRangeFromHighlight()
+          api.beatMouseUp.emit(null)
+          api._isBeatMouseDown = false
+          return true
+        },
+      },
+    },
   }
 }
 
@@ -1508,8 +1598,13 @@ describe('redo', () => {
     edit.undo()
     expect(notes.map((n) => n.fret)).toEqual(before)
 
-    // The selection is gone by now, so a redo rebuilt from ambient state would
-    // refuse. The swap does not need it.
+    // The undo drops OUR selection - and alphaTab puts its own back on the next
+    // render, because it replays its highlight after every one and these beats
+    // are all still there to replay. Which is the point from the other side: a
+    // redo cannot be rebuilt from "whatever is selected now" in either case, so
+    // it is the same record called a second time. Cleared here to say so.
+    edit.clearRange()
+    edit.clearSelection()
     expect(edit.selectedRange.value).toBeNull()
     edit.redo()
     expect(notes.map((n) => n.fret)).toEqual(before.map((f) => f + 1))
@@ -3732,6 +3827,10 @@ describe('click and drag, as a real gesture', () => {
   function beatAt(bar, index, track = LEAD) {
     return score.tracks[track].staves[0].bars[bar].voices[0].beats[index]
   }
+  const fretsOf = (bar, track = LEAD) =>
+    score.tracks[track].staves[0].bars[bar].voices[0].beats
+      .map((b) => b.notes[0]?.fret ?? '-')
+      .join(',')
 
   // The coordinates matter: they are what makes the mousedown place a CURSOR,
   // which is the thing that used to corrupt alphaTab's selection state.
@@ -3779,6 +3878,86 @@ describe('click and drag, as a real gesture', () => {
 
     await host.api.dragOverBeats([beatAt(1, 0), beatAt(1, 2)], ON_THE_TAB)
     expect(edit.selectedRange.value).toMatchObject({ startBar: 1 })
+  })
+
+  // alphaTab registers its `mouseup` on its OWN canvas element, so letting go
+  // anywhere else fires nothing at all - and letting go past the end of a passage
+  // is how a passage gets selected.
+  const release = () => host.hostElement.ownerDocument.defaultView.fire('mouseup')
+
+  it('ends a drag whose release alphaTab never heard', async () => {
+    await host.api.dragOffTheCanvas([beatAt(0, 0), beatAt(0, 1)], ON_THE_TAB)
+    // Nothing has been applied, and alphaTab still believes the button is down -
+    // which is what makes every later move of the pointer go on selecting.
+    expect(host.api._isBeatMouseDown).toBe(true)
+    expect(host.api.canvasElement.element.dispatched).toEqual([])
+
+    release()
+
+    // alphaTab unwinds ITSELF, down the same path a release inside its canvas
+    // takes, rather than us patching around it.
+    expect(host.api.canvasElement.element.dispatched).toEqual(['mouseup'])
+    expect(host.api._isBeatMouseDown).toBe(false)
+  })
+
+  it('and a release it DID hear is not answered a second time', async () => {
+    await host.api.dragOverBeats([beatAt(0, 0), beatAt(0, 1)], ON_THE_TAB)
+    release()
+    expect(host.api.canvasElement.element.dispatched).toEqual([])
+  })
+
+  it('so the keyboard reaches alphaTab own selection again afterwards', async () => {
+    await host.api.dragOffTheCanvas([beatAt(0, 0), beatAt(0, 1)], ON_THE_TAB)
+    release()
+
+    // The clear-down stands down while the button is held, which is the whole
+    // point of `gestureOnScore` - so while the gesture never ended, every cursor
+    // move stood down too and left the old selection for the echo to replay.
+    clickAt(beatAt(1, 0).notes[0])
+    host.api.appliedHighlights = 0
+    expect(edit.moveCursorBeat(1).ok).toBe(true)
+
+    expect(host.api.appliedHighlights).toBeGreaterThan(0)
+    // Collapsed onto one beat, which draws nothing and leaves the echo nothing
+    // to replay.
+    expect(host.api._selectionStart).toBe(host.api._selectionEnd)
+  })
+
+  it('and cut then paste act on what was selected', async () => {
+    await host.api.dragOffTheCanvas([beatAt(0, 0), beatAt(0, 1)], ON_THE_TAB)
+    release()
+
+    expect(edit.cutSelection()).toMatchObject({ ok: true, beatCount: 2 })
+    expect(fretsOf(0)).toBe('7,9')
+    expect(edit.cursor.value).toMatchObject({ barIndex: 0, beatIndex: 0 })
+
+    expect(edit.pasteAtCursor()).toMatchObject({ ok: true, replaced: false })
+    expect(fretsOf(0)).toBe('7,3,5,9')
+  })
+
+  it('and a range refuses beats the edit removed, even with no release at all', async () => {
+    // Letting go outside the BROWSER fires no mouseup anywhere, so the guard
+    // above cannot help. The range then has to refuse on its own: the echo comes
+    // back holding the beats that were just cut, `Bar.masterBar` still resolves
+    // because their bar is still there, and only membership tells the truth.
+    await host.api.dragOffTheCanvas([beatAt(0, 0), beatAt(0, 1)], ON_THE_TAB)
+    const cut = [beatAt(0, 0), beatAt(0, 1)]
+
+    expect(edit.cutSelection()).toMatchObject({ ok: true, beatCount: 2 })
+    expect(cut.every((beat) => !beat.voice.beats.includes(beat))).toBe(true)
+    expect(edit.selectedRange.value).toBeNull()
+    expect(fretsOf(0)).toBe('7,9')
+
+    expect(edit.pasteAtCursor()).toMatchObject({ ok: true, replaced: false })
+    expect(fretsOf(0)).toBe('7,3,5,9')
+  })
+
+  it('and the watch is replaced rather than stacked when the api is rebound', () => {
+    const view = host.hostElement.ownerDocument.defaultView
+    expect(view.watchers).toBe(1)
+    edit.bindSelection()
+    edit.bindSelection()
+    expect(view.watchers).toBe(1)
   })
 
   it('a plain click places the cursor and leaves no range behind', async () => {
@@ -4081,5 +4260,315 @@ describe('the right arrow makes room at the end of a bar', () => {
       for (const staff of track.staves) expect(staff.bars).toHaveLength(before)
     }
     expect(host.dirty).toBe(false)
+  })
+})
+
+describe('copy and paste', () => {
+  function voiceAt(bar, track = LEAD) {
+    return score.tracks[track].staves[0].bars[bar].voices[0]
+  }
+  function fretsAt(bar, track = LEAD) {
+    return voiceAt(bar, track).beats.map((b) => b.notes[0]?.fret ?? null)
+  }
+
+  it('copies the beat the cursor is on, and writes nothing at all', () => {
+    clickAt(voiceAt(0).beats[1].notes[0])
+    host.renders = []
+
+    const result = edit.copySelection()
+    expect(result).toMatchObject({ ok: true, changed: false, beatCount: 1, noteCount: 1 })
+    expect(edit.clipboard.value).toMatchObject({ beatCount: 1, noteCount: 1, stringCount: 6 })
+    // Not an edit: no render, no midi, no undo record, not dirty.
+    expect(host.renders).toEqual([])
+    expect(host.midiReloads).toBe(0)
+    expect(host.midiStale).toBe(false)
+    expect(edit.undoDepth.value).toBe(0)
+    expect(host.dirty).toBe(false)
+  })
+
+  it('copies the BEATS of a dragged passage, rests included', () => {
+    // The finding this is built around: a range is a set of NOTES, so a clipboard
+    // built from it would come out one beat short and the paste would silently
+    // shorten the music. The fixture carries no rest, so one is made here the way
+    // a user makes one - by silencing a note.
+    clickAt(voiceAt(0).beats[1].notes[0])
+    expect(edit.deleteSelection().ok).toBe(true)
+    expect(voiceAt(0).beats[1].isRest).toBe(true)
+
+    const beats = beatsOf(LEAD)
+    dragOver(beats[0], beats[2])
+    expect(edit.selectedRange.value.noteCount).toBe(2)
+
+    expect(edit.copySelection()).toMatchObject({ beatCount: 3, noteCount: 2 })
+  })
+
+  it('refuses percussion, and says why', () => {
+    const drums = beatsOf(DRUMS)
+    dragOver(drums[0], drums[3])
+    // A drag over a drum staff builds no note range at all, so the copy has to
+    // refuse on the staff rather than on the selection.
+    clickAt(score.tracks[DRUMS].staves[0].bars[0].voices[0].beats[0].notes[0])
+
+    const result = edit.copySelection()
+    expect(result.ok).toBe(false)
+    expect(edit.editMessage.value.text).toMatch(/strings/)
+  })
+
+  it('refuses with nothing designated', () => {
+    edit.clearSelection()
+    edit.clearRange()
+    expect(edit.canCopy.value).toBe(false)
+    expect(edit.copySelection().ok).toBe(false)
+  })
+
+  it('pastes after the cursor and lands on the last beat that arrived', () => {
+    clickAt(voiceAt(0).beats[0].notes[0])
+    edit.copySelection()
+    clickAt(voiceAt(0).beats[1].notes[0])
+    host.renders = []
+    host.midiReloads = 0
+
+    const result = edit.pasteAtCursor()
+    expect(result).toMatchObject({ ok: true, changed: true, beatCount: 1 })
+    expect(fretsAt(0)).toEqual([3, 5, 3, 7, 9])
+    // On the beat that arrived rather than the one it was pasted after, so a
+    // second paste carries on from there - the same rule Enter and the right
+    // arrow follow for the beat they write.
+    expect(edit.cursor.value).toMatchObject({ barIndex: 0, beatIndex: 2, hasNote: true })
+    expect(edit.selectedNote.value.fret).toBe(3)
+
+    // Beats moved, so every tick after them did: a timing change, like an
+    // inserted rest.
+    expect(host.renders).toEqual([{ reuseViewport: true, firstChangedMasterBar: 0 }])
+    expect(host.midiReloads).toBe(1)
+    expect(host.dirty).toBe(true)
+    expect(edit.undoDepth.value).toBe(1)
+    expect(edit.undoLabel.value).toBe('Paste')
+  })
+
+  it('keeps the cursor in its own lane, even where the pasted beat has no note', () => {
+    // The cursor is a position, and its STRING is part of it. Paste moves it
+    // along the beats and leaves the string where the user put it, so the next
+    // arrow carries on down the same line - which also means the beat it lands on
+    // can hold notes on other strings and none on this one.
+    clickAt(voiceAt(0).beats[0].notes[0])
+    expect(edit.cursor.value.string).toBe(4)
+    edit.copySelection()
+
+    // Bar 1 of the fixture is written on string 5, not on string 4.
+    clickAt(voiceAt(1).beats[1].notes[0])
+    expect(edit.cursor.value.string).toBe(5)
+
+    edit.pasteAtCursor()
+    expect(edit.cursor.value).toMatchObject({ beatIndex: 2, string: 5, hasNote: false })
+    expect(voiceAt(1).beats[2].notes[0].string).toBe(4)
+  })
+
+  it('and a second paste carries on after the first', () => {
+    clickAt(voiceAt(0).beats[0].notes[0])
+    edit.copySelection()
+    clickAt(voiceAt(1).beats[0].notes[0])
+
+    edit.pasteAtCursor()
+    edit.pasteAtCursor()
+    expect(voiceAt(1).beats).toHaveLength(6)
+    expect(fretsAt(1).slice(1, 3)).toEqual([3, 3])
+  })
+
+  it('pastes OVER a dragged passage rather than beside it', () => {
+    // Select, paste, and what was there is what is now there. A passage of four
+    // beats replaced by a clipboard of two leaves the bar two beats short, which
+    // the counter says and the red outline does not, because short is normal
+    // while writing.
+    clickAt(voiceAt(1).beats[0].notes[0])
+    dragOver(beatsOf(LEAD)[4], beatsOf(LEAD)[5])
+    edit.copySelection()
+    expect(edit.clipboard.value.beatCount).toBe(2)
+
+    const beats = beatsOf(LEAD)
+    dragOver(beats[0], beats[3])
+    expect(edit.cursor.value).toBeNull()
+
+    expect(edit.pasteAtCursor()).toMatchObject({ ok: true, beatCount: 2, replaced: true })
+    expect(fretsAt(0)).toEqual([12, 10])
+    expect(edit.cursorBarFill.value.state).toBe('under')
+  })
+
+  it('and that replacement is ONE undo step, not a cut and a paste', () => {
+    clickAt(voiceAt(1).beats[0].notes[0])
+    dragOver(beatsOf(LEAD)[4], beatsOf(LEAD)[5])
+    edit.copySelection()
+
+    const beats = beatsOf(LEAD)
+    dragOver(beats[0], beats[3])
+    edit.pasteAtCursor()
+    expect(edit.undoDepth.value).toBe(1)
+
+    expect(edit.undo().ok).toBe(true)
+    expect(fretsAt(0)).toEqual([3, 5, 7, 9])
+    expect(edit.undoDepth.value).toBe(0)
+  })
+
+  it('the undo takes every pasted beat back out, in one step', () => {
+    clickAt(voiceAt(0).beats[0].notes[0])
+    edit.copySelection()
+    clickAt(voiceAt(1).beats[0].notes[0])
+    const before = fretsAt(1)
+    edit.pasteAtCursor()
+
+    expect(edit.undo().ok).toBe(true)
+    expect(fretsAt(1)).toEqual(before)
+    expect(edit.undoDepth.value).toBe(0)
+    expect(host.dirty).toBe(false)
+
+    // And the redo puts the same beats back, which is what a swap is.
+    expect(edit.redo().ok).toBe(true)
+    expect(voiceAt(1).beats).toHaveLength(5)
+  })
+
+  it('refuses while playing, like every other write', () => {
+    clickAt(voiceAt(0).beats[0].notes[0])
+    edit.copySelection()
+    player.isPlaying.value = true
+
+    expect(edit.pasteAtCursor().ok).toBe(false)
+    expect(edit.editMessage.value.text).toMatch(/Pause playback/)
+    // But copying is not a write, so it stays available.
+    expect(edit.copySelection().ok).toBe(true)
+  })
+
+  it('refuses a staff with a different string count, naming both', () => {
+    clickAt(voiceAt(0, LEAD).beats[0].notes[0])
+    edit.copySelection()
+    clickAt(voiceAt(0, BASS).beats[0].notes[0])
+
+    expect(edit.pasteAtCursor().ok).toBe(false)
+    expect(edit.editMessage.value.text).toMatch(/6/)
+    expect(edit.editMessage.value.text).toMatch(/4/)
+  })
+
+  it('select-all then paste into another instrument is a refusal, not a guess', () => {
+    // Not a corner: `Ctrl+A` selects a whole track, so copying a seven-string
+    // part and pasting it into a bass is one keystroke and one click away.
+    edit.selectTrack(RHYTHM)
+    expect(edit.selectAll().ok).toBe(true)
+    expect(edit.copySelection()).toMatchObject({ ok: true, stringCount: 7 })
+
+    clickAt(voiceAt(0, BASS).beats[0].notes[0])
+    expect(edit.pasteAtCursor().ok).toBe(false)
+    expect(edit.editMessage.value.text).toMatch(/7/)
+    expect(edit.editMessage.value.text).toMatch(/4/)
+    expect(fretsAt(0, BASS)).toEqual([3, 5, 3, 1])
+  })
+
+  it('survives the score being replaced, which is what makes it plain data', () => {
+    clickAt(voiceAt(0).beats[0].notes[0])
+    edit.copySelection()
+
+    // What the app does when another file is opened: the selection, the range and
+    // the undo stack all go, because each of them holds notes of the score being
+    // discarded. The clipboard holds clones of its own, so it stays.
+    host.onScoreCleared?.()
+    expect(edit.clipboard.value).toMatchObject({ beatCount: 1, stringCount: 6 })
+
+    clickAt(voiceAt(1).beats[0].notes[0])
+    expect(edit.pasteAtCursor().ok).toBe(true)
+  })
+})
+
+describe('cut', () => {
+  function voiceAt(bar, track = LEAD) {
+    return score.tracks[track].staves[0].bars[bar].voices[0]
+  }
+  function fretsAt(bar, track = LEAD) {
+    return voiceAt(bar, track).beats.map((b) => b.notes[0]?.fret ?? null)
+  }
+
+  it('takes the beat the cursor is on, and leaves the bar incomplete', () => {
+    clickAt(voiceAt(0).beats[1].notes[0])
+    host.renders = []
+    host.midiReloads = 0
+
+    const result = edit.cutSelection()
+    expect(result).toMatchObject({ ok: true, changed: true, beatCount: 1, noteCount: 1 })
+    expect(fretsAt(0)).toEqual([3, 7, 9])
+    expect(edit.clipboard.value).toMatchObject({ beatCount: 1, noteCount: 1 })
+    // The visible difference from Delete, which leaves a rest and a full bar.
+    expect(edit.cursorBarFill.value.state).toBe('under')
+
+    expect(host.renders).toEqual([{ reuseViewport: true, firstChangedMasterBar: 0 }])
+    expect(host.midiReloads).toBe(1)
+    expect(host.dirty).toBe(true)
+    expect(edit.undoDepth.value).toBe(1)
+    expect(edit.undoLabel.value).toBe('Cut')
+  })
+
+  it('lands the cursor in the SLOT the cut left, not on the beat that moved up', () => {
+    clickAt(voiceAt(0).beats[1].notes[0])
+    edit.cutSelection()
+    expect(edit.cursor.value).toMatchObject({ barIndex: 0, beatIndex: 1, string: 4 })
+    expect(edit.selectedNote.value.fret).toBe(7)
+  })
+
+  it('takes a whole dragged passage', () => {
+    const beats = beatsOf(LEAD)
+    dragOver(beats[0], beats[2])
+
+    expect(edit.cutSelection()).toMatchObject({ ok: true, beatCount: 3 })
+    expect(fretsAt(0)).toEqual([9])
+    expect(edit.clipboard.value.beatCount).toBe(3)
+  })
+
+  it('and where that empties a bar, the whole-bar rest comes back', () => {
+    const beats = beatsOf(LEAD)
+    dragOver(beats[0], beats[3])
+
+    expect(edit.cutSelection().ok).toBe(true)
+    expect(voiceAt(0).beats).toHaveLength(1)
+    expect(voiceAt(0).beats[0].isEmpty).toBe(true)
+    // And the cursor can still land there, which is the whole reason the
+    // placeholder goes back rather than the bar being left with no beats.
+    expect(edit.cursor.value).toMatchObject({ barIndex: 0, beatIndex: 0, isUnwritten: true })
+  })
+
+  it('cut then paste is an exact move', () => {
+    clickAt(voiceAt(0).beats[0].notes[0])
+    const before = fretsAt(1)
+
+    const beats = beatsOf(LEAD)
+    dragOver(beats[4], beats[5])
+    edit.cutSelection()
+    expect(fretsAt(1)).toEqual([8, 7])
+
+    clickAt(voiceAt(3).beats[3].notes[0])
+    expect(edit.pasteAtCursor().ok).toBe(true)
+    expect(fretsAt(3)).toEqual([3, 5, 7, 8, 12, 10])
+
+    // And one Ctrl+Z per half, which is what two operations means.
+    expect(edit.undo().ok).toBe(true)
+    expect(edit.undo().ok).toBe(true)
+    expect(fretsAt(1)).toEqual(before)
+    expect(host.dirty).toBe(false)
+  })
+
+  it('refuses while playing, unlike copy', () => {
+    clickAt(voiceAt(0).beats[0].notes[0])
+    player.isPlaying.value = true
+
+    expect(edit.cutSelection().ok).toBe(false)
+    expect(edit.editMessage.value.text).toMatch(/Pause playback/)
+    expect(fretsAt(0)).toEqual([3, 5, 7, 9])
+    expect(edit.copySelection().ok).toBe(true)
+  })
+
+  it('refuses percussion, and with nothing designated', () => {
+    clickAt(score.tracks[DRUMS].staves[0].bars[0].voices[0].beats[0].notes[0])
+    expect(edit.cutSelection().ok).toBe(false)
+    expect(score.tracks[DRUMS].staves[0].bars[0].voices[0].beats).toHaveLength(4)
+
+    edit.clearSelection()
+    edit.clearRange()
+    expect(edit.canCut.value).toBe(false)
+    expect(edit.cutSelection().ok).toBe(false)
   })
 })

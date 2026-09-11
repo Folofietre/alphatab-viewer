@@ -1,7 +1,7 @@
 # alphaTab gotchas
 
 
-All twelve were found by running code against alphaTab **1.8.4**, not by reading
+All thirteen were found by running code against alphaTab **1.8.4**, not by reading
 the docs, and each one silently corrupts an edit - or lets a corrupt one
 through, or quietly disables a feature - if you do the obvious thing. They are the reason
 [src/utils/scoreEdits.js](../src/utils/scoreEdits.js) exists as its own module.
@@ -213,6 +213,25 @@ corruption if skipped:
    re-resolve or clear the links that just lost their target. Measured at 12ms on
    the same file, so ~24ms for a delete on the largest test score.
 
+And a fourth thing for the UNDO, which is where this one hides. `finish()` does
+not only clear the reference, it clears the **marking** beside it whenever it
+cannot resolve the other end:
+
+```js
+if (!hammerPullDestination) this.isHammerPullOrigin = false
+if (!this.slideTarget) this.slideOutType = SlideOutType.None
+this.isContinuedBend = this.isTieDestination && this.tieOrigin.hasBend
+```
+
+so those have to be captured alongside `isTieDestination`, `fret`, `octave` and
+`tone` or an undo brings the note back without its marking. They were missing for
+a long time and nothing caught it, because the fixture's links almost always have
+somewhere else to re-resolve to and because **the generated midi is identical
+either way**. The one place with nothing later on the string is the last bar of
+the Ties track: deleting what follows its hammer-on and undoing left the surviving
+note with no `{h}`, visible only as 7122 exported bytes against 7126. A cut is
+what made it easy to reach, and the list is `NOTE_DERIVED_FIELDS`.
+
 ## 7. `playbackDuration` is stale until `finish()`
 
 `beat.duration` is the **input**; `playbackDuration` and `displayDuration` are
@@ -404,6 +423,69 @@ one pressed. And a keyboard clear-down should end with a second
 because equal beats draw nothing - so the state the render echo reads is never
 half either.
 
+### And the release that ends the drag is heard by the CANVAS, not the page
+
+The half of gotcha 10 that only shows up when a drag ends somewhere unexpected.
+`_setupClickHandling` registers every mouse listener on alphaTab's own canvas
+element:
+
+```js
+this.canvasElement.mouseUp.on(...)    // -> element.addEventListener('mouseup', ..., true)
+```
+
+so **a release anywhere else fires nothing at all**: no
+`applyPlaybackRangeFromHighlight`, no `beatMouseUp`, and `_isBeatMouseDown` left
+true. Letting go on the action bar, on a side panel or below the last system is
+enough, and dragging past the end of a passage is how a passage gets selected.
+
+What that leaves is a score stuck mid-drag, in both halves at once:
+
+```js
+this.canvasElement.mouseMove.on((e) => {
+  if (!this._isBeatMouseDown) return;      // and never a check on e.buttons
+```
+
+so every later move of the pointer over the score goes on extending the
+selection with nothing pressed - while on our side `gestureOnScore` stays true,
+the keyboard clear-down stands down for ever, `_selectionStart` is never
+dropped, and the post-render echo above rebuilds the range after every edit.
+
+That used to cost only the playhead following the cursor. **It stopped being
+cosmetic when the clipboard arrived**: a resurrected range is what `Ctrl+X`
+takes and what `Ctrl+V` replaces. Measured - drag two beats of a four-beat bar,
+release outside the canvas, cut, paste: the bar came out `3,5` where `7,3,5,9`
+was meant, with the cut beats destroyed a second time and the cursor gone.
+
+The way out is to let alphaTab unwind **itself** rather than to patch around it.
+A `mouseup` dispatched on `api.canvasElement.element` - public in the `.d.ts`,
+and the same route alphaTab's own code takes to reach that element - runs exactly
+the path a release inside the canvas would: it applies the highlight, fires
+`beatMouseUp`, and clears `_isBeatMouseDown`. Its listener opens with
+`if (!this._isBeatMouseDown) return`, so a redundant dispatch is a no-op.
+
+One thing that is NOT a trap here, checked because the code depended on it: a
+plain click leaves `_selectionStart = { beat }` with `_selectionEnd` undefined,
+and `applyPlaybackRangeFromHighlight` really does clear the leftover start on
+mouseup - the `else` branch at the end of it is reached precisely when there is
+no end. So a click needs no clear-down of its own.
+
+### Two post-render handlers, and only one of them is careful
+
+alphaTab subscribes to `postRenderFinished` twice, and they do not agree:
+
+```js
+// AlphaTabApi._onPostRenderFinished
+if (this._selectionStart) this.highlightPlaybackRange(this._selectionStart.beat, this._selectionEnd.beat)
+
+// _setupClickHandling
+if (!this._selectionStart || ...) return
+this._cursorSelectRange(this._selectionStart, this._selectionEnd)   // and that one checks both
+```
+
+The first reads `_selectionEnd.beat` with no check, which is why the pair must
+never be left half - see the section above - and why the test double throws
+there rather than returning early.
+
 ## 11. Nothing can be removed from the model, and only beats get renumbered
 
 Three asymmetries in one, all verified in Node, and together they are the shape
@@ -422,6 +504,22 @@ after  finish : 0,1,2,3,4
 even though nothing about it changed a duration. `MidiFileGenerator` and the
 renderer both read `beat.index`.
 
+**And that bites the moment a RUN of beats is inserted, which is what a paste
+is.** `insertBeat` splices at `after.index + 1` - the field, not
+`beats.indexOf(after)` - so the second call of a run reads the stale `0` off the
+beat the first call has just placed, and puts it back at the front. Measured on
+the fixture, inserting three beats after a bar of 3,5,7,9:
+
+```
+meant   : 3,5,7,9,90,91,92
+got     : 3,92,91,5,7,9,90
+```
+
+Nothing throws, and one `finish()` at the end renumbers the wrong order into a
+tidy 0..6. So a run has to set `index` as it goes - `pasted.index = after.index + 1`,
+one line, and the whole of what keeps a pasted passage in the order it was
+copied.
+
 **There is no `removeBeat`, no `removeBar` and no `removeMasterBar`.** `Voice`
 has `addBeat` and `insertBeat`, `Bar` has `addVoice`, `Staff` has `addBar`,
 `Score` has `addMasterBar` - and no inverse for any of them. So an undo splices
@@ -433,6 +531,24 @@ if (previous) previous.nextBeat = next
 if (next) next.previousBeat = previous
 score.finish(settings)
 ```
+
+**And `Voice.finish` re-chains a voice, but abandons the LAST bar.** It rebuilds
+`previousBeat` / `nextBeat` from the voice's own array, and links the last beat of
+a voice to the next bar's first - but only in a branch guarded by
+`if (beat.isLastOfVoice && beat.voice.bar.nextBar)`. With no next bar, nothing is
+assigned and the field keeps whatever it held. So removing the last beats of the
+last bar leaves the new last beat pointing at a beat that has left the score, and
+`finish()` then RESOLVES THROUGH IT. Measured on the fixture's Ties track, whose
+last bar is `5 7{h} 9 10`:
+
+```
+cut the last two beats
+  last.nextBeat            -> a removed beat
+  the hammer-on's destination -> the removed fret-9 note, after finish()
+```
+
+That is gotcha 6 arriving from the structural side, and it is why every removal
+here cuts the links from what stayed into what went, by hand, before finishing.
 
 **But `Bar.index` and `MasterBar.index` are never renumbered.** `addBar` and
 `addMasterBar` set them from the current length, and no `finish()` touches them
@@ -514,6 +630,81 @@ set playbackRange(value) {
 
 so a tick restored before the range is thrown away, and the playhead lands at the
 start of the selection instead of where it was.
+
+## 13. A clone's link FLAGS make `finish()` invent the link
+
+A hand-made clone of a `Note` carries none of the eleven cross-note references -
+that is what the `@clone_ignore` annotations mean, and it is the property that
+makes a clipboard autonomous. But it does carry the **flags** that imply one, and
+`Note.finish` reads those flags to go looking for the other end.
+
+Six of the 34 fields `NoteCloner` copies are such a flag:
+
+| Flag | The link it implies | Where it points |
+| --- | --- | --- |
+| `isTieDestination` | `tieOrigin` | backwards |
+| `isContinuedBend` | `bendOrigin` | backwards |
+| `slideInType` | `slideOrigin` | backwards |
+| `isHammerPullOrigin` | `hammerPullDestination` | forwards |
+| `slideOutType` | `slideTarget` | forwards |
+| `isSlurDestination` | `slurOrigin` | backwards |
+
+The first is not a dangling flag. It is a **wrong pitch**:
+
+```js
+chain() {
+  const tieOrigin = this.tieOrigin ?? Note.findTieOrigin(this)
+  if (!tieOrigin) this.isTieDestination = false
+  else {
+    tieOrigin.tieDestination = this
+    this.tieOrigin = tieOrigin
+    this.fret = tieOrigin.fret        // <- and the octave, and the tone
+```
+
+`findTieOrigin` walks backwards looking for a note on the same string, so at a
+paste point it usually finds one. Measured on the fixture: a note copied out of
+the Ties track at **string 4, fret 5** and pasted into the Lead track came back
+tied to a note of Lead and **sounding fret 3**. Nothing throws, and nothing else
+in this editor produces a wrong value in silence. With `isTieDestination` cleared
+before the insert, the same paste leaves the fret at 5 and invents no origin.
+
+The rule that follows is a border rule rather than a blanket one: a link between
+two notes that were **both** copied is real and has to survive, and `finish()`
+rebuilds it correctly because both ends moved together. So the **first** beat of
+a copied sequence loses what pointed backwards, the **last** loses what pointed
+forwards, and the middle is left alone. Verified: a copied `5 | 5(tied) | 7(h) | 9`
+comes back with the tie still on beat 1 at fret 5 and the hammer-on still
+pointing at the pasted 9.
+
+### Except the slur, which has to go everywhere - and takes the score with it
+
+`isSlurDestination` is the one flag whose cost is not a wrong value. `slurOrigin`
+is a plain reference that alphaTab sets in its importers and in its JSON reader
+and **nowhere else** - `Note.finish` never resolves it - so no amount of
+finishing gives a clone one back. And two places read it through the flag with no
+null check:
+
+```js
+ScoreNoteChordGlyph : new ScoreSlurGlyph(`score.slur.${n.slurOrigin.id}`, ...)
+AlphaTexExporter    : const slurId = `s${note.slurOrigin.id}`
+```
+
+Measured, setting the flag on one note of the fixture by hand:
+
+```
+export to .gp        : fine, 7126 bytes
+export to alphaTex   : TypeError: Cannot read properties of null (reading 'id')
+ScoreRenderer        : does not throw - and produces ZERO staff systems
+```
+
+The render is the one that matters, and it is the worst shape a failure can
+take here: no exception, no log, and the whole score simply stops being drawn.
+So the flag is cleared on **every** copied note rather than at the borders.
+
+What that gives up is real and small: a slur whose two ends are both inside the
+copy is not reproduced either, because there is nothing left to rebuild it from.
+Ties, hammer-ons and slides between two copied notes do survive, since those are
+re-derived from their flags.
 
 ## And one non-gotcha: `finish()` is not needed after the OTHER edits
 

@@ -608,6 +608,71 @@ export const BINDINGS = [
     appliesTo: (el, _player, edit) => !ownsTypingKeys(el) && edit.canEditBars.value,
     run: (_player, _event, edit) => edit.removeBars(),
   },
+  // Copy, cut and paste, which are the three keys here that people arrive
+  // already knowing - and the reason they are declared by `key` rather than by
+  // `code` is the same one Save and Undo are: `code: 'KeyC'` is the position
+  // QWERTY gives to C, which on Dvorak is the key labelled J.
+  //
+  // They stand down for anything that owns typing keys, where `Ctrl+C` is a real
+  // copy of real text. That costs nothing since a click on the score takes the
+  // focus back - see `focusToRelease` - so the "click a note, press Ctrl+C"
+  // sequence works from anywhere.
+  //
+  // `shift: false` leaves `Ctrl+Shift+C` and `Ctrl+Shift+V` alone: the first is
+  // the devtools inspector in every browser, and swallowing it would be the same
+  // bad trade `Ctrl+Shift+S` and `Ctrl+Shift+Delete` already refuse to make.
+  //
+  // No repeat on any of them. A held `Ctrl+V` would paste at the keyboard's
+  // repeat rate and each paste finishes the score, which is the reason none of
+  // the writing keys repeats.
+  {
+    key: 'c',
+    label: 'Copy the selected beats',
+    group: 'Writing',
+    modifiers: { ctrl: true, shift: false },
+    appliesTo: (el, _player, edit) => !ownsTypingKeys(el) && edit.canCopy.value,
+    run: (_player, _event, edit) => edit.copySelection(),
+  },
+  {
+    key: 'c',
+    label: 'Copy the selected beats',
+    group: 'Writing',
+    modifiers: { meta: true, shift: false },
+    appliesTo: (el, _player, edit) => !ownsTypingKeys(el) && edit.canCopy.value,
+    run: (_player, _event, edit) => edit.copySelection(),
+  },
+  {
+    key: 'x',
+    label: 'Cut the selected beats',
+    group: 'Writing',
+    modifiers: { ctrl: true, shift: false },
+    appliesTo: (el, _player, edit) => !ownsTypingKeys(el) && edit.canCut.value,
+    run: (_player, _event, edit) => edit.cutSelection(),
+  },
+  {
+    key: 'x',
+    label: 'Cut the selected beats',
+    group: 'Writing',
+    modifiers: { meta: true, shift: false },
+    appliesTo: (el, _player, edit) => !ownsTypingKeys(el) && edit.canCut.value,
+    run: (_player, _event, edit) => edit.cutSelection(),
+  },
+  {
+    key: 'v',
+    label: 'Paste over the selection, or after the cursor',
+    group: 'Writing',
+    modifiers: { ctrl: true, shift: false },
+    appliesTo: (el, _player, edit) => !ownsTypingKeys(el) && edit.canPaste.value,
+    run: (_player, _event, edit) => edit.pasteAtCursor(),
+  },
+  {
+    key: 'v',
+    label: 'Paste over the selection, or after the cursor',
+    group: 'Writing',
+    modifiers: { meta: true, shift: false },
+    appliesTo: (el, _player, edit) => !ownsTypingKeys(el) && edit.canPaste.value,
+    run: (_player, _event, edit) => edit.pasteAtCursor(),
+  },
 ]
 
 // Exact match on Alt, Ctrl and Meta, always. Shift only when the binding says so.

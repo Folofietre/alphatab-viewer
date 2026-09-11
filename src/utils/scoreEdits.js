@@ -858,11 +858,29 @@ export function shiftNotesFret(notes, delta) {
 // copies a tie destination's `fret`, `octave` and `tone` from its origin
 // (`this.fret = tieOrigin.fret`). So a delete's finish() leaves the link graph in
 // a state that restoring only the cuts cannot undo.
+//
+// The list is "every field `Note.finish` writes rather than reads", and it was
+// short by three until a cut found them. `finish()` clears a marking whose other
+// end it can no longer resolve, exactly as it clears `isTieDestination`:
+//
+//   if (!hammerPullDestination) this.isHammerPullOrigin = false
+//   if (!this.slideTarget) this.slideOutType = SlideOutType.None
+//   this.isContinuedBend = this.isTieDestination && this.tieOrigin.hasBend
+//
+// Reachable before the clipboard existed and missed because the fixture's links
+// mostly have somewhere else to resolve to: deleting the notes AFTER the
+// hammer-on in the last bar of the Ties track - the one place with nothing later
+// to re-resolve to - left the surviving `7{h}` without its marking, and the undo
+// did not put it back. Measured as a 4-byte difference in the exported .gp, with
+// the generated midi identical, which is why nothing else had caught it.
 const NOTE_DERIVED_FIELDS = [
   'isTieDestination',
   'fret',
   'octave',
   'tone',
+  'isHammerPullOrigin',
+  'slideOutType',
+  'isContinuedBend',
 ]
 
 const NOTE_LINK_FIELDS = [
@@ -2896,7 +2914,492 @@ export function deleteBars(score, from, to, settings) {
 }
 
 // ---------------------------------------------------------------------------
-// 10. A whole new score
+// 10. The clipboard: copying beats, and pasting them back
+// ---------------------------------------------------------------------------
+
+// The beats of ONE LANE whose start is inside a tick window.
+//
+// The counterpart of `notesInTickRange`, and it exists because of the same
+// finding met a third time: a range is a set of NOTES, so a clipboard built from
+// `rangeNotes` would silently DROP THE RESTS inside a copied passage. Copying
+// `note - rest - note` would give two beats, and pasting it would shorten the
+// music without a word. Same root as the bug that made `Ctrl+Delete` take one
+// bar out of a passage of five.
+//
+// A LANE rather than a track, unlike `notesInTickRange`, and that is the whole
+// difference between the two. A clipboard is a SEQUENCE, while a track's staves
+// and its voices sound at the same time rather than one after another - so "the
+// beats of this track in this window" is not a sequence at all and could not be
+// pasted anywhere. The lane is the staff and the voice the gesture started in,
+// which is the rule the range already follows for the track.
+//
+// `voiceIndex` rather than a `Voice`, because a Voice belongs to ONE bar: a
+// window spanning three bars crosses three Voice objects carrying the same
+// index.
+//
+// "Beats that START inside the window", like `notesInTickRange` and for the same
+// reason: it is a rule a user can predict, where "beats that overlap it" would
+// pull in a beat they never dragged over.
+export function beatsInTickRange(staff, voiceIndex, startTick, endTick) {
+  const beats = []
+  for (const bar of staff?.bars ?? []) {
+    const voice = bar.voices?.[voiceIndex] ?? null
+    for (const beat of voice?.beats ?? []) {
+      const start = beat.absolutePlaybackStart
+      if (start >= startTick && start < endTick) beats.push(beat)
+    }
+  }
+  return beats
+}
+
+// Clear the links that point BACKWARDS out of a copied sequence.
+//
+// This is the trap that justifies the clipboard being its own section. A clone
+// carries no cross-note reference - that is what `@clone_ignore` means, and what
+// makes it autonomous - but it does carry the FLAGS that imply one, and
+// `Note.finish` reads those flags to go looking for the other end:
+//
+//   chain() : const tieOrigin = this.tieOrigin ?? Note.findTieOrigin(this)
+//             ... this.fret = tieOrigin.fret
+//
+// So a copied tie destination pasted somewhere else does not merely keep a
+// meaningless flag. finish() finds it a NEW origin at the paste point and then
+// COPIES THAT ORIGIN'S FRET OVER IT. Measured on the fixture: a note copied from
+// the Ties track at string 4 fret 5, pasted into the Lead track, came back tied
+// to a note of another track and sounding fret 3. Nothing else in this editor
+// produces a wrong value in silence.
+//
+// Cleared with the flag reset, the same paste leaves the fret at 5 and invents
+// no origin. Also measured.
+function clearLinksFromBefore(note) {
+  note.isTieDestination = false
+  note.isContinuedBend = false
+  note.slideInType = alphaTab.model.SlideInType.None
+}
+
+// The same, forwards. `Note.finish` resolves each of these to whatever follows
+// the paste point:
+//
+//   isHammerPullOrigin -> Note.findHammerPullDestination(this)
+//   slideOutType       -> this.slideTarget = nextNoteOnLine
+//
+// finish() does clear `isHammerPullOrigin` itself when it finds nothing, so this
+// one is not a wrong value - it is a hammer-on drawn onto a note the user never
+// hammered onto.
+function clearLinksToAfter(note) {
+  note.isHammerPullOrigin = false
+  note.slideOutType = alphaTab.model.SlideOutType.None
+}
+
+// The one flag that is cleared on EVERY copied note rather than at the edges,
+// and the only one whose cost is not a wrong value.
+//
+// `slurOrigin` is a plain reference with no flag-driven resolution anywhere in
+// `Note.finish`: alphaTab sets it in its importers and in its JSON reader and
+// nowhere else, so no amount of finishing will ever give a clone one back. A
+// clone therefore reaches the renderer with `isSlurDestination` true and
+// `slurOrigin` null, which two places read WITHOUT A NULL CHECK:
+//
+//   ScoreNoteChordGlyph : new ScoreSlurGlyph(`score.slur.${n.slurOrigin.id}`, ...)
+//   AlphaTexExporter    : const slurId = `s${note.slurOrigin.id}`
+//
+// Measured on the fixture, setting the flag on one note by hand: the alphaTex
+// export throws `TypeError: Cannot read properties of null (reading 'id')`, and
+// `ScoreRenderer.renderScore` produces **zero staff systems** - it does not
+// throw, it simply draws nothing at all. A pasted note would take the whole
+// score off the screen with no error anywhere.
+//
+// What is given up is real and small: a slur whose two ends are both inside the
+// copy is not reproduced either, because there is nothing to rebuild it from.
+// Ties, hammer-ons and slides between two copied notes DO survive, since
+// finish() re-derives those from the flags - verified on the fixture's Ties
+// track, where a copied `7 {h} 9` comes back with the hammer-on pointing at the
+// pasted 9.
+function clearSlurDestination(note) {
+  note.isSlurDestination = false
+}
+
+// Take a copy of a sequence of beats, autonomous enough to outlive the score it
+// came from.
+//
+// Nothing is written, so this returns `changed: false` and carries no undo
+// record: a copy must not mark the score dirty nor push anything onto the stack.
+//
+// The clones are built by the SAME `cloneBeat` and `cloneNote` a track duplicate
+// uses, rather than by a second field list transcribed beside it. That is the
+// point: those lists come from alphaTab's own `BeatCloner` and `NoteCloner`, and
+// a clipboard with a list of its own would be a second thing to keep in step
+// with the library. What the clipboard needs on top is subtraction, not
+// addition, and there are three subtractions:
+//
+//   isEmpty      alphaTab's placeholder marker, which says "nobody has written
+//                this bar yet" rather than "this is a rest". Pasted as it is, it
+//                would land a beat the renderer and the bar-fill arithmetic both
+//                skip. The copy of a placeholder is the whole-bar rest it draws
+//                as, so the flag goes.
+//   automations  a mixer snapshot does not travel with the music. `Beat.finish`
+//                strips Tempo automations itself (gotcha 3), but an Instrument
+//                automation would re-voice whatever track it lands on, which is
+//                the collision `trackSound.js` documents from the other side.
+//   the links    the flags above, at the edges and, for the slur, everywhere.
+//
+// Refused on a staff with no strings, which is the call `Ctrl+A` already makes
+// for the same reason: the paste side is a numbered string-count check, and a
+// percussion staff has no number to compare.
+export function copyBeats(beats) {
+  const list = [...new Set(beats ?? [])]
+  if (list.length === 0) return refused('Nothing to copy.')
+
+  const staff = list[0]?.voice?.bar?.staff ?? null
+  const stringCount = staff?.tuning?.length ?? 0
+  if (!staff?.isStringed || stringCount === 0) {
+    return refused('Nothing to copy here: percussion and staves without a tablature have no strings.')
+  }
+
+  const copies = list.map((beat) => {
+    const clone = cloneBeat(beat)
+    clone.isEmpty = false
+    clone.automations = []
+    for (const note of clone.notes) clearSlurDestination(note)
+    return clone
+  })
+
+  // At the BORDERS of the sequence, not inside it. A link between two notes that
+  // were both copied is real and has to survive the paste; a link whose other
+  // end stayed behind must not be allowed to hook onto whatever it finds at the
+  // paste point. So the first beat loses what pointed backwards and the last
+  // loses what pointed forwards, and a one-beat copy is simply both at once.
+  for (const note of copies[0].notes) clearLinksFromBefore(note)
+  for (const note of copies[copies.length - 1].notes) clearLinksToAfter(note)
+
+  const noteCount = copies.reduce((total, beat) => total + beat.notes.length, 0)
+
+  return noop({
+    clipboard: { stringCount, beats: copies, noteCount },
+    beatCount: copies.length,
+    noteCount,
+    stringCount,
+  })
+}
+
+// Put a run of beats into a voice at a position.
+//
+// alphaTab offers `addBeat` and `insertBeat` and neither does this job.
+// `insertBeat` inserts AFTER a beat, so it cannot reach position 0 - which is
+// exactly where a paste over a passage that starts a bar has to land - and it
+// carries the index trap of gotcha 11: it splices at `after.index + 1`, the
+// FIELD, and never sets `index` on what it inserted, so a run of insertions
+// reads a stale 0 off the beat it has just placed and puts everything after the
+// first one back at the front, in reverse. Measured on the fixture:
+// `3,92,91,5,7,9,90` where `3,5,7,9,90,91,92` was meant, with nothing thrown.
+//
+// A splice has neither problem and needs only the `voice` back-reference
+// `insertBeat` would have set. `Voice.finish` renumbers every beat and rebuilds
+// `previousBeat` / `nextBeat` across the whole score, the bar lines included -
+// verified in Node, splicing at index 0 of a middle bar and checking the chain
+// in both directions and across the bar before it.
+function spliceBeatsInto(voice, at, beats) {
+  for (const beat of beats) beat.voice = voice
+  voice.beats.splice(Math.max(0, Math.min(at, voice.beats.length)), 0, ...beats)
+}
+
+// A run of beats LEAVING the score, as one reversible step that does not finish.
+//
+// Shared by the cut and by a paste over a passage, because a paste over a
+// passage is a cut and a paste under one undo entry. Four things here are not
+// the naive splice, and every one of them is silent corruption if skipped.
+//
+// **The positions are read now, before anything moves**, which is what the undo
+// puts the beats back at. Per voice, since one gesture can span several bars and
+// each bar carries a `Voice` object of its own.
+//
+// **A voice left with NOTHING gets alphaTab's own placeholder back.** That is
+// literally what `ModelUtils.consolidate` puts in an unwritten voice
+// (`new Beat()` with `isEmpty = true`), and what alphaTab's importer puts back on
+// the next load anyway - measured, a .gp round trip turns an emptied voice into
+// exactly one `isEmpty` beat. Leaving it empty renders, plays and exports
+// perfectly well, and is still wrong: the cursor walks THROUGH an empty bar
+// rather than landing in it, so a bar cut to nothing would be a hole that Enter,
+// a digit and a paste could none of them reach until the file was saved and
+// reopened.
+//
+// **The chain is cut by hand at the end of the run.** `Voice.finish` rebuilds a
+// voice's chain from its own array and links its last beat to the next bar's
+// first - but only `if (bar.nextBar)`, so the last beat of the LAST bar keeps
+// whatever `nextBeat` it had. Measured on the fixture's Ties track, whose last
+// bar is `5 7{h} 9 10`: cutting the last two beats left the hammer-on's
+// `hammerPullDestination` still pointing at the removed fret-9 note, resolved by
+// `finish()` itself through a `nextBeat` it never revisited. That is gotcha 6
+// arriving from the structural side.
+//
+// **And the link sweep and the derived capture, but only when notes really
+// leave.** Both are `deleteNotes`' machinery and are here for its reasons: a link
+// to a removed note survives `finish()`, and `finish()` also CREATES links -
+// `findTieOrigin` resolves a tie whose origin has gone to an earlier note on the
+// same string and copies its fret over the destination. Cutting a tie origin can
+// therefore change the pitch of a note that stayed. Cutting a rest or an
+// untouched bar's placeholder removes no note at all, so neither is needed - the
+// same argument `writeNoteAtString` makes for its own absence.
+function beatRemoval(beats, score, settings) {
+  const list = [...new Set(beats ?? [])]
+
+  const places = []
+  const voices = new Set()
+  for (const beat of list) {
+    const voice = beat.voice ?? null
+    const at = voice ? voice.beats.indexOf(beat) : -1
+    if (at < 0) continue
+    places.push({ voice, at, beat })
+    voices.add(voice)
+  }
+
+  const victims = new Set()
+  for (const beat of list) for (const note of beat.notes ?? []) victims.add(note)
+
+  // Every note of every AFFECTED STAFF, which is the unit `deleteNotes` uses and
+  // for its reason: finish()'s link resolution walks `nextBeat` / `previousBeat`,
+  // and neither ever leaves a staff.
+  const derived = []
+  if (victims.size > 0) {
+    const staves = new Set([...voices].map((voice) => voice.bar?.staff).filter((s) => s))
+    for (const staff of staves) {
+      for (const bar of staff.bars ?? []) {
+        for (const voice of bar.voices ?? []) {
+          for (const beat of voice.beats ?? []) {
+            for (const note of beat.notes ?? []) {
+              if (victims.has(note)) continue
+              const state = {}
+              for (const field of NOTE_LINK_FIELDS) state[field] = note[field]
+              for (const field of NOTE_DERIVED_FIELDS) state[field] = note[field]
+              derived.push({ note, state })
+            }
+          }
+        }
+      }
+    }
+  }
+
+  const holders = []
+
+  function remove() {
+    const gone = new Set(list)
+    for (const beat of list) {
+      const voice = beat.voice ?? null
+      const where = voice ? voice.beats.indexOf(beat) : -1
+      if (where >= 0) voice.beats.splice(where, 1)
+    }
+    // Every link from a beat that STAYED into one that went. finish() rebuilds
+    // the rest of the chain; this is the part it provably does not.
+    for (const voice of voices) {
+      for (const beat of voice.beats) {
+        if (gone.has(beat.nextBeat)) beat.nextBeat = null
+        if (gone.has(beat.previousBeat)) beat.previousBeat = null
+      }
+      if (voice.beats.length > 0) continue
+      const holder = new alphaTab.model.Beat()
+      holder.isEmpty = true
+      voice.addBeat(holder)
+      holders.push({ voice, holder })
+    }
+    if (victims.size === 0) return
+    // The whole score rather than the victims' own back-references: several of
+    // these fields have no inverse, so only walking everything is complete.
+    for (const note of everyNote(score)) {
+      for (const field of NOTE_LINK_FIELDS) {
+        if (victims.has(note[field])) note[field] = null
+      }
+    }
+  }
+
+  function restore() {
+    for (const { voice, holder } of holders) {
+      const where = voice.beats.indexOf(holder)
+      if (where >= 0) voice.beats.splice(where, 1)
+    }
+    holders.length = 0
+    // Ascending recorded index, so each splice lands in a slot the earlier ones
+    // have already made room for. A global sort is enough: it leaves each voice's
+    // own entries in ascending order, which is all that matters.
+    for (const { voice, at, beat } of [...places].sort((a, b) => a.at - b.at)) {
+      spliceBeatsInto(voice, at, [beat])
+    }
+    // Before the finish the caller runs, never after: finish() would overwrite it,
+    // and its own caches have to be built from the restored values.
+    for (const entry of derived) Object.assign(entry.note, entry.state)
+  }
+
+  return {
+    places,
+    noteCount: victims.size,
+    remove,
+    restore,
+    // Where the cursor should go afterwards: the slot the first removed beat
+    // occupied, which is now whatever moved up into it.
+    landing: places.length > 0 ? { voice: places[0].voice, at: places[0].at } : null,
+  }
+}
+
+// Put a copied sequence into the score.
+//
+// The clipboard is cloned AGAIN on the way in, so the same copy can be pasted as
+// many times as the user likes and each paste owns its own objects - which is
+// also what lets the undo record re-attach the very beats it detached rather
+// than building new ones.
+//
+// THREE CASES, and they are one case wearing three hats:
+//
+//   after a position          insert after the anchor
+//   onto an untouched bar     REPLACE alphaTab's placeholder, or the bar is
+//                             counted with a whole-bar rest in it on top of
+//                             everything that arrived
+//   over a dragged passage    REPLACE every beat of it, which is a cut and a
+//                             paste in ONE undo entry
+//
+// The second is the third with a list of one, which is why there is no separate
+// branch for it: a placeholder is simply the beat a paste lands on top of.
+//
+// ONE `finish()` for the whole thing, not one per beat, which is what makes the
+// cost of a paste that of a single insertion whatever its length - measured at
+// 0.9ms on a 77-bar score and 2.5ms on a 118-bar one for one inserted beat.
+export function pasteBeats(clipboard, beat, settings, replacing = null) {
+  const source = clipboard?.beats ?? []
+  if (source.length === 0) return refused('Nothing has been copied yet.')
+  if (!beat) return refused('No position to paste at.')
+
+  const voice = beat.voice ?? null
+  const staff = voice?.bar?.staff ?? null
+  const score = scoreOf(beat)
+  if (!voice || !staff || !score) return refused('That position is not attached to a score.')
+
+  // The same refusal the retuning makes, for the same reason: a fret means a
+  // pitch only against a string that exists. Transposing the strings
+  // automatically would be possible and would be guessing.
+  const strings = staff.tuning?.length ?? 0
+  if (strings !== clipboard.stringCount) {
+    return refused(
+      strings === 0
+        ? `The clipboard holds music for ${clipboard.stringCount} strings, and this staff has none.`
+        : `The clipboard holds music for ${clipboard.stringCount} strings, and this staff has ${strings}.`,
+    )
+  }
+
+  const pasted = source.map(cloneBeat)
+  // A chord diagram is referred to by an id that lives in the STAFF's own chord
+  // map, so an id copied from another staff points at nothing. `Beat.hasChord`
+  // is `!!this.chordId` while `Beat.chord` looks the id up and answers null, so a
+  // dangling id is a beat claiming a chord it cannot produce.
+  for (const target of pasted) {
+    if (target.chordId && !staff.hasChord(target.chordId)) target.chordId = null
+  }
+
+  // A passage to replace, or the placeholder of an untouched bar, or neither.
+  const replaced = replacing?.length ? [...new Set(replacing)] : beat.isEmpty ? [beat] : []
+  const removal = replaced.length > 0 ? beatRemoval(replaced, score, settings) : null
+
+  // Where the sequence goes: in the slot the passage occupied, or straight after
+  // the anchor. Read before anything moves, like the removal's own positions.
+  const into = replaced.length > 0 ? replaced[0].voice : voice
+  const at =
+    replaced.length > 0 ? into.beats.indexOf(replaced[0]) : into.beats.indexOf(beat) + 1
+
+  function attach() {
+    // The sequence goes in FIRST and the passage comes out after it, so the
+    // recorded position is still the passage's own and needs no arithmetic.
+    spliceBeatsInto(into, at, pasted)
+    removal?.remove()
+    score.finish(settings ?? null)
+  }
+
+  function detach() {
+    for (const target of pasted) {
+      const where = into.beats.indexOf(target)
+      if (where >= 0) into.beats.splice(where, 1)
+    }
+    removal?.restore()
+    score.finish(settings ?? null)
+  }
+
+  attach()
+
+  let isAttached = true
+  return applied({
+    beats: pasted,
+    beatCount: pasted.length,
+    noteCount: pasted.reduce((total, target) => total + target.notes.length, 0),
+    replacedCount: replaced.length,
+    replaced: replaced.length > 0,
+    // No capture of what `finish()` derives when nothing is replaced, unlike
+    // `deleteNotes` and `deleteBars`. The reason is the one `writeNoteAtString`
+    // records: finish() only ever CREATES a link for a note whose `tieOrigin` is
+    // already null, and inserting a beat cannot put an existing note into that
+    // state. Measured on the fixture and on both large real files: inserting a
+    // beat changes 0 existing note links. Replacing a passage DOES remove notes,
+    // and `beatRemoval` carries the capture for exactly that case.
+    undo: () => {
+      if (isAttached) detach()
+      else attach()
+      isAttached = !isAttached
+    },
+  })
+}
+
+// Cut: copy, then take the beats out.
+//
+// **Cut takes exactly what copy takes, which is a BEAT.** That is the one place
+// this parts company with the plan that designed it, and the reason is that the
+// two have to agree or `Ctrl+X` then `Ctrl+V` is not a move. The plan read cut as
+// note-sized ("the note and its beat go") and drew a special case out of it: cut
+// one note of a chord, the beat still holds the others, so the beat stays and the
+// cut degenerates into a delete. But then the clipboard would hold a beat with
+// one note in it while the score lost only a note and gained no gap, so pasting
+// it back would not restore what was cut. A beat-sized cut has no special case
+// and is an exact move.
+//
+// Nothing is lost by that: `Delete` is already the key that takes one note out of
+// a chord and leaves the beat sounding, and it is the key the plan's own table
+// puts opposite this one.
+//
+// The bar it leaves behind is INCOMPLETE, which is the visible difference from
+// `Delete` - that one leaves the beat as a rest and the bar exactly as full as it
+// was. The counter in the action bar is what says so.
+export function cutBeats(beats, settings) {
+  const copied = copyBeats(beats)
+  if (!copied.ok) return copied
+
+  const list = [...new Set(beats)]
+  const score = scoreOf(list[0])
+  if (!score) return refused('Those beats are not attached to a score.')
+
+  const removal = beatRemoval(list, score, settings)
+
+  function detach() {
+    removal.remove()
+    score.finish(settings ?? null)
+  }
+  function attach() {
+    removal.restore()
+    score.finish(settings ?? null)
+  }
+
+  detach()
+
+  let isDetached = true
+  return applied({
+    clipboard: copied.clipboard,
+    beatCount: copied.beatCount,
+    noteCount: copied.noteCount,
+    stringCount: copied.stringCount,
+    landing: removal.landing,
+    undo: () => {
+      if (isDetached) attach()
+      else detach()
+      isDetached = !isDetached
+    },
+  })
+}
+
+// ---------------------------------------------------------------------------
+// 11. A whole new score
 // ---------------------------------------------------------------------------
 
 // The denominators a time signature can have, which is not "any number": a beat

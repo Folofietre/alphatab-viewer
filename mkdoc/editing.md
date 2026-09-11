@@ -970,9 +970,10 @@ Three consequences worth keeping:
   went or five - so it posts "2 bars deleted (4 to 5)" after `propagate`, on the
   same channel the octave uses for its blocked count.
 
-This is the same family as the finding in the copy-and-paste plan: building a
-clipboard from `rangeNotes` would silently drop the rests inside a copied
-passage. Same root, different key.
+This is the same family as the finding the clipboard then met for itself:
+building one from `rangeNotes` drops the rests inside a copied passage. Same
+root, third key - see
+[copying and pasting](#copying-and-pasting-and-the-three-readings-of-one-drag).
 
 ### Bars in the middle: what the append does not have to do
 
@@ -1280,6 +1281,238 @@ cheap - measured at 0-1ms on a 4-bar score, 5-15ms at 77 bars, 16-39ms at 118 -
 so paying for it at the moment audio starts is imperceptible, while paying per
 keystroke was waste.
 
+## Copying and pasting, and the three readings of one drag
+
+`Ctrl+C` takes the beats of the dragged passage, or the beat the cursor is on;
+`Ctrl+X` takes them out as it copies them; `Ctrl+V` puts them back, over a
+selected passage or after the cursor. All three are assembly rather than new
+machinery - the clones come from the same `cloneBeat` a track duplicate uses, the
+insertion is the one `placeRest` already does, the undo is the same
+`attach()` / `detach()` pair six other operations use - and what needed designing
+is the two places where the obvious version is silently wrong.
+
+### A range can only designate music that EXISTS
+
+Not a precaution, and the reason it is written down here rather than left as a
+null check: alphaTab replays its own highlight after **every** render
+([gotcha 10](alphatab-gotchas.md#10-alphatab-re-applies-its-own-selection-after-every-render)),
+and the beats it replays can be the ones the edit that triggered that render has
+just removed. Two shapes of it, both measured:
+
+- **`Ctrl+Delete` over a dragged passage crashed.** `Bar.masterBar` is a getter
+  over `staff.track.score.masterBars[this.index]`, so a deleted bar answers
+  `undefined` and the handler threw
+  `TypeError: Cannot read properties of undefined (reading 'index')` - inside an
+  event nobody called, one render after the delete.
+- **A cut reached it by the shorter route.** Its beats are spliced out of their
+  voice while their bar stays, so `masterBar` still resolves and only membership
+  tells the truth. The echo rebuilt a range over the beats that had just been
+  cut, and the next paste then replaced *those*.
+
+So `setRangeFromBeats` asks the containers what they hold - `staff.bars` for the
+bar, `voice.beats` for the beat - rather than trusting the back-references, every
+one of which survives a removal. Both levels are needed, because the two
+operations break different ones.
+
+### A clipboard is a THIRD reading of a drag, and it had to be
+
+One gesture is now read three ways, and each one exists because the other two
+give a wrong answer to its question:
+
+| | built from | used by |
+| --- | --- | --- |
+| `rangeNotes` | the notes in the tick window, across every staff and voice | strings, frets, octave, silence, lengths |
+| `rangeBars` | the beats' master bars | `Ctrl+Insert`, `Ctrl+Delete` |
+| `rangeLane` | the staff, the voice index and the exact ticks | `Ctrl+C` |
+
+`rangeNotes` is wrong for a copy because **a range is a set of notes**, so a
+clipboard built from it would silently drop the rests: copying
+`note - rest - note` would give two beats, and the paste would shorten the music
+with nothing on screen to say so. That is the same root as the defect that made
+`Ctrl+Delete` take one bar out of a passage of five, met a third time - and it is
+why `beatsInTickRange` exists beside `notesInTickRange`.
+
+`rangeBars` is wrong because it is coarser than a copy has to be: half a bar is a
+perfectly good thing to copy.
+
+And the lane is a **staff and a voice index** rather than a track, which is the
+one place the clipboard parts company with every other batch operation here. A
+clipboard is a SEQUENCE, and a track's staves and voices sound at the same time
+rather than one after another, so "the beats of this track in this window" is not
+a sequence at all and could not be pasted anywhere. `voiceIndex` rather than a
+`Voice` for a smaller reason: a `Voice` belongs to one `Bar`, so a window
+spanning three bars crosses three of them carrying the same index.
+
+The beats are re-read at the moment `Ctrl+C` is pressed rather than kept from the
+drag, so an edit made between selecting a passage and copying it is in what gets
+copied.
+
+### The clipboard is a subtraction from a track duplicate, not a second field list
+
+The clones are built by the same `cloneBeat` and `cloneNote` that
+`duplicateTrack` uses. That is deliberate: those lists come from alphaTab's own
+`BeatCloner` and `NoteCloner`, they must not be guessed
+([a plausible one throws on a getter](#the-cloners-exist-and-are-out-of-reach)),
+and a clipboard with a list of its own would be a second thing to keep in step
+with the library. What a clipboard needs on top is **subtraction**, and there are
+three:
+
+| Removed | Why |
+| --- | --- |
+| `isEmpty` | alphaTab's placeholder marker says "nobody has written this bar yet", not "this is a rest". Pasted as it is, it would land a beat the renderer and the bar-fill arithmetic both skip. The copy of a placeholder is the whole-bar rest it draws as. |
+| `automations` | A mixer snapshot does not travel with the music. `Beat.finish` strips Tempo automations itself (gotcha 3), but an `Instrument` one would re-voice whatever track the paste lands on. |
+| the link flags | [Gotcha 13](alphatab-gotchas.md#13-a-clones-link-flags-make-finish-invent-the-link), which is the finding this whole tier turns on. |
+
+A clone therefore points at nothing in any score - a test walks all eleven link
+fields of every copied note and asserts each is empty, and asserts `bendPoints`
+is a different array - which is what lets the clipboard **outlive the document it
+came from**. It is not cleared when another file is opened, unlike the selection
+and the undo stack, and for the opposite reason: those hold `Note` objects that
+would pin a discarded score in memory, and this one holds none.
+
+One thing it deliberately does not survive is a different instrument. A fret
+means a pitch only against a string that exists, so a paste onto a staff with a
+different string count is **refused with both numbers**, the same call the
+retuning already makes. Transposing the strings automatically would be possible
+and would be guessing. Copying is refused outright on a staff with no strings -
+percussion, or a staff whose tablature is hidden - which is the call `Ctrl+A`
+already makes, and which is also what leaves the paste side a number to compare.
+
+### The three cases of a paste, which are one case wearing three hats
+
+| | |
+| --- | --- |
+| after a position | insert after the anchor |
+| onto an untouched bar | **replace** alphaTab's placeholder, or the bar is counted with a whole-bar rest in it on top of everything that arrived |
+| over a dragged passage | **replace** every beat of it |
+
+The second is the third with a list of one, which is why there is no branch for
+it in the code: a placeholder is simply the beat a paste lands on top of.
+
+The trap in the insertion is
+[the run half of gotcha 11](alphatab-gotchas.md#11-nothing-can-be-removed-from-the-model-and-only-beats-get-renumbered):
+`Voice.insertBeat` splices at `after.index + 1` - the field - and never sets
+`index`, so inserting a run of beats reads a stale `0` off the beat it has just
+placed and puts everything after the first one back at the front, in reverse.
+Measured: `3,92,91,5,7,9,90` where `3,5,7,9,90,91,92` was meant, with nothing
+thrown and one `finish()` renumbering the wrong order into a tidy 0..6. So the
+insertion is a plain splice, which has neither that problem nor the
+position-0 one, and needs only the `voice` back-reference `insertBeat` would have
+set: `Voice.finish` renumbers every beat and rebuilds the chain across the whole
+score, bar lines included.
+
+**One `finish()` for the whole sequence**, not one per beat, which is what makes
+a paste cost what a single insertion costs whatever its length - 0.9ms on the
+77-bar file, 2.5ms on the 118-bar one. And no capture of what `finish()` derives,
+unlike `deleteNotes` and `deleteBars`: the argument is the one
+`writeNoteAtString` records, that finish() only ever CREATES a link for a note
+whose `tieOrigin` is already null, and inserting a beat cannot put an existing
+note into that state.
+
+The cursor lands on the **last** beat that arrived rather than the first, which
+is what makes repeating a passage a loop: the next paste carries on from there.
+It keeps its own string, so the arrow keys continue down the same line - which
+also means the beat it lands on can hold notes on other strings and none on this
+one.
+
+`midi: 'now'`, like an inserted rest and for the same reason: beats moved, so
+every tick after them moved, and the loaded midi is what maps a scrub position to
+a tick.
+
+### Cut takes a BEAT, and that settles the chord
+
+`Ctrl+X` is `Ctrl+C` followed by a structural delete, and it takes **exactly what
+copy takes**. That is the one place this parts company with the plan that
+designed it, and the reason is that the two have to agree or a cut followed by a
+paste is not a move.
+
+The plan read cut as note-sized - "the note and its beat go" - and drew a special
+case out of it: cut one note of a chord, the beat still holds the others, so the
+beat stays and the cut degenerates into a delete. But then the clipboard would
+hold a beat with one note in it while the score lost only a note and gained no
+gap, so pasting it back would not restore what was cut. A beat-sized cut has no
+special case at all, and a test asserts the round trip: cut, paste, and the
+track's snapshot is identical.
+
+Nothing is lost by it. `Delete` is already the key that takes one note out of a
+chord and leaves the beat sounding, and it is the key the plan's own table puts
+opposite this one:
+
+| Key | What goes | The bar's fill |
+| --- | --- | --- |
+| `Delete` | the note; the beat stays and becomes a rest | unchanged |
+| `Ctrl+X` | the beat, and every note in it | **incomplete** |
+
+The incomplete bar is the visible difference, and the counter in the action bar is
+what says so.
+
+### Taking a run of beats out is four things, not a splice
+
+`beatRemoval` is shared by the cut and by a paste over a passage, and each of the
+four would be silent corruption on its own.
+
+**The positions are read before anything moves**, per voice, since one gesture
+can span several bars and each bar carries a `Voice` object of its own. That is
+what the undo puts the beats back at.
+
+**A voice left with nothing gets alphaTab's own placeholder back** - a bare
+`new Beat()` with `isEmpty = true`, which is literally what `ModelUtils.consolidate`
+puts in an unwritten voice. Measured: an emptied voice renders, plays, exports and
+survives a `.gp` round trip perfectly well, and the round trip turns it into
+exactly one `isEmpty` beat anyway. It is still wrong to leave, and for a reason
+that is about this editor rather than about alphaTab: **the cursor walks THROUGH
+an empty bar rather than landing in it**, so a bar cut to nothing would be a hole
+that Enter, a digit and a paste could none of them reach until the file was saved
+and reopened.
+
+**The chain is cut by hand**, because `Voice.finish` re-links a voice's last beat
+to the next bar's first only `if (bar.nextBar)`. Measured on the fixture's Ties
+track: cutting the last two beats of the last bar left the surviving hammer-on
+pointing at the removed note, resolved by `finish()` itself through a `nextBeat`
+it never revisited. Full account in
+[gotcha 11](alphatab-gotchas.md#11-nothing-can-be-removed-from-the-model-and-only-beats-get-renumbered).
+
+**And `deleteNotes`' link sweep and derived capture, but only when notes really
+leave.** Both are there for that function's reasons: a link to a removed note
+survives `finish()`, and `finish()` also CREATES links - cutting a tie origin
+leaves its destinations with none, so `findTieOrigin` finds them a new one further
+back and copies ITS fret over them. Restoring only the beats that were cut would
+leave those notes sounding a pitch they never had. Cutting a rest, or an untouched
+bar's placeholder, removes no note at all, so neither is needed - the same
+argument `writeNoteAtString` makes for its own absence.
+
+### Pasting over a passage is one operation, not two
+
+`Ctrl+V` with a passage selected **replaces** it: select, paste, and what was
+there is what is now there. It is a cut and a paste under **one** undo entry, and
+in the code it is not two operations either - it is `pasteBeats`' third case,
+sharing `beatRemoval` with the cut.
+
+Two consequences worth stating.
+
+**The sequence lands in the slot the passage occupied**, not after it, which is
+what needs position 0 to be reachable - and `Voice.insertBeat` inserts AFTER a
+beat, so it cannot get there. That is the second reason the insertion is a splice
+rather than a run of `insertBeat`, the first being the index trap.
+
+**A passage spanning several bars leaves the later ones empty**, as whole-bar
+rests. Replacing two bars with four beats puts the four beats where the passage
+started and returns the rest to "nobody has written here". Spreading a clipboard
+across bars would need a bar-filling algorithm, which is a different feature; the
+counter and the red outline say what the bars now hold either way.
+
+The order inside the operation is load-bearing and is the reverse of the obvious
+one: **the sequence goes in first and the passage comes out after it**, so the
+recorded positions are still the passage's own and the undo needs no arithmetic.
+
+### What copy is NOT
+
+It writes nothing, so it is the only key in this tier that is not an edit: no
+render, no midi, no undo record, no dirty flag, and no gate on playback. Same
+standing as the navigation keys. It returns `changed: false`, which is the same
+contract every no-op here uses, and it is the reason `propagate` is not on its
+path at all.
+
 ## How undo and redo work, and why they are not snapshots
 
 A whole-score snapshot through `JsonConverter`, measured on the two real test
@@ -1352,6 +1585,15 @@ carrying a tie it never had. The record therefore captures everything `finish()`
 derives, for every note of every **affected staff** - the right unit, and one that
 needs no magic constant, because `finish()`'s link resolution walks
 `nextBeat` / `previousBeat` and never leaves a staff.
+
+"Everything it derives" was short by three fields until a cut found them.
+`finish()` clears the **marking** beside a link it cannot resolve, not only the
+reference - `isHammerPullOrigin`, `slideOutType` and `isContinuedBend` alongside
+`isTieDestination` - so an undo was bringing a note back without its `{h}`.
+Nothing caught it because the fixture's links nearly always have somewhere else to
+re-resolve to, and because the generated midi is identical either way: it showed
+up as 7122 exported bytes against 7126. See
+[gotcha 6](alphatab-gotchas.md#6-deleting-a-note-leaves-stale-links-that-survive-finish).
 
 **`isDirty` follows the stack.** An empty stack means every edit has been undone,
 so the score is back to how it was loaded - *unless* the bound threw a record

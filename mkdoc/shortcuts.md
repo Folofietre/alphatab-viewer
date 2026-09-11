@@ -162,6 +162,40 @@ delete-word-forward, which is a real shortcut somebody may be using in the tempo
 field - and neither repeats, because each one is a structural edit that finishes
 the score.
 
+## Copy, cut and paste are `key` bindings, and that matters more than it looks
+
+`Ctrl+C`, `Ctrl+X` and `Ctrl+V` are declared by **character**, like Save and Undo
+and for the same reason: `code: 'KeyC'` is the position QWERTY gives to C, which
+on Dvorak is the key labelled J. Declared by code, copy would fire for the key
+labelled J and never for the one labelled C.
+
+They stand down for anything that owns typing keys, where `Ctrl+C` is a real copy
+of real text. That costs nothing since a press on the score takes the focus back
+- see
+[clicking the score takes the keyboard back](editing.md#clicking-the-score-takes-the-keyboard-back)
+- so "type a tempo, click a note, press `Ctrl+C`" works.
+
+`shift: false` leaves `Ctrl+Shift+C`, `Ctrl+Shift+X` and `Ctrl+Shift+V` alone.
+The first is the element inspector in every browser, and swallowing a devtools key
+is the same bad trade `Ctrl+Shift+S` and `Ctrl+Shift+Delete` already refuse to
+make.
+
+Neither repeats. A held `Ctrl+V` would paste at the keyboard's repeat rate and
+every paste runs `score.finish()`, which is the reason none of the writing keys
+repeats.
+
+All three read a predicate from `appliesTo` rather than deciding inside `run`, and
+all three read the SAME one - "is something in the score designated", which is
+what `hasTarget` answers. That the predicate is shared while the gating is not is
+deliberate: copy writes nothing and works during playback, while cut and paste
+refuse like every other write. **What a key stands down for and what an edit
+refuses are two different questions**, and only the first belongs in `appliesTo`.
+
+None of them is gated on the clipboard being full either: `Ctrl+V` with nothing
+copied swallows the key and says so, which is the call `Ctrl+Delete` already makes
+with nothing to delete. A key that goes silently to the browser and does nothing
+there is indistinguishable from a key that never arrived.
+
 ## The writing keys are the strictest in the table
 
 `0-9`, `+`, `-` and `Enter` are the first bindings here that are plain

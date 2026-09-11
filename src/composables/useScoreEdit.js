@@ -9,6 +9,9 @@ import {
   MIN_FRET,
   appendBar,
   barFill,
+  beatsInTickRange,
+  copyBeats,
+  cutBeats,
   deleteBars,
   insertBarBefore,
   describeBarFill,
@@ -25,6 +28,7 @@ import {
   renameTrack,
   retuneTrack,
   notesInTickRange,
+  pasteBeats,
   setNoteFret,
   shiftNoteString,
   shiftNotesFret,
@@ -324,6 +328,30 @@ let rangeBars = null
 // The same, flat, for the panel. Same rule as `selectedNote`.
 const selectedBars = shallowRef(null)
 
+// The LANE the last drag ran along, and the tick window it covered.
+//
+// A third reading of the same gesture, beside the notes and the bars, and it
+// needs to be its own thing for the reason the other two do. `rangeNotes` is a
+// set of notes, so a clipboard built from it would drop the rests inside a
+// copied passage; `rangeBars` is whole bars, which is coarser than a copy has to
+// be. A copy is a SEQUENCE, so it needs the one staff and voice the drag ran
+// along and the exact ticks it covered - see `beatsInTickRange`.
+//
+// Not the beats themselves: a copy re-reads them at the moment `Ctrl+C` is
+// pressed, so an edit made between the drag and the copy is in what is copied.
+let rangeLane = null
+
+// What is on the clipboard, as a plain object holding DETACHED beats: clones
+// that point at nothing in any score, which is what lets a copy outlive the
+// document it came from. See `copyBeats`.
+//
+// A plain variable rather than a ref, like `rangeNotes` and for the same reason:
+// these are model objects and must never be deep-proxied.
+let clipboard = null
+
+// The flat description of it, for the panel and for the key that pastes.
+const clipboardInfo = shallowRef(null)
+
 // Where to draw the selection marker, as plain rectangles in the coordinate
 // space of alphaTab's host element: [{ x, y, w, h }].
 //
@@ -434,6 +462,7 @@ function setCursor(beat, string, note = undefined) {
   selectedRange.value = null
   rangeBars = null
   selectedBars.value = null
+  rangeLane = null
   syncPlayheadToCursor(beat)
 
   // Any move ends the number being typed, which is what makes a second digit
@@ -586,6 +615,18 @@ function bind() {
   host?.addEventListener('mousedown', () => {
     focusToRelease(document.activeElement, host)?.blur()
   })
+
+  // The release alphaTab cannot hear, watched one level up from its canvas.
+  // See `endGestureFromAnywhere` for what a drag left unfinished does to the
+  // clipboard keys.
+  const view = host?.ownerDocument?.defaultView ?? null
+  releaseWatch?.()
+  releaseWatch = null
+  if (view) {
+    const onRelease = () => endGestureFromAnywhere(view)
+    view.addEventListener('mouseup', onRelease)
+    releaseWatch = () => view.removeEventListener('mouseup', onRelease)
+  }
 
   host?.addEventListener('alphaTab.beatMouseDown', (event) => {
     const mouse = event.originalEvent ?? null
@@ -764,6 +805,21 @@ function placeCursorAtLastClick() {
   return setCursor(position.beat, position.string)
 }
 
+// Whether a beat is still reachable in the score it thinks it belongs to.
+//
+// Every back-reference survives a removal - `beat.voice`, `voice.bar`,
+// `bar.staff` are all still set on a beat that has been spliced out - so the only
+// honest answer comes from asking the containers what they hold. Both levels are
+// needed: a cut takes beats out of a voice and leaves the bar, a bar delete takes
+// the bar out of the staff and leaves the beats in it.
+function isLiveBeat(beat) {
+  const voice = beat?.voice ?? null
+  const bar = voice?.bar ?? null
+  const staff = bar?.staff ?? null
+  if (!voice || !bar || !staff || !bar.masterBar) return false
+  return staff.bars.includes(bar) && voice.beats.includes(beat)
+}
+
 // Turn a pair of beats into the current range: the notes in their tick window on
 // the track the FIRST beat belongs to.
 //
@@ -771,6 +827,25 @@ function placeCursorAtLastClick() {
 // meaning different things by "a selected passage".
 function setRangeFromBeats(startBeat, endBeat) {
   if (!startBeat || !endBeat) {
+    clearRange()
+    return false
+  }
+  // A range can only ever designate music that EXISTS, and this is not a
+  // precaution: alphaTab replays its own highlight after every render
+  // (gotcha 10), and the beats it replays can be the ones the edit that
+  // triggered that render has just removed.
+  //
+  // `Ctrl+Delete` over a dragged passage was enough to crash on it.
+  // `Bar.masterBar` is a getter over `staff.track.score.masterBars[this.index]`,
+  // so a deleted bar answers `undefined` and the handler threw
+  // `TypeError: Cannot read properties of undefined (reading 'index')` - inside
+  // an event nobody called, one render after the delete.
+  //
+  // A cut reaches it by the shorter route: the beats are spliced out of their
+  // voice while their bar stays, so `masterBar` still resolves and only
+  // membership tells the truth. Without this the echo rebuilt a range over beats
+  // that had just been cut, which is then what the next paste replaced.
+  if (!isLiveBeat(startBeat) || !isLiveBeat(endBeat)) {
     clearRange()
     return false
   }
@@ -792,6 +867,16 @@ function setRangeFromBeats(startBeat, endBeat) {
 
   const startTick = startBeat.absolutePlaybackStart
   const endTick = endBeat.absolutePlaybackStart + endBeat.playbackDuration
+
+  // The lane the gesture ran along, recorded like the bars: before the notes,
+  // and independently of whether there turn out to be any.
+  rangeLane = {
+    staff: startBeat.voice.bar.staff,
+    voiceIndex: startBeat.voice.index,
+    startTick,
+    endTick,
+  }
+
   rangeNotes = notesInTickRange(track, startTick, endTick)
   if (rangeNotes.length === 0) {
     // No note to edit, but the bars were still designated - so only the note
@@ -878,6 +963,61 @@ let droppingRange = false
 // the next complete press and release inside the score. What is lost meanwhile
 // is the playhead following the cursor, not correctness.
 let gestureOnScore = false
+
+// Undoes the previous window-level release watch, so a rebind does not stack a
+// second one. `bind()` runs once per api, and a new `AlphaTabApi` is a real
+// possibility - `ScoreViewer` destroys and re-inits on a hot reload.
+let releaseWatch = null
+
+// End a drag that alphaTab never saw the end of.
+//
+// **alphaTab registers its `mouseup` on its OWN canvas element**, in
+// `_setupClickHandling`:
+//
+//   this.canvasElement.mouseUp.on(...)   ->  element.addEventListener('mouseup', ..., true)
+//
+// so a release ANYWHERE ELSE fires nothing at all: no
+// `applyPlaybackRangeFromHighlight`, no `beatMouseUp`, and its own
+// `_isBeatMouseDown` left true. Letting go on the action bar, on a side panel or
+// below the last system is enough - and dragging past the end of a passage is
+// exactly how a passage gets selected.
+//
+// That leaves the score stuck mid-drag in BOTH halves:
+//
+//   alphaTab : `_onBeatMouseMove` never checks whether a button is down, so
+//              every later move of the pointer over the score goes on extending
+//              the selection with nothing pressed.
+//   ours     : `gestureOnScore` stays true, so the keyboard clear-down below
+//              stands down for ever, `_selectionStart` is never dropped, and the
+//              post-render echo rebuilds the range after EVERY edit - wiping the
+//              cursor each time.
+//
+// This used to cost only the playhead following the cursor, which is what the
+// note on `gestureOnScore` said. **It stopped being cosmetic when the clipboard
+// arrived**: a resurrected range is what `Ctrl+X` takes and what `Ctrl+V`
+// replaces. Measured on the fixture - drag two beats of a four-beat bar,
+// release outside the canvas, cut, paste: the bar came out `3,5` where `7,3,5,9`
+// was meant, with the cut beats destroyed a second time and the cursor gone.
+//
+// The way out is to let alphaTab unwind ITSELF rather than to patch around it. A
+// `mouseup` dispatched on its canvas runs exactly the path a release inside it
+// would: it applies the highlight, fires `beatMouseUp` - so the handler in
+// `bind()` clears `gestureOnScore` on the usual route - and clears
+// `_isBeatMouseDown`. Its listener opens with `if (!this._isBeatMouseDown) return`,
+// so a redundant dispatch is a no-op, and `gestureOnScore` is what keeps us from
+// making one after a release alphaTab did see.
+function endGestureFromAnywhere(view) {
+  if (!gestureOnScore) return
+  const element = scoreEditHost.api?.canvasElement?.element ?? null
+  const MouseEventCtor = view?.MouseEvent ?? null
+  if (element && MouseEventCtor) {
+    element.dispatchEvent(new MouseEventCtor('mouseup', { bubbles: true, cancelable: true }))
+  }
+  // Whatever alphaTab did or did not do with it, the gesture is over on our
+  // side. `beatMouseUp` has normally already done this; this is what makes the
+  // guard hold even on a build where that event never arrives.
+  gestureOnScore = false
+}
 
 // Drop the selection alphaTab keeps of its OWN, which is not the same object as
 // ours and does not go away when ours does.
@@ -999,6 +1139,7 @@ function clearRange() {
   selectedRange.value = null
   rangeBars = null
   selectedBars.value = null
+  rangeLane = null
   if (hadRange) syncPlayheadToCursor(cursorBeat)
   // The rings went with it, unless a single note is selected.
   refreshSelectionRects()
@@ -2270,6 +2411,165 @@ export function useScoreEdit() {
     cursorInfo.value = describeCursor(cursorBeat, cursorString)
   }
 
+  // ---- the clipboard ------------------------------------------------------
+
+  // What `Ctrl+C` takes: the beats of the dragged passage, or the one the cursor
+  // is standing on.
+  //
+  // Read from `rangeLane` rather than from `rangeNotes`, and that is the whole
+  // reason the lane is recorded at all. A range is a set of NOTES, so a clipboard
+  // built from it would silently DROP THE RESTS inside a copied passage: copying
+  // `note - rest - note` would give two beats, and pasting it would shorten the
+  // music with nothing on screen to say so. Same root as the bug that made
+  // `Ctrl+Delete` take one bar out of a passage of five. See `beatsInTickRange`.
+  //
+  // The beats are re-read here rather than kept from the drag, so an edit made
+  // between selecting a passage and copying it is in what gets copied.
+  function clipboardSource() {
+    if (rangeLane) {
+      const beats = beatsInTickRange(
+        rangeLane.staff,
+        rangeLane.voiceIndex,
+        rangeLane.startTick,
+        rangeLane.endTick,
+      )
+      if (beats.length > 0) return beats
+    }
+    return cursorBeat ? [cursorBeat] : null
+  }
+
+  // Copy, which is the one key here that is not an edit.
+  //
+  // It writes nothing, so it is NOT gated on playback and never goes near
+  // `propagate`: there is nothing to render, nothing to re-generate, nothing to
+  // put on the undo stack and no reason to mark the score dirty. Same standing as
+  // the navigation keys.
+  function copySelection() {
+    const beats = clipboardSource()
+    if (!beats) return refused('Click a note or drag a passage to copy first.')
+
+    const result = copyBeats(beats)
+    if (!result.ok) return refused(result.reason)
+
+    clipboard = result.clipboard
+    clipboardInfo.value = {
+      beatCount: result.beatCount,
+      noteCount: result.noteCount,
+      stringCount: result.stringCount,
+    }
+    message(
+      'ok',
+      `Copied ${result.beatCount} ${result.beatCount === 1 ? 'beat' : 'beats'}, ` +
+        `${result.noteCount} ${result.noteCount === 1 ? 'note' : 'notes'}.`,
+    )
+    // `copyBeats` already answers the result contract - `ok`, `changed: false`,
+    // no `undo` - so there is nothing to re-wrap.
+    return result
+  }
+
+  // Cut, which is copy and then a structural delete.
+  //
+  // It takes the same BEATS copy takes, so `Ctrl+X` then `Ctrl+V` is an exact
+  // move - see `cutBeats` for why that rules out the note-sized reading and its
+  // chord special case.
+  //
+  // The cursor lands in the slot the cut left rather than following the music
+  // that moved up into it, which is the same rule `landOnBar` follows after a bar
+  // is deleted: the position is where the work was, not where a particular beat
+  // went.
+  function cutSelection() {
+    if (!canEdit.value) return refusePlayback()
+    const beats = clipboardSource()
+    if (!beats) return refused('Click a note or drag a passage to cut first.')
+
+    const anchor = beats[0]
+    const bar = anchor.voice?.bar?.masterBar?.index ?? null
+    const trackIndex = anchor.voice?.bar?.staff?.track?.index ?? null
+    const string = cursorAnchor(1)?.string ?? null
+
+    const result = cutBeats(beats, scoreEditHost.api?.settings)
+    if (result.changed) {
+      clipboard = result.clipboard
+      clipboardInfo.value = {
+        beatCount: result.beatCount,
+        noteCount: result.noteCount,
+        stringCount: result.stringCount,
+      }
+      const lane = result.landing
+      const landed = lane ? (lane.voice.beats[Math.min(lane.at, lane.voice.beats.length - 1)] ?? null) : null
+      if (landed) {
+        setCursor(landed, string)
+        cursorMoves.value += 1
+      } else {
+        clearSelection()
+        clearRange()
+      }
+      if (typeof trackIndex === 'number') scoreEditHost.syncTrack(trackIndex)
+    }
+    return propagate(result, {
+      render: true,
+      // Beats left, so every tick after them moved.
+      midi: 'now',
+      firstChangedBar: bar,
+      label: 'Cut',
+    })
+  }
+
+  // Paste: after the cursor, or OVER a dragged passage.
+  //
+  // A passage is replaced rather than pushed along, which is the reading that
+  // makes the pair complete: select, paste, and what was there is what is now
+  // there. It is a cut and a paste in ONE undo entry, which is `pasteBeats`'
+  // third case rather than two operations here.
+  //
+  // With neither - no cursor and no passage - there is nothing to act on. With a
+  // cursor the sequence goes straight after it, so pressing paste twice repeats
+  // the passage twice.
+  //
+  // The cursor lands on the LAST beat that arrived rather than the first, which
+  // is what makes that repetition a loop: the next paste carries on after what
+  // the previous one wrote, the same way the right arrow and Enter leave the
+  // cursor on the beat they just made.
+  function pasteAtCursor() {
+    if (!canEdit.value) return refusePlayback()
+    // The passage, re-read now for the reason a copy re-reads it: an edit made
+    // since the drag is part of what gets replaced.
+    const replacing = rangeLane
+      ? beatsInTickRange(
+          rangeLane.staff,
+          rangeLane.voiceIndex,
+          rangeLane.startTick,
+          rangeLane.endTick,
+        )
+      : []
+    const anchor = replacing.length > 0 ? { beat: replacing[0], string: cursorAnchor(1)?.string ?? null } : cursorAnchor(1)
+    if (!anchor?.beat) return refused('Click a note or a bar to paste at first.')
+
+    const bar = anchor.beat.voice?.bar?.masterBar?.index ?? null
+    const trackIndex = anchor.beat.voice?.bar?.staff?.track?.index ?? null
+
+    const result = pasteBeats(
+      clipboard,
+      anchor.beat,
+      scoreEditHost.api?.settings,
+      replacing.length > 0 ? replacing : null,
+    )
+    if (result.changed) {
+      const landed = result.beats[result.beats.length - 1] ?? anchor.beat
+      setCursor(landed, anchor.string)
+      cursorMoves.value += 1
+      if (typeof trackIndex === 'number') scoreEditHost.syncTrack(trackIndex)
+    }
+    return propagate(result, {
+      render: true,
+      // Beats were inserted, so every tick after them has moved. A timing change
+      // for the same reason an inserted rest is one.
+      midi: 'now',
+      firstChangedBar: bar,
+      label: 'Paste',
+    })
+  }
+
   // ---- undo ---------------------------------------------------------------
 
   // Take back the most recent edit.
@@ -2455,6 +2755,26 @@ export function useScoreEdit() {
     insertRest,
     insertBar,
     removeBars,
+    copySelection,
+    cutSelection,
+    pasteAtCursor,
+    // What is on the clipboard, for the panel. Null until something is copied.
+    clipboard: clipboardInfo,
+    // Copy and paste both need a POSITION or a passage, which is what
+    // `hasTarget` answers - so they read like the duration keys rather than like
+    // the note techniques. Copy is not gated on playback anywhere, since it
+    // writes nothing; paste is, inside `pasteAtCursor`, like every other write.
+    //
+    // Neither is gated on the clipboard being full. `Ctrl+V` with nothing copied
+    // swallows the key and says so, which is the call `Ctrl+Delete` already makes
+    // with nothing to delete: a key that goes silently to the browser and does
+    // nothing there is indistinguishable from a key that never arrived.
+    canCopy: hasTarget,
+    // Cut is a write, so unlike copy it is gated on playback inside
+    // `cutSelection` - the predicate stays the same, because what a key stands
+    // down for and what an edit refuses are two different questions.
+    canCut: hasTarget,
+    canPaste: hasTarget,
     // What the writing keys stand down on, and there are two conditions rather
     // than one. A digit and a rest need a POSITION to write at, which only a
     // cursor is; a duration and a whole bar are named by a dragged passage just

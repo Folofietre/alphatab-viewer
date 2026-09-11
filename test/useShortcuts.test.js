@@ -76,6 +76,42 @@ describe('binding resolution', () => {
     }
   })
 
+  it('Ctrl+C, Ctrl+X and Ctrl+V, on either platform', () => {
+    for (const [code, label] of [['KeyC', /^Copy/], ['KeyX', /^Cut/], ['KeyV', /^Paste/]]) {
+      expect(resolve(key(code, { ctrl: true }))?.label, code).toMatch(label)
+      expect(resolve(key(code, { meta: true }))?.label, code).toMatch(label)
+    }
+  })
+
+  it('and they are declared by CHARACTER, so they follow the label on the key', () => {
+    // `code: 'KeyC'` is the position QWERTY gives to C, which on Dvorak is the
+    // key labelled J. Same reason Save and Undo match `event.key`.
+    expect(resolve(key('KeyJ', { ctrl: true, types: 'c' }))?.label).toMatch(/^Copy/)
+    expect(resolve(key('KeyC', { ctrl: true, types: 'j' }))).toBeNull()
+  })
+
+  it('Ctrl+Shift+C and Ctrl+Shift+V are left to the browser', () => {
+    // Ctrl+Shift+C is the devtools inspector everywhere, and swallowing a
+    // devtools key is the same bad trade Ctrl+Shift+S already refuses.
+    expect(resolve(key('KeyC', { ctrl: true, shift: true }))).toBeNull()
+    expect(resolve(key('KeyX', { ctrl: true, shift: true }))).toBeNull()
+    expect(resolve(key('KeyV', { ctrl: true, shift: true }))).toBeNull()
+  })
+
+  it('and both stand down inside a text field, where Ctrl+C is a real copy', () => {
+    const field = { tagName: 'INPUT', type: 'text' }
+    const edit = {
+      canCopy: { value: true },
+      canCut: { value: true },
+      canPaste: { value: true },
+    }
+    for (const code of ['KeyC', 'KeyX', 'KeyV']) {
+      const binding = resolve(key(code, { ctrl: true }))
+      expect(binding.appliesTo(field, null, edit), code).toBe(false)
+      expect(binding.appliesTo({ tagName: 'BUTTON' }, null, edit), code).toBe(true)
+    }
+  })
+
   it('a BARE arrow key now moves the CURSOR, not the note', () => {
     expect(resolve(key('ArrowUp'))?.label).toMatch(/cursor up one string/)
     expect(resolve(key('ArrowDown'))?.label).toMatch(/cursor down one string/)
@@ -843,7 +879,9 @@ describe('binding options', () => {
     // nothing.
     // The bare-character keys that need something designated: the length keys,
     // the two letters that palm mute, and Y for the harmonics.
-    const WRITES = new Set(['+', '-', '.', 'p', 'm'])
+    // Copy and paste join them: both need a position or a passage, which is
+    // what `canCopy` and `canPaste` answer.
+    const WRITES = new Set(['+', '-', '.', 'p', 'm', 'c', 'x', 'v'])
     for (const binding of BINDINGS) {
       const name = String(binding.code ?? binding.key)
       const call = () => binding.appliesTo({ tagName: 'BUTTON' })
@@ -868,6 +906,9 @@ describe('binding options', () => {
       canChangeDuration: { value: true },
       canEditBars: { value: true },
       canEditNotes: { value: true },
+      canCopy: { value: true },
+      canCut: { value: true },
+      canPaste: { value: true },
     }
     for (const binding of BINDINGS) {
       expect(typeof binding.appliesTo({ tagName: 'BUTTON' }, player, edit)).toBe('boolean')
